@@ -1,13 +1,17 @@
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import prisma from "../../../../prisma";
+import { prisma } from "@td/prisma";
 import { ErrorCode } from "../../../../common/errors";
 import {
   formFactory,
+  formWithTempStorageFactory,
   userFactory,
   userWithCompanyFactory
 } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
-import { Mutation } from "../../../../generated/graphql/types";
+import type { Mutation } from "@td/codegen-back";
+import { Status } from "@prisma/client";
+import { updateAppendix2Queue } from "../../../../queue/producers/updateAppendix2";
+import { waitForJobsCompletion } from "../../../../queue/helpers";
 
 const DELETE_FORM = `
 mutation DeleteForm($id: ID!) {
@@ -41,7 +45,9 @@ describe("Mutation.deleteForm", () => {
         })
       })
     ]);
-    const intactForm = await prisma.form.findUnique({ where: { id: form.id } });
+    const intactForm = await prisma.form.findUniqueOrThrow({
+      where: { id: form.id }
+    });
     expect(intactForm.isDeleted).toBe(false);
   });
 
@@ -65,7 +71,9 @@ describe("Mutation.deleteForm", () => {
         })
       })
     ]);
-    const intactForm = await prisma.form.findUnique({ where: { id: form.id } });
+    const intactForm = await prisma.form.findUniqueOrThrow({
+      where: { id: form.id }
+    });
     expect(intactForm.isDeleted).toBe(false);
   });
 
@@ -90,7 +98,9 @@ describe("Mutation.deleteForm", () => {
       })
     ]);
 
-    const intactForm = await prisma.form.findUnique({ where: { id: form.id } });
+    const intactForm = await prisma.form.findUniqueOrThrow({
+      where: { id: form.id }
+    });
     expect(intactForm.isDeleted).toBe(false);
   });
 
@@ -98,10 +108,21 @@ describe("Mutation.deleteForm", () => {
     "should allow %p to soft delete a draft form",
     async role => {
       const { user, company } = await userWithCompanyFactory("MEMBER");
-      const owner = await userFactory();
       const form = await formFactory({
-        ownerId: owner.id,
-        opt: { [`${role}CompanySiret`]: company.siret, status: "DRAFT" }
+        ownerId: user.id,
+        opt: {
+          status: "DRAFT",
+          ...(role === "transporter"
+            ? {
+                transporters: {
+                  create: {
+                    [`${role}CompanySiret`]: company.siret,
+                    number: 1
+                  }
+                }
+              }
+            : { [`${role}CompanySiret`]: company.siret })
+        }
       });
 
       const { mutate } = makeClient(user);
@@ -111,7 +132,7 @@ describe("Mutation.deleteForm", () => {
 
       expect(data.deleteForm.id).toBeTruthy();
 
-      const deletedForm = await prisma.form.findUnique({
+      const deletedForm = await prisma.form.findUniqueOrThrow({
         where: { id: form.id }
       });
       expect(deletedForm.isDeleted).toBe(true);
@@ -123,9 +144,22 @@ describe("Mutation.deleteForm", () => {
     async role => {
       const { user, company } = await userWithCompanyFactory("MEMBER");
       const owner = await userFactory();
+
       const form = await formFactory({
         ownerId: owner.id,
-        opt: { [`${role}CompanySiret`]: company.siret, status: "SEALED" }
+        opt: {
+          status: "SEALED",
+          ...(role === "transporter"
+            ? {
+                transporters: {
+                  create: {
+                    [`${role}CompanySiret`]: company.siret,
+                    number: 1
+                  }
+                }
+              }
+            : { [`${role}CompanySiret`]: company.siret })
+        }
       });
 
       const { mutate } = makeClient(user);
@@ -135,7 +169,7 @@ describe("Mutation.deleteForm", () => {
 
       expect(data.deleteForm.id).toBeTruthy();
 
-      const deletedForm = await prisma.form.findUnique({
+      const deletedForm = await prisma.form.findUniqueOrThrow({
         where: { id: form.id }
       });
       expect(deletedForm.isDeleted).toBe(true);
@@ -143,10 +177,8 @@ describe("Mutation.deleteForm", () => {
   );
 
   it("should disconnect appendix 2 forms", async () => {
-    const {
-      user: emitterUser,
-      company: emitter
-    } = await userWithCompanyFactory("MEMBER");
+    const { user: emitterUser, company: emitter } =
+      await userWithCompanyFactory("MEMBER");
     const { user: ttrUser, company: ttr } = await userWithCompanyFactory(
       "MEMBER"
     );
@@ -156,15 +188,22 @@ describe("Mutation.deleteForm", () => {
       opt: {
         emitterCompanySiret: emitter.siret,
         recipientCompanySiret: ttr.siret,
-        status: "AWAITING_GROUP"
+        status: "AWAITING_GROUP",
+        quantityReceived: 1
       }
     });
     const form = await formFactory({
       ownerId: owner.id,
       opt: {
+        emitterType: "APPENDIX2",
         emitterCompanySiret: ttr.siret,
         status: "SEALED",
-        appendix2Forms: { connect: [{ id: appendix2.id }] }
+        grouping: {
+          create: {
+            initialFormId: appendix2.id,
+            quantity: appendix2.quantityReceived!.toNumber()
+          }
+        }
       }
     });
 
@@ -174,23 +213,72 @@ describe("Mutation.deleteForm", () => {
     });
 
     const { mutate } = makeClient(ttrUser);
+    const mutateFn = () =>
+      mutate<Pick<Mutation, "deleteForm">>(DELETE_FORM, {
+        variables: { id: form.id }
+      });
+
+    const { data } = await waitForJobsCompletion({
+      fn: mutateFn,
+      queue: updateAppendix2Queue,
+      expectedJobCount: 1
+    });
+
+    expect(data.deleteForm.id).toBeTruthy();
+
+    const deletedForm = await prisma.form.findUniqueOrThrow({
+      where: { id: form.id },
+      include: { grouping: true }
+    });
+    expect(deletedForm.isDeleted).toBe(true);
+    expect(deletedForm.grouping).toEqual([]);
+
+    const disconnectedAppendix2 = await prisma.form.findUniqueOrThrow({
+      where: { id: appendix2.id },
+      include: { groupedIn: true }
+    });
+    expect(disconnectedAppendix2.groupedIn).toEqual([]);
+    expect(disconnectedAppendix2.status).toEqual("AWAITING_GROUP");
+  });
+
+  it("should delete bsd suite", async () => {
+    const { user: emitterUser, company: emitter } =
+      await userWithCompanyFactory("MEMBER");
+    const { forwardedIn, ...form } = await formWithTempStorageFactory({
+      ownerId: emitterUser.id,
+      opt: { status: Status.DRAFT, emitterCompanySiret: emitter.siret }
+    });
+    const { mutate } = makeClient(emitterUser);
+    await mutate<Pick<Mutation, "deleteForm">>(DELETE_FORM, {
+      variables: { id: form.id }
+    });
+    const updatedForwardedInForm = await prisma.form.findUniqueOrThrow({
+      where: { id: forwardedIn!.id }
+    });
+    expect(updatedForwardedInForm.isDeleted).toEqual(true);
+  });
+
+  it("emitter can delete a form he is the only one to have signed", async () => {
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+    const form = await formFactory({
+      ownerId: user.id,
+      opt: {
+        status: "SIGNED_BY_PRODUCER",
+        emitterCompanySiret: company.siret,
+        emittedAt: new Date()
+      }
+    });
+
+    const { mutate } = makeClient(user);
     const { data } = await mutate<Pick<Mutation, "deleteForm">>(DELETE_FORM, {
       variables: { id: form.id }
     });
 
     expect(data.deleteForm.id).toBeTruthy();
 
-    const deletedForm = await prisma.form.findUnique({
-      where: { id: form.id },
-      include: { appendix2Forms: true }
+    const deletedForm = await prisma.form.findUniqueOrThrow({
+      where: { id: form.id }
     });
     expect(deletedForm.isDeleted).toBe(true);
-    expect(deletedForm.appendix2Forms).toEqual([]);
-
-    const disconnectedAppendix2 = await prisma.form.findUnique({
-      where: { id: appendix2.id }
-    });
-    expect(disconnectedAppendix2.appendix2RootFormId).toEqual(null);
-    expect(disconnectedAppendix2.status).toEqual("AWAITING_GROUP");
   });
 });

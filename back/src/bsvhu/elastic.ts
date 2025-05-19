@@ -1,29 +1,106 @@
-import { BsvhuStatus, Bsvhu } from "@prisma/client";
-import prisma from "../prisma";
-import { BsdElastic, indexBsd, indexBsds } from "../common/elastic";
+import {
+  BsvhuStatus,
+  Bsvhu,
+  BsdType,
+  WasteAcceptationStatus
+} from "@prisma/client";
+import { prisma } from "@td/prisma";
+import {
+  getIntermediaryCompanyOrgId,
+  getTransporterCompanyOrgId
+} from "@td/constants";
+import { BsdElastic, indexBsd, transportPlateFilter } from "../common/elastic";
 import { GraphQLContext } from "../types";
+import { getRegistryFields } from "./registry";
+import { getBsvhuSubType } from "../common/subTypes";
+import { getAddress } from "./converter";
+import {
+  BsvhuWithIntermediaries,
+  BsvhuWithIntermediariesInclude
+} from "./types";
+import { isDefined } from "../common/helpers";
+import { xDaysAgo } from "../utils";
 
-// | state              | emitter | transporter | destination |
-// |--------------------|---------|-------------|-------------|
-// | initial (draft)    | draft   | draft       | draft       |
-// | initial            | action  | to collect  | follow      |
-// | signed_by_producer | follow  | to collect  | follow      |
-// | sent               | follow  | collected   | action      |
-// | processed          | archive | archive     | archive     |
-// | refused            | archive | archive     | archive     |
+export const BsvhuForElasticInclude = {
+  ...BsvhuWithIntermediariesInclude
+};
 
-function getWhere(
-  bsvhu: Bsvhu
-): Pick<
-  BsdElastic,
+export async function getBsvhuForElastic(
+  bsda: Pick<Bsvhu, "id">
+): Promise<BsvhuForElastic> {
+  return prisma.bsvhu.findUniqueOrThrow({
+    where: { id: bsda.id },
+    include: BsvhuForElasticInclude
+  });
+}
+
+type ElasticSirets = {
+  emitterCompanySiret: string | null | undefined;
+  ecoOrganismeSiret: string | null | undefined;
+  destinationCompanySiret: string | null | undefined;
+  transporterCompanySiret: string | null | undefined;
+  brokerCompanySiret: string | null | undefined;
+  traderCompanySiret: string | null | undefined;
+  intermediarySiret1?: string | null | undefined;
+  intermediarySiret2?: string | null | undefined;
+  intermediarySiret3?: string | null | undefined;
+};
+const getBsvhuSirets = (bsvhu: BsvhuForElastic): ElasticSirets => {
+  const intermediarySirets = bsvhu.intermediaries.reduce(
+    (sirets, intermediary) => {
+      const orgId = getIntermediaryCompanyOrgId(intermediary);
+      if (orgId) {
+        const nbOfKeys = Object.keys(sirets).length;
+        return {
+          ...sirets,
+          [`intermediarySiret${nbOfKeys + 1}`]: orgId
+        };
+      }
+      return sirets;
+    },
+    {}
+  );
+
+  const bsvhuSirets: ElasticSirets = {
+    emitterCompanySiret: bsvhu.emitterCompanySiret,
+    destinationCompanySiret: bsvhu.destinationCompanySiret,
+    ecoOrganismeSiret: bsvhu.ecoOrganismeSiret,
+    brokerCompanySiret: bsvhu.brokerCompanySiret,
+    traderCompanySiret: bsvhu.traderCompanySiret,
+    transporterCompanySiret: getTransporterCompanyOrgId(bsvhu),
+    ...intermediarySirets
+  };
+
+  // Drafts only appear in the dashboard for companies the bsvhu owner belongs to
+  if (bsvhu.isDraft) {
+    const draftFormSiretsEntries = Object.entries(bsvhuSirets).filter(
+      ([, siret]) => siret && bsvhu.canAccessDraftOrgIds.includes(siret)
+    );
+    return Object.fromEntries(draftFormSiretsEntries) as ElasticSirets;
+  }
+
+  return bsvhuSirets;
+};
+
+type WhereKeys =
   | "isDraftFor"
   | "isForActionFor"
   | "isFollowFor"
   | "isArchivedFor"
   | "isToCollectFor"
-  | "isCollectedFor"
-> {
-  const where = {
+  | "isCollectedFor";
+
+// | state              | emitter | transporter | destination | intermediary |
+// |--------------------|---------|-------------|-------------|--------------|
+// | initial (draft)    | draft   | draft       | draft       | follow       |
+// | initial            | action  | follow      | follow      | follow       |
+// | signed_by_producer | follow  | to collect  | follow      | follow       |
+// | sent               | follow  | collected   | action      | follow       |
+// | processed          | archive | archive     | archive     | archive      |
+// | refused            | archive | archive     | archive     | archive      |
+
+export function getWhere(bsvhu: BsvhuForElastic): Pick<BsdElastic, WhereKeys> {
+  const where: Record<WhereKeys, string[]> = {
     isDraftFor: [],
     isForActionFor: [],
     isFollowFor: [],
@@ -32,11 +109,7 @@ function getWhere(
     isCollectedFor: []
   };
 
-  const formSirets: Record<string, string | null | undefined> = {
-    emitterCompanySiret: bsvhu.emitterCompanySiret,
-    destinationCompanySiret: bsvhu.destinationCompanySiret,
-    transporterCompanySiret: bsvhu.transporterCompanySiret
-  };
+  const formSirets = getBsvhuSirets(bsvhu);
 
   const siretsFilters = new Map<string, keyof typeof where>(
     Object.entries(formSirets)
@@ -58,9 +131,17 @@ function getWhere(
         for (const fieldName of siretsFilters.keys()) {
           setTab(siretsFilters, fieldName, "isDraftFor");
         }
-      } else {
+      } else if (bsvhu.emitterNotOnTD) {
+        // even though the emitter is not on TD, we still add the SIRET to the index
+        // so if the account is created after the BSVHU, it will still appear in the
+        // emitter's dashboard.
         setTab(siretsFilters, "emitterCompanySiret", "isForActionFor");
         setTab(siretsFilters, "transporterCompanySiret", "isToCollectFor");
+      } else if (bsvhu.emitterNoSiret) {
+        setTab(siretsFilters, "transporterCompanySiret", "isToCollectFor");
+      } else {
+        setTab(siretsFilters, "emitterCompanySiret", "isForActionFor");
+        setTab(siretsFilters, "transporterCompanySiret", "isFollowFor");
       }
       break;
     }
@@ -73,6 +154,11 @@ function getWhere(
     case BsvhuStatus.SENT: {
       setTab(siretsFilters, "destinationCompanySiret", "isForActionFor");
       setTab(siretsFilters, "transporterCompanySiret", "isCollectedFor");
+      break;
+    }
+
+    case BsvhuStatus.RECEIVED: {
+      setTab(siretsFilters, "destinationCompanySiret", "isForActionFor");
       break;
     }
 
@@ -96,62 +182,160 @@ function getWhere(
   return where;
 }
 
-function getWaste(bsvhu: Bsvhu) {
-  return [bsvhu.wasteCode].filter(Boolean).join(" ");
-}
+export type BsvhuForElastic = Bsvhu & BsvhuWithIntermediaries;
 
 /**
- * Convert a dasri from the bsvhu table to Elastic Search's BSD model.
+ * Convert a bsvhu from the bsvhu table to Elastic Search's BSD model.
  */
-function toBsdElastic(bsvhu: Bsvhu): BsdElastic {
+export function toBsdElastic(bsvhu: BsvhuForElastic): BsdElastic {
   const where = getWhere(bsvhu);
 
   return {
+    type: BsdType.BSVHU,
+    bsdSubType: getBsvhuSubType(bsvhu),
+    createdAt: bsvhu.createdAt?.getTime(),
+    updatedAt: bsvhu.updatedAt?.getTime(),
     id: bsvhu.id,
     readableId: bsvhu.id,
-    type: "BSVHU",
-    emitter: bsvhu.emitterCompanyName ?? "",
-    recipient: bsvhu.destinationCompanyName ?? "",
-    waste: getWaste(bsvhu),
-    createdAt: bsvhu.createdAt.getTime(),
+    customId: bsvhu.customId ?? "",
+    status: bsvhu.status,
+    wasteCode: bsvhu.wasteCode ?? "",
+    wasteAdr: "",
+    wasteDescription: "",
+    packagingNumbers: [],
+    wasteSealNumbers: [],
+    identificationNumbers: bsvhu.identificationNumbers ?? [],
+    ficheInterventionNumbers: [],
+    emitterCompanyName: bsvhu.emitterCompanyName ?? "",
+    emitterCompanySiret: bsvhu.emitterCompanySiret ?? "",
+    emitterCompanyAddress:
+      getAddress({
+        address: bsvhu.emitterCompanyAddress,
+        street: bsvhu.emitterCompanyStreet,
+        city: bsvhu.emitterCompanyCity,
+        postalCode: bsvhu.emitterCompanyPostalCode
+      }) ?? "",
+    emitterPickupSiteName: "",
+    emitterPickupSiteAddress: "",
+    emitterCustomInfo: bsvhu.emitterCustomInfo ?? "",
+    workerCompanyName: "",
+    workerCompanySiret: "",
+    workerCompanyAddress: "",
+
+    transporterCompanyName: bsvhu.transporterCompanyName ?? "",
+    transporterCompanySiret: bsvhu.transporterCompanySiret ?? "",
+    transporterCompanyVatNumber: bsvhu.transporterCompanyVatNumber ?? "",
+    transporterCompanyAddress: bsvhu.transporterCompanyAddress ?? "",
+    transporterCustomInfo: bsvhu.transporterCustomInfo ?? "",
+    transporterTransportPlates:
+      bsvhu.transporterTransportPlates.map(transportPlateFilter) ?? [],
+
+    destinationCompanyName: bsvhu.destinationCompanyName ?? "",
+    destinationCompanySiret: bsvhu.destinationCompanySiret ?? "",
+    destinationCompanyAddress: bsvhu.destinationCompanyAddress ?? "",
+    destinationCustomInfo: "",
+    destinationCap: "",
+
+    brokerCompanyName: bsvhu.brokerCompanyName ?? "",
+    brokerCompanySiret: bsvhu.brokerCompanySiret ?? "",
+    brokerCompanyAddress: bsvhu.brokerCompanyAddress ?? "",
+
+    traderCompanyName: bsvhu.traderCompanyName ?? "",
+    traderCompanySiret: bsvhu.traderCompanySiret ?? "",
+    traderCompanyAddress: bsvhu.traderCompanyAddress ?? "",
+
+    ecoOrganismeName: bsvhu.ecoOrganismeName ?? "",
+    ecoOrganismeSiret: bsvhu.ecoOrganismeSiret ?? "",
+
+    nextDestinationCompanyName:
+      bsvhu.destinationOperationNextDestinationCompanyName ?? "",
+    nextDestinationCompanySiret:
+      bsvhu.destinationOperationNextDestinationCompanySiret ?? "",
+    nextDestinationCompanyVatNumber:
+      bsvhu.destinationOperationNextDestinationCompanyVatNumber ?? "",
+    nextDestinationCompanyAddress:
+      bsvhu.destinationOperationNextDestinationCompanyAddress ?? "",
+
+    destinationOperationCode: bsvhu.destinationOperationCode ?? "",
+    destinationOperationMode: bsvhu.destinationOperationMode ?? undefined,
+
+    emitterEmissionDate: bsvhu.emitterEmissionSignatureDate?.getTime(),
+    workerWorkDate: undefined,
+    transporterTransportTakenOverAt:
+      bsvhu.transporterTransportTakenOverAt?.getTime(),
+    destinationReceptionDate: bsvhu.destinationReceptionDate?.getTime(),
+    destinationAcceptationDate: bsvhu.destinationReceptionDate?.getTime(),
+    destinationAcceptationWeight: bsvhu.destinationReceptionWeight,
+    destinationOperationDate: bsvhu.destinationOperationDate?.getTime(),
     ...where,
-    sirets: Object.values(where).flat()
+    isInRevisionFor: [],
+    isRevisedFor: [],
+    ...getBsvhuReturnOrgIds(bsvhu),
+    sirets: Object.values(where).flat(),
+    ...getRegistryFields(bsvhu),
+    rawBsd: bsvhu,
+    revisionRequests: [],
+    intermediaries: bsvhu.intermediaries,
+
+    // ALL actors from the BSVHU, for quick search
+    companyNames: [
+      bsvhu.emitterCompanyName,
+      bsvhu.transporterCompanyName,
+      bsvhu.destinationCompanyName,
+      bsvhu.ecoOrganismeName,
+      bsvhu.brokerCompanyName,
+      bsvhu.traderCompanyName,
+      ...bsvhu.intermediaries.map(intermediary => intermediary.name)
+    ]
+      .filter(Boolean)
+      .join(" "),
+    companyOrgIds: [
+      bsvhu.emitterCompanySiret,
+      bsvhu.transporterCompanySiret,
+      bsvhu.transporterCompanyVatNumber,
+      bsvhu.destinationCompanySiret,
+      bsvhu.ecoOrganismeSiret,
+      bsvhu.brokerCompanySiret,
+      bsvhu.traderCompanySiret,
+      ...bsvhu.intermediaries.map(intermediary => intermediary.siret),
+      ...bsvhu.intermediaries.map(intermediary => intermediary.vatNumber)
+    ].filter(Boolean)
   };
 }
 
-/**
- * Index all Forms from the vhu table.
- */
-export async function indexAllBsvhus(
-  idx: string,
-  { skip = 0 }: { skip?: number } = {}
-) {
-  const take = 1000;
-  const bsvhus = await prisma.bsvhu.findMany({
-    skip,
-    take,
-    where: {
-      isDeleted: false
-    }
-  });
-
-  if (bsvhus.length === 0) {
-    return;
-  }
-
-  await indexBsds(
-    idx,
-    bsvhus.map(bsvhu => toBsdElastic(bsvhu))
-  );
-
-  if (bsvhus.length < take) {
-    // all forms have been indexed
-    return;
-  }
-
-  return indexAllBsvhus(idx, { skip: skip + take });
+export function indexBsvhu(bsvhu: BsvhuForElastic, ctx?: GraphQLContext) {
+  return indexBsd(toBsdElastic(bsvhu), ctx);
 }
 
-export function indexBsvhu(bsvhu: Bsvhu, ctx?: GraphQLContext) {
-  return indexBsd(toBsdElastic(bsvhu), ctx);
+/**
+ * BSVHU belongs to isReturnFor tab if:
+ * - waste has been received in the last 48 hours
+ * - waste hasn't been fully accepted at reception
+ */
+export const belongsToIsReturnForTab = (bsvhu: BsvhuForElastic) => {
+  const hasBeenReceivedLately =
+    isDefined(bsvhu.destinationReceptionDate) &&
+    bsvhu.destinationReceptionDate! > xDaysAgo(new Date(), 2);
+
+  if (!hasBeenReceivedLately) return false;
+
+  const hasNotBeenFullyAccepted =
+    bsvhu.status === BsvhuStatus.REFUSED ||
+    bsvhu.destinationReceptionAcceptationStatus !==
+      WasteAcceptationStatus.ACCEPTED;
+
+  return hasNotBeenFullyAccepted;
+};
+
+function getBsvhuReturnOrgIds(bsvhu: BsvhuForElastic): {
+  isReturnFor: string[];
+} {
+  // Return tab
+  if (belongsToIsReturnForTab(bsvhu)) {
+    return {
+      isReturnFor: [bsvhu.transporterCompanySiret].filter(Boolean)
+    };
+  }
+
+  return { isReturnFor: [] };
 }

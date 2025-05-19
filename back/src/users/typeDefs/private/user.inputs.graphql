@@ -11,3 +11,75 @@ input SignupInput {
   "Numéro de téléphone de l'utilisateur"
   phone: String
 }
+
+input CreateAccessTokenInput {
+  "Note personnelle pour se souvenir à quoi ce token va servir"
+  description: String!
+}
+
+"Vérification de captcha"
+input CaptchaInput {
+  "Valeur utilisateur"
+  value: String!
+  "Token permettant d'identifier le captcha côté back"
+  token: String!
+}
+
+input ResendActivationEmailInput {
+  email: String!
+  captcha: CaptchaInput!
+}
+
+input CreatePasswordResetRequestInput {
+  email: String!
+  captcha: CaptchaInput!
+}
+
+"""
+Abonnement d'un utilisateur aux notifications d'un ou
+plusieurs établissements
+"""
+input UserNotificationsInput {
+  # Abonnement aux notification de demande de rattachement
+  membershipRequest: Boolean
+  # Abonnement aux notification de renouvellement du code signature
+  signatureCodeRenewal: Boolean
+  # Abonnement aux notifications de refus total ou partiel d'un BSD
+  bsdRefusal: Boolean
+  # Abonnement aux notification de modification de la destination finale amiante
+  bsdaFinalDestinationUpdate: Boolean
+  # Abonnement aux notification de demandes de révision
+  revisionRequest: Boolean
+  # Abonnement aux notifications concernant les délégations (registre)
+  registryDelegation: Boolean
+}
+
+input SubscribeToCompanyNotificationsInput {
+  "Identifiant de l'établissement"
+  companyOrgId: String!
+  """
+  Notifications auxquelles l'utilisateur souhaite s'abonner / se désabonner
+  pour l'établissement identifié par le paramètre companyOrgId
+  """
+  notifications: UserNotificationsInput!
+}
+
+input SubscribeToNotificationsInput {
+  """
+  Notifications auxquelles l'utilisateur souhaite s'abonner / se désabonner
+  sur l'ensemble de ses établissement
+  """
+  notifications: UserNotificationsInput!
+}
+
+input MembershipRequestsWhere {
+  """
+  OrgId de l'entreprise. Vous devez spécifier l'orgId OU l'ID
+  """
+  orgId: String
+
+  """
+  ID de l'entreprise. Vous devez spécifier l'orgId OU l'ID
+  """
+  id: ID
+}

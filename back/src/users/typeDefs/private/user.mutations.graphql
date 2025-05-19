@@ -9,7 +9,7 @@ type Mutation {
   USAGE INTERNE
   Renvoie un email d'activation
   """
-  resendActivationEmail(email: String!): Boolean!
+  resendActivationEmail(input: ResendActivationEmailInput!): Boolean!
 
   """
   USAGE INTERNE
@@ -21,13 +21,19 @@ type Mutation {
   USAGE INTERNE
   Envoie un email pour la réinitialisation du mot de passe
   """
-  resetPassword(email: String!): Boolean!
+  createPasswordResetRequest(input: CreatePasswordResetRequestInput!): Boolean!
+
+  """
+  USAGE INTERNE
+  Met à jour le mot de passe de l'utilisateur correspondant au hash
+  """
+  resetPassword(newPassword: String!, hash: String!): Boolean!
 
   """
   USAGE INTERNE
   Met à jour les informations de l'utilisateur
   """
-  editProfile(name: String, phone: String, email: String): User!
+  editProfile(name: String, phone: String): User!
 
   """
   USAGE INTERNE
@@ -75,4 +81,58 @@ type Mutation {
   Refuse une demande de rattachement à un un établissement
   """
   refuseMembershipRequest(id: ID!): CompanyPrivate!
+
+  """
+  USAGE INTERNE
+  Révoque l'accès à une application tierce
+  """
+  revokeAuthorizedApplication(id: ID!): AuthorizedApplication!
+
+  """
+  USAGE INTERNE
+  Crée un jeton d'accès personnel
+  """
+  createAccessToken(input: CreateAccessTokenInput!): NewAccessToken!
+
+  """
+  USAGE INTERNE
+  Révoque un jeton d'accès personnel
+  """
+  revokeAccessToken(id: ID!): AccessToken!
+
+  """
+  USAGE INTERNE
+  Révoque l'ensemble des jetons d'accès personnels
+  """
+  revokeAllAccessTokens: [AccessToken!]!
+
+  """
+  USAGE INTERNE
+  Tente de désactiver un compte utilisateur (soft-delete et anonymisation)
+  """
+  anonymizeUser(id: ID!): String!
+
+  """
+  USAGE INTERNE
+  Change le rôle d'un utilisateur de l'entreprise
+  """
+  changeUserRole(userId: ID!, orgId: ID!, role: UserRole!): CompanyMember!
+
+  """
+  USAGE INTERNE
+  Modifie les préfèrences d'abonnement de l'utilisateur connecté aux notifications
+  d'un établissement donné
+  """
+  subscribeToCompanyNotifications(
+    input: SubscribeToCompanyNotificationsInput!
+  ): CompanyPrivate!
+
+  """
+  USAGE INTERNE
+  Modifie les préfèrences d'abonnement de l'utilisateur connecté aux notifications
+  de tous ses établissements
+  """
+  subscribeToNotifications(
+    input: SubscribeToNotificationsInput!
+  ): [CompanyPrivate!]!
 }

@@ -1,14 +1,16 @@
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { MutationUpdateBsvhuArgs } from "../../../generated/graphql/types";
-import prisma from "../../../prisma";
+import type { MutationUpdateBsvhuArgs } from "@td/codegen-back";
 import { GraphQLContext } from "../../../types";
-import { expandVhuFormFromDb, flattenVhuInput } from "../../converter";
-import { getFormOrFormNotFound } from "../../database";
-import { getNotEditableKeys } from "../../edition-rules";
-import { SealedFieldsError } from "../../errors";
-import { checkIsFormContributor } from "../../permissions";
-import { validateBsvhu } from "../../validation";
-import { indexBsvhu } from "../../elastic";
+import {
+  companyToIntermediaryInput,
+  expandVhuFormFromDb
+} from "../../converter";
+import { getBsvhuOrNotFound } from "../../database";
+import { mergeInputAndParseBsvhuAsync } from "../../validation";
+import { getBsvhuRepository } from "../../repository";
+import { checkCanUpdate } from "../../permissions";
+import { BsvhuForParsingInclude } from "../../validation/types";
+
 export default async function edit(
   _,
   { id, input }: MutationUpdateBsvhuArgs,
@@ -16,38 +18,43 @@ export default async function edit(
 ) {
   const user = checkIsAuthenticated(context);
 
-  const prismaForm = await getFormOrFormNotFound(id);
-  await checkIsFormContributor(
-    user,
-    prismaForm,
-    "Vous ne pouvez pas modifier un bordereau sur lequel votre entreprise n'apparait pas"
-  );
+  const existingBsvhu = await getBsvhuOrNotFound(id, {
+    include: BsvhuForParsingInclude
+  });
 
-  const invalidKeys = getNotEditableKeys(input, prismaForm);
-  if (invalidKeys.length) {
-    throw new SealedFieldsError(invalidKeys);
+  await checkCanUpdate(user, existingBsvhu, input);
+
+  const { parsedBsvhu, updatedFields } = await mergeInputAndParseBsvhuAsync(
+    existingBsvhu,
+    input,
+    { user }
+  );
+  if (updatedFields.length === 0) {
+    // Évite de faire un update "à blanc" si l'input
+    // ne modifie pas les données. Cela permet de limiter
+    // le nombre d'évenements crées dans Mongo.
+    return expandVhuFormFromDb(existingBsvhu);
   }
 
-  const formUpdate = flattenVhuInput(input);
+  const intermediaries = parsedBsvhu.intermediaries
+    ? {
+        deleteMany: {},
+        ...(parsedBsvhu.intermediaries.length > 0 && {
+          create: companyToIntermediaryInput(parsedBsvhu.intermediaries)
+        })
+      }
+    : undefined;
 
-  const resultingForm = { ...prismaForm, ...formUpdate };
-  await checkIsFormContributor(
-    user,
-    resultingForm,
-    "Vous ne pouvez pas enlever votre établissement du bordereau"
+  const { update } = getBsvhuRepository(user);
+  const { createdAt, ...bsvhu } = parsedBsvhu;
+
+  const updatedBsvhu = await update(
+    { id },
+    {
+      ...bsvhu,
+      intermediaries
+    }
   );
 
-  await validateBsvhu(resultingForm, {
-    emissionSignature: prismaForm.emitterEmissionSignatureAuthor != null,
-    operationSignature: prismaForm.destinationOperationSignatureAuthor != null,
-    transportSignature: prismaForm.transporterTransportSignatureAuthor != null
-  });
-
-  const updatedForm = await prisma.bsvhu.update({
-    where: { id },
-    data: formUpdate
-  });
-
-  await indexBsvhu(updatedForm, context);
-  return expandVhuFormFromDb(updatedForm);
+  return expandVhuFormFromDb(updatedBsvhu);
 }

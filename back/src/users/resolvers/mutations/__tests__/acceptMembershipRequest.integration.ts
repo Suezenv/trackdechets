@@ -1,19 +1,20 @@
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import prisma from "../../../../prisma";
+import { prisma } from "@td/prisma";
 import { AuthType } from "../../../../auth";
-import * as mailsHelper from "../../../../mailer/mailing";
+import { sendMail } from "../../../../mailer/mailing";
 import {
   userFactory,
   userWithCompanyFactory
 } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
-import { renderMail } from "../../../../mailer/templates/renderers";
-import { membershipRequestAccepted } from "../../../../mailer/templates";
-import { Mutation } from "../../../../generated/graphql/types";
+import { renderMail, membershipRequestAccepted } from "@td/mail";
+import type { Mutation } from "@td/codegen-back";
+import { UserRole } from "@prisma/client";
+import { getDefaultNotifications } from "../../../notifications";
 
 // No mails
-const sendMailSpy = jest.spyOn(mailsHelper, "sendMail");
-sendMailSpy.mockImplementation(() => Promise.resolve());
+jest.mock("../../../../mailer/mailing");
+(sendMail as jest.Mock).mockImplementation(() => Promise.resolve());
 
 const ACCEPT_MEMBERSHIP_REQUEST = `
   mutation AcceptMembershipRequest($id: ID!, $role: UserRole!){
@@ -29,7 +30,7 @@ const ACCEPT_MEMBERSHIP_REQUEST = `
 
 describe("mutation acceptMembershipRequest", () => {
   afterAll(resetDatabase);
-  afterEach(sendMailSpy.mockClear);
+  afterEach((sendMail as jest.Mock).mockClear);
 
   it("should deny access to unauthenticated users", async () => {
     const { mutate } = makeClient();
@@ -113,7 +114,7 @@ describe("mutation acceptMembershipRequest", () => {
     );
   });
 
-  it.each(["MEMBER", "ADMIN"])(
+  it.each([UserRole.ADMIN, UserRole.MEMBER, UserRole.READER, UserRole.DRIVER])(
     "should associate requesting user to company with role %p",
     async role => {
       const { user, company } = await userWithCompanyFactory("ADMIN");
@@ -132,16 +133,15 @@ describe("mutation acceptMembershipRequest", () => {
         }
       );
       expect(data.acceptMembershipRequest.users).toHaveLength(2);
-      const members = data.acceptMembershipRequest.users.map(u => u.email);
+      const members = data.acceptMembershipRequest.users!.map(u => u.email);
       expect(members).toContain(user.email);
 
-      const acceptedMembershipRequest = await prisma.membershipRequest.findUnique(
-        {
+      const acceptedMembershipRequest =
+        await prisma.membershipRequest.findUniqueOrThrow({
           where: {
             id: membershipRequest.id
           }
-        }
-      );
+        });
 
       expect(acceptedMembershipRequest.status).toEqual("ACCEPTED");
       expect(acceptedMembershipRequest.statusUpdatedBy).toEqual(user.email);
@@ -153,7 +153,14 @@ describe("mutation acceptMembershipRequest", () => {
       expect(companyAssociations).toHaveLength(1);
       expect(companyAssociations[0].role).toEqual(role);
 
-      expect(sendMailSpy).toHaveBeenCalledWith(
+      const expectedNotifications = getDefaultNotifications(role);
+
+      expect(companyAssociations[0]).toMatchObject(expectedNotifications);
+
+      // when a new user is invited and accepts invitation, `automaticallyAccepted` is false
+      expect(companyAssociations[0].automaticallyAccepted).toEqual(false);
+
+      expect(sendMail as jest.Mock).toHaveBeenCalledWith(
         renderMail(membershipRequestAccepted, {
           to: [{ email: requester.email, name: requester.name }],
           variables: { companyName: company.name, companySiret: company.siret }

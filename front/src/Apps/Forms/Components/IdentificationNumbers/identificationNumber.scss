@@ -1,0 +1,33 @@
+.multiTags {
+  display: flex;
+  width: 100%;
+  border-radius: 0.25rem 0.25rem 0 0;
+  font-size: 1rem;
+  line-height: 1.2rem;
+  padding: 0.5rem 1rem 0.5rem 1rem;
+  margin-top: 0.5em;
+  color: var(--text-default-grey);
+  background-color: rgb(238, 238, 238);
+  --idle: transparent;
+  --hover: var(--background-contrast-grey-hover);
+  --active: var(--background-contrast-grey-active);
+  box-shadow: inset 0 -2px 0 0 var(--border-plain-grey);
+  row-gap: 10px;
+  &.error {
+    box-shadow: inset 0 -2px 0 0 var(--border-plain-error);
+  }
+}
+
+.multiTagsInput {
+  line-height: 1.8rem;
+  background-color: transparent;
+  padding: 0 0.4rem;
+  width: 100%;
+}
+
+.multiTags-title {
+  display: inline-flex;
+  &.error {
+    color: var(--text-default-error);
+  }
+}

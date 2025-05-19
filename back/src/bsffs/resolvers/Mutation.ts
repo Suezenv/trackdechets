@@ -1,4 +1,4 @@
-import { MutationResolvers } from "../../generated/graphql/types";
+import type { MutationResolvers } from "@td/codegen-back";
 import createBsffResolver from "./mutations/createBsff";
 import createDraftBsff from "./mutations/createDraftBsff";
 import publishBsff from "./mutations/publishBsff";
@@ -7,6 +7,11 @@ import deleteBsff from "./mutations/deleteBsff";
 import createFicheInterventionBsff from "./mutations/createFicheInterventionBsff";
 import updateFicheInterventionBsff from "./mutations/updateFicheInterventionBsff";
 import signBsff from "./mutations/signBsff";
+import duplicateBsff from "./mutations/duplicateBsff";
+import updateBsffPackaging from "./mutations/updateBsffPackaging";
+import createBsffTransporter from "./mutations/createBsffTransporter";
+import updateBsffTransporter from "./mutations/updateBsffTransporter";
+import deleteBsffTransporter from "./mutations/deleteBsffTransporter";
 
 export const Mutation: MutationResolvers = {
   createBsff: createBsffResolver,
@@ -14,7 +19,12 @@ export const Mutation: MutationResolvers = {
   publishBsff,
   updateBsff,
   deleteBsff,
+  duplicateBsff,
   createFicheInterventionBsff,
   updateFicheInterventionBsff,
-  signBsff
+  signBsff,
+  updateBsffPackaging,
+  createBsffTransporter,
+  updateBsffTransporter,
+  deleteBsffTransporter
 };

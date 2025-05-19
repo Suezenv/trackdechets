@@ -1,8 +1,94 @@
-import { initSubscriptions } from "./events";
-import { app } from "./server";
+import "@total-typescript/ts-reset";
+import "@td/tracer";
+import { envVariables } from "@td/env";
+import { z } from "zod";
 
-const port = process.env.API_PORT || 80;
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace NodeJS {
+    // eslint-disable-next-line @typescript-eslint/no-empty-interface, @typescript-eslint/no-empty-object-type
+    interface ProcessEnv extends z.infer<typeof envVariables> {}
+  }
+}
 
-app.listen(port, () => console.info(`Server is running on port ${port}`));
+export { httpServer, server, startApolloServer } from "./server";
+export { closeQueues } from "./queue/producers";
+export { initSentry } from "./common/sentry";
+export * from "./utils";
+export { deleteBsd } from "./common/elastic";
+export { getCompaniesAndSubscribersByCompanyOrgIds } from "./companies/database";
+export { formatDate } from "./common/pdf";
+export { sendMail } from "./mailer/mailing";
+export { BsdUpdateQueueItem, updatesQueue } from "./queue/producers/bsdUpdate";
+export { operationHooksQueue } from "./queue/producers/operationHook";
+export { administrativeTransferQueue } from "./queue/producers/administrativeTransfer";
+export { updateAppendix2Queue } from "./queue/producers/updateAppendix2";
+export { registryImportQueue } from "./queue/producers/registryImport";
+export { registryExportQueue } from "./queue/producers/registryExport";
+export {
+  indexBsdJob,
+  operationHookJob,
+  updateAppendix2Job,
+  sendMailJob,
+  postGericoJob,
+  processAdministrativeTransferJob,
+  processRegistryImportJob,
+  processRegistryExportJob
+} from "./queue/jobs";
 
-initSubscriptions();
+export {
+  indexQueue,
+  bulkIndexQueue,
+  bulkIndexMasterQueue
+} from "./queue/producers/elastic";
+export { sirenifyQueue } from "./queue/producers/sirenify";
+export { mailQueue } from "./queue/producers/mail";
+export { syncEventsQueue } from "./queue/producers/events";
+
+export {
+  geocodeCompanyQueue,
+  setCompanyDepartementQueue
+} from "./queue/producers/company";
+export { addToMailQueue } from "./queue/producers/mail";
+export { geocodeJob } from "./queue/jobs/geocode";
+export { setDepartementJob } from "./queue/jobs/setDepartement";
+export { syncEventsJob } from "./queue/jobs/syncEvents";
+export { favoritesCompanyQueue } from "./queue/producers/company";
+export {
+  DELETE_JOB_NAME,
+  INDEX_JOB_NAME,
+  INDEX_CREATED_JOB_NAME,
+  INDEX_UPDATED_JOB_NAME,
+  SIRENIFY_JOB_NAME,
+  SEND_GERICO_API_REQUEST_JOB_NAME
+} from "./queue/producers/jobNames";
+export { deleteBsdJob } from "./queue/jobs/deleteBsd";
+export { indexFavoritesJob } from "./queue/jobs/indexFavorites";
+export { indexChunkBsdJob, indexAllInBulkJob } from "./queue/jobs/indexAllBsds";
+export { sendHookJob } from "./queue/jobs/sendHook";
+export {
+  webhooksQueue,
+  SEND_WEBHOOK_JOB_NAME
+} from "./queue/producers/webhooks";
+export { sirenifyBsdJob } from "./queue/jobs/sirenifyBsd";
+export { associateUserToCompany } from "./users/database";
+export { redisClient } from "./common/redis";
+export { client as esClient, index as esIndex } from "./common/elastic";
+export { closeMongoClient } from "./events/mongodb";
+export { hashPassword } from "./users/utils";
+export { generateUniqueTestSiret } from "./companies/resolvers/mutations/createTestCompany";
+export { createUser } from "./users/database";
+export { default as getReadableId, ReadableIdPrefix } from "./forms/readableId";
+export { reindex } from "./bsds/indexation/reindexBsdHelpers";
+export { gericoQueue } from "./queue/producers/gerico";
+export { getBsdasriFromActivityEvents } from "./activity-events/bsdasri";
+export { getBsdaFromActivityEvents } from "./activity-events/bsda";
+export { getBsddFromActivityEvents } from "./activity-events/bsdd";
+export { cleanUpIsReturnForTab } from "./common/elasticHelpers";
+export { UserNotification } from "./users/notifications";
+export {
+  getDelegationNotifiableUsers,
+  getRegistryDelegationsExpiringInDays
+} from "./registryDelegation/resolvers/utils";
+export { expireAdminRequests } from "./adminRequest/resolvers/mutations/utils/refuseAdminRequest.utils";
+export { getAdminRequestRepository } from "./adminRequest/repository/index";

@@ -1,15 +1,21 @@
-import { UserRole } from "@prisma/client";
-import { resetDatabase } from "../../../../../integration-tests/helper";
 import {
-  Mutation,
-  MutationDeleteBsffArgs
-} from "../../../../generated/graphql/types";
+  BsffPackagingType,
+  BsffStatus,
+  BsffType,
+  UserRole
+} from "@prisma/client";
+import { resetDatabase } from "../../../../../integration-tests/helper";
+import type { Mutation, MutationDeleteBsffArgs } from "@td/codegen-back";
 import { userWithCompanyFactory } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
 import {
   createBsff,
-  createBsffAfterEmission
+  createBsffAfterEmission,
+  createBsffAfterOperation,
+  createBsffAfterTransport
 } from "../../../__tests__/factories";
+import { prisma } from "@td/prisma";
+import getReadableId, { ReadableIdPrefix } from "../../../../forms/readableId";
 
 const DELETE_BSFF = `
   mutation DeleteBsff($id: ID!) {
@@ -52,9 +58,9 @@ describe("Mutation.deleteBsff", () => {
 
     expect(errors).toEqual([
       expect.objectContaining({
-        extensions: {
+        extensions: expect.objectContaining({
           code: "UNAUTHENTICATED"
-        }
+        })
       })
     ]);
   });
@@ -75,8 +81,7 @@ describe("Mutation.deleteBsff", () => {
 
     expect(errors).toEqual([
       expect.objectContaining({
-        message:
-          "Vous ne pouvez pas éditer un bordereau sur lequel le SIRET de votre entreprise n'apparaît pas."
+        message: "Vous ne pouvez pas supprimer ce BSFF"
       })
     ]);
   });
@@ -96,7 +101,7 @@ describe("Mutation.deleteBsff", () => {
 
     expect(errors).toEqual([
       expect.objectContaining({
-        message: "Le bordereau de fluides frigorigènes n°123 n'existe pas."
+        message: "Le BSFF n°123 n'existe pas."
       })
     ]);
   });
@@ -105,7 +110,7 @@ describe("Mutation.deleteBsff", () => {
     const emitter = await userWithCompanyFactory(UserRole.ADMIN);
     const { mutate } = makeClient(emitter.user);
 
-    const bsff = await createBsff({ emitter }, { isDeleted: true });
+    const bsff = await createBsff({ emitter }, { data: { isDeleted: true } });
     const { errors } = await mutate<
       Pick<Mutation, "deleteBsff">,
       MutationDeleteBsffArgs
@@ -117,7 +122,7 @@ describe("Mutation.deleteBsff", () => {
 
     expect(errors).toEqual([
       expect.objectContaining({
-        message: `Le bordereau de fluides frigorigènes n°${bsff.id} n'existe pas.`
+        message: `Le BSFF n°${bsff.id} n'existe pas.`
       })
     ]);
   });
@@ -126,7 +131,7 @@ describe("Mutation.deleteBsff", () => {
     const emitter = await userWithCompanyFactory(UserRole.ADMIN);
     const transporter = await userWithCompanyFactory(UserRole.ADMIN);
     const destination = await userWithCompanyFactory(UserRole.ADMIN);
-    const { mutate } = makeClient(emitter.user);
+    const { mutate } = makeClient(destination.user);
 
     const bsff = await createBsffAfterEmission({
       emitter,
@@ -147,5 +152,272 @@ describe("Mutation.deleteBsff", () => {
         message: `Il n'est pas possible de supprimer un bordereau qui a été signé par un des acteurs`
       })
     ]);
+  });
+
+  it("should allow emitter to delete a bsff with only his signature", async () => {
+    const emitter = await userWithCompanyFactory(UserRole.ADMIN);
+    const transporter = await userWithCompanyFactory(UserRole.ADMIN);
+    const destination = await userWithCompanyFactory(UserRole.ADMIN);
+    const { mutate } = makeClient(emitter.user);
+
+    const bsff = await createBsffAfterEmission({
+      emitter,
+      transporter,
+      destination
+    });
+    const { errors } = await mutate<
+      Pick<Mutation, "deleteBsff">,
+      MutationDeleteBsffArgs
+    >(DELETE_BSFF, {
+      variables: {
+        id: bsff.id
+      }
+    });
+
+    expect(errors).toBeUndefined();
+
+    const deletedBsff = await prisma.bsff.findUniqueOrThrow({
+      where: { id: bsff.id }
+    });
+
+    expect(deletedBsff.isDeleted).toBe(true);
+  });
+
+  it("should disallow emitter to delete a bsff with transporteur signature", async () => {
+    const emitter = await userWithCompanyFactory(UserRole.ADMIN);
+    const transporter = await userWithCompanyFactory(UserRole.ADMIN);
+    const destination = await userWithCompanyFactory(UserRole.ADMIN);
+    const { mutate } = makeClient(emitter.user);
+
+    const bsff = await createBsffAfterTransport({
+      emitter,
+      transporter,
+      destination
+    });
+    const { errors } = await mutate<
+      Pick<Mutation, "deleteBsff">,
+      MutationDeleteBsffArgs
+    >(DELETE_BSFF, {
+      variables: {
+        id: bsff.id
+      }
+    });
+
+    expect(errors).toEqual([
+      expect.objectContaining({
+        message: `Il n'est pas possible de supprimer un bordereau qui a été signé par un des acteurs`
+      })
+    ]);
+  });
+
+  it("should unlink grouped packagings", async () => {
+    const initialEmitter = await userWithCompanyFactory(UserRole.ADMIN);
+    const transporter = await userWithCompanyFactory(UserRole.ADMIN);
+    const ttr = await userWithCompanyFactory(UserRole.ADMIN);
+
+    let initialBsff = await createBsffAfterOperation({
+      emitter: initialEmitter,
+      transporter,
+      destination: ttr
+    });
+
+    const groupingBsff = await prisma.bsff.create({
+      data: {
+        id: getReadableId(ReadableIdPrefix.FF),
+        isDraft: true,
+        type: BsffType.GROUPEMENT,
+        status: BsffStatus.INITIAL,
+        emitterCompanySiret: ttr.company.siret,
+        packagings: {
+          create: initialBsff.packagings.map(p => ({
+            type: p.type,
+            numero: p.numero,
+            emissionNumero: p.numero,
+            volume: p.volume,
+            weight: p.acceptationWeight!,
+            previousPackagings: { connect: { id: p.id } }
+          }))
+        },
+        canAccessDraftOrgIds: [ttr.company.siret!]
+      },
+      include: { packagings: true }
+    });
+
+    initialBsff = await prisma.bsff.findUniqueOrThrow({
+      where: { id: initialBsff.id },
+      include: { packagings: true, transporters: true }
+    });
+
+    for (const packaging of initialBsff.packagings) {
+      expect(groupingBsff.packagings.map(p => p.id)).toContain(
+        packaging.nextPackagingId
+      );
+    }
+
+    expect(initialBsff.packagings.map(p => p.nextPackagingId)).toEqual(
+      groupingBsff.packagings.map(p => p.id)
+    );
+
+    const { mutate } = makeClient(ttr.user);
+
+    await mutate<Pick<Mutation, "deleteBsff">, MutationDeleteBsffArgs>(
+      DELETE_BSFF,
+      {
+        variables: {
+          id: groupingBsff.id
+        }
+      }
+    );
+
+    initialBsff = await prisma.bsff.findUniqueOrThrow({
+      where: { id: initialBsff.id },
+      include: { packagings: true, transporters: true }
+    });
+
+    for (const packaging of initialBsff.packagings) {
+      expect(packaging.nextPackagingId).toBeNull();
+    }
+  });
+
+  it("should unlink repackaged bsffs", async () => {
+    const initialEmitter = await userWithCompanyFactory(UserRole.ADMIN);
+    const transporter = await userWithCompanyFactory(UserRole.ADMIN);
+    const ttr = await userWithCompanyFactory(UserRole.ADMIN);
+
+    let initialBsff = await createBsffAfterOperation({
+      emitter: initialEmitter,
+      transporter,
+      destination: ttr
+    });
+
+    const repackagingBsff = await prisma.bsff.create({
+      data: {
+        id: getReadableId(ReadableIdPrefix.FF),
+        isDraft: true,
+        type: BsffType.RECONDITIONNEMENT,
+        status: BsffStatus.INITIAL,
+        emitterCompanySiret: ttr.company.siret,
+        packagings: {
+          create: {
+            type: BsffPackagingType.BOUTEILLE,
+            numero: "cont1",
+            emissionNumero: "cont1",
+            weight: 1,
+            volume: 1,
+            previousPackagings: {
+              connect: initialBsff.packagings.map(p => ({ id: p.id }))
+            }
+          }
+        },
+        canAccessDraftOrgIds: [ttr.company.siret!]
+      },
+      include: { packagings: true }
+    });
+
+    initialBsff = await prisma.bsff.findUniqueOrThrow({
+      where: { id: initialBsff.id },
+      include: { packagings: true, transporters: true }
+    });
+
+    for (const packaging of initialBsff.packagings) {
+      expect(repackagingBsff.packagings.map(p => p.id)).toContain(
+        packaging.nextPackagingId
+      );
+    }
+
+    expect(initialBsff.packagings.map(p => p.nextPackagingId)).toEqual(
+      repackagingBsff.packagings.map(p => p.id)
+    );
+
+    const { mutate } = makeClient(ttr.user);
+
+    await mutate<Pick<Mutation, "deleteBsff">, MutationDeleteBsffArgs>(
+      DELETE_BSFF,
+      {
+        variables: {
+          id: repackagingBsff.id
+        }
+      }
+    );
+
+    initialBsff = await prisma.bsff.findUniqueOrThrow({
+      where: { id: initialBsff.id },
+      include: { packagings: true, transporters: true }
+    });
+
+    for (const packaging of initialBsff.packagings) {
+      expect(packaging.nextPackagingId).toBeNull();
+    }
+  });
+
+  it("should unlink forwarded bsff", async () => {
+    const initialEmitter = await userWithCompanyFactory(UserRole.ADMIN);
+    const transporter = await userWithCompanyFactory(UserRole.ADMIN);
+    const ttr = await userWithCompanyFactory(UserRole.ADMIN);
+
+    let initialBsff = await createBsffAfterOperation({
+      emitter: initialEmitter,
+      transporter,
+      destination: ttr
+    });
+
+    const forwardingBsff = await prisma.bsff.create({
+      data: {
+        id: getReadableId(ReadableIdPrefix.FF),
+        isDraft: true,
+        type: BsffType.REEXPEDITION,
+        status: BsffStatus.INITIAL,
+        emitterCompanySiret: ttr.company.siret,
+        packagings: {
+          create: {
+            type: initialBsff.packagings[0].type,
+            numero: initialBsff.packagings[0].numero,
+            emissionNumero: initialBsff.packagings[0].numero,
+            weight: initialBsff.packagings[0].acceptationWeight!,
+            volume: initialBsff.packagings[0].volume,
+            previousPackagings: {
+              connect: { id: initialBsff.packagings[0].id }
+            }
+          }
+        },
+        canAccessDraftOrgIds: [ttr.company.siret!]
+      },
+      include: { packagings: true }
+    });
+
+    initialBsff = await prisma.bsff.findUniqueOrThrow({
+      where: { id: initialBsff.id },
+      include: { packagings: true, transporters: true }
+    });
+
+    for (const packaging of initialBsff.packagings) {
+      expect(forwardingBsff.packagings.map(p => p.id)).toContain(
+        packaging.nextPackagingId
+      );
+    }
+
+    expect(initialBsff.packagings.map(p => p.nextPackagingId)).toEqual(
+      forwardingBsff.packagings.map(p => p.id)
+    );
+
+    const { mutate } = makeClient(ttr.user);
+
+    await mutate<Pick<Mutation, "deleteBsff">, MutationDeleteBsffArgs>(
+      DELETE_BSFF,
+      {
+        variables: {
+          id: forwardingBsff.id
+        }
+      }
+    );
+
+    initialBsff = await prisma.bsff.findUniqueOrThrow({
+      where: { id: initialBsff.id },
+      include: { packagings: true, transporters: true }
+    });
+
+    for (const packaging of initialBsff.packagings) {
+      expect(packaging.nextPackagingId).toBeNull();
+    }
   });
 });

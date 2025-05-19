@@ -1,37 +1,50 @@
+import { getConnection } from "../../../common/pagination";
 import { checkIsAuthenticated } from "../../../common/permissions";
 import { applyMask } from "../../../common/where";
-import { QueryBsvhusArgs } from "../../../generated/graphql/types";
-import prisma from "../../../prisma";
+import type { QueryBsvhusArgs } from "@td/codegen-back";
 import { GraphQLContext } from "../../../types";
-import { getUserCompanies } from "../../../users/database";
 import { expandVhuFormFromDb } from "../../converter";
-import { getConnectionsArgs } from "../../pagination";
+import { getReadonlyBsvhuRepository } from "../../repository";
+
 import { toPrismaWhereInput } from "../../where";
+import { Permission, can, getUserRoles } from "../../../permissions";
+import { Prisma } from "@prisma/client";
 
 export default async function bsvhus(
   _,
-  { where: whereArgs, ...paginationArgs }: QueryBsvhusArgs,
+  { where: whereArgs, ...gqlPaginationArgs }: QueryBsvhusArgs,
   context: GraphQLContext
 ) {
   const user = checkIsAuthenticated(context);
 
-  const defaultPaginateBy = 50;
-  const itemsPerPage =
-    paginationArgs.first ?? paginationArgs.last ?? defaultPaginateBy;
-  const connectionsArgs = await getConnectionsArgs({
-    ...paginationArgs,
-    defaultPaginateBy,
-    maxPaginateBy: 500
-  });
-
-  const userCompanies = await getUserCompanies(user.id);
-  const userSirets = userCompanies.map(c => c.siret);
+  const roles = await getUserRoles(user.id);
+  const orgIdsWithListPermission = Object.keys(roles).filter(orgId =>
+    can(roles[orgId], Permission.BsdCanList)
+  );
 
   const mask = {
     OR: [
-      { emitterCompanySiret: { in: userSirets } },
-      { transporterCompanySiret: { in: userSirets } },
-      { destinationCompanySiret: { in: userSirets } }
+      { emitterCompanySiret: { in: orgIdsWithListPermission } },
+      { transporterCompanySiret: { in: orgIdsWithListPermission } },
+      { transporterCompanyVatNumber: { in: orgIdsWithListPermission } },
+      { destinationCompanySiret: { in: orgIdsWithListPermission } },
+      { brokerCompanySiret: { in: orgIdsWithListPermission } },
+      { traderCompanySiret: { in: orgIdsWithListPermission } },
+      { intermediariesOrgIds: { hasSome: orgIdsWithListPermission } }
+    ]
+  };
+
+  const draftMask: Prisma.BsvhuWhereInput = {
+    OR: [
+      {
+        isDraft: false,
+        ...mask
+      },
+      {
+        isDraft: true,
+        canAccessDraftOrgIds: { hasSome: orgIdsWithListPermission },
+        ...mask
+      }
     ]
   };
 
@@ -39,31 +52,18 @@ export default async function bsvhus(
     ...(whereArgs ? toPrismaWhereInput(whereArgs) : {}),
     isDeleted: false
   };
+  const where = applyMask<Prisma.BsvhuWhereInput>(prismaWhere, draftMask);
+  const bsvhuRepository = getReadonlyBsvhuRepository();
+  const totalCount = await bsvhuRepository.count(where);
 
-  const where = applyMask(prismaWhere, mask);
-
-  const totalCount = await prisma.bsvhu.count({ where });
-  const queriedForms = await prisma.bsvhu.findMany({
-    ...connectionsArgs,
-    orderBy: { createdAt: "desc" },
-    where
-  });
-
-  const edges = queriedForms
-    .slice(0, itemsPerPage)
-    .map(f => ({ cursor: f.id, node: expandVhuFormFromDb(f) }));
-  return {
+  return getConnection({
     totalCount,
-    edges,
-    pageInfo: {
-      startCursor: edges[0]?.cursor,
-      endCursor: edges[edges.length - 1]?.cursor,
-      hasNextPage: paginationArgs.after
-        ? queriedForms.length > itemsPerPage
-        : false,
-      hasPreviousPage: paginationArgs.before
-        ? queriedForms.length > itemsPerPage
-        : false
-    }
-  };
+    findMany: prismaPaginationArgs =>
+      bsvhuRepository.findMany(where, {
+        ...prismaPaginationArgs,
+        orderBy: { rowNumber: "desc" }
+      }),
+    formatNode: expandVhuFormFromDb,
+    ...gqlPaginationArgs
+  });
 }

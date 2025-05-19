@@ -1,12 +1,19 @@
 import { resetDatabase } from "../../../../../integration-tests/helper";
 import { ErrorCode } from "../../../../common/errors";
-import { userWithCompanyFactory } from "../../../../__tests__/factories";
+import {
+  companyFactory,
+  userWithCompanyFactory
+} from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
 import { BsdasriStatus } from "@prisma/client";
 import { SIGN_DASRI } from "./signUtils";
-import { bsdasriFactory, initialData } from "../../../__tests__/factories";
-import prisma from "../../../../prisma";
-import { Mutation } from "../../../../generated/graphql/types";
+import {
+  bsdasriFactory,
+  initialData,
+  readyToPublishData
+} from "../../../__tests__/factories";
+import { prisma } from "@td/prisma";
+import type { Mutation } from "@td/codegen-back";
 
 describe("Mutation.signBsdasri emission", () => {
   afterEach(resetDatabase);
@@ -38,9 +45,11 @@ describe("Mutation.signBsdasri emission", () => {
 
   it("a draft dasri should not be signed", async () => {
     const { user, company } = await userWithCompanyFactory("MEMBER");
+    const destination = await companyFactory();
     const dasri = await bsdasriFactory({
       opt: {
         ...initialData(company),
+        ...readyToPublishData(destination),
         status: BsdasriStatus.INITIAL,
         isDraft: true
       }
@@ -66,8 +75,13 @@ describe("Mutation.signBsdasri emission", () => {
 
   it("should put emission signature on a dasri", async () => {
     const { user, company } = await userWithCompanyFactory("MEMBER");
+    const destination = await companyFactory();
     const dasri = await bsdasriFactory({
-      opt: { ...initialData(company), status: BsdasriStatus.INITIAL }
+      opt: {
+        ...initialData(company),
+        ...readyToPublishData(destination),
+        status: BsdasriStatus.INITIAL
+      }
     });
     const { mutate } = makeClient(user); // emitter
 
@@ -78,14 +92,48 @@ describe("Mutation.signBsdasri emission", () => {
       }
     });
 
-    const signedByTransporterDasri = await prisma.bsdasri.findUnique({
+    const signedByEmitterDasri = await prisma.bsdasri.findUniqueOrThrow({
       where: { id: dasri.id }
     });
-    expect(signedByTransporterDasri.status).toEqual("SIGNED_BY_PRODUCER");
-    expect(signedByTransporterDasri.emitterEmissionSignatureAuthor).toEqual(
+    expect(signedByEmitterDasri.status).toEqual("SIGNED_BY_PRODUCER");
+    expect(signedByEmitterDasri.emitterEmissionSignatureAuthor).toEqual(
       "Marcel"
     );
-    expect(signedByTransporterDasri.emitterEmissionSignatureDate).toBeTruthy();
-    expect(signedByTransporterDasri.emissionSignatoryId).toEqual(user.id);
+    expect(signedByEmitterDasri.emitterEmissionSignatureDate).toBeTruthy();
+    expect(signedByEmitterDasri.emissionSignatoryId).toEqual(user.id);
+    expect(signedByEmitterDasri.emittedByEcoOrganisme).toBe(false);
+  });
+
+  it("should reject emission signature on dasri when emitterWastePackagings field is empty", async () => {
+    // Test new rule: `emitterWastePackagings` is not required for publication anymore, but for emission signature
+
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+    const destination = await companyFactory();
+    const dasri = await bsdasriFactory({
+      opt: {
+        ...initialData(company),
+        ...readyToPublishData(destination),
+        emitterWastePackagings: [],
+        status: BsdasriStatus.INITIAL
+      }
+    });
+
+    const { mutate } = makeClient(user); // emitter
+
+    const { errors } = await mutate<Pick<Mutation, "signBsdasri">>(SIGN_DASRI, {
+      variables: {
+        id: dasri.id,
+        input: { type: "EMISSION", author: "Marcel" }
+      }
+    });
+
+    expect(errors).toEqual([
+      expect.objectContaining({
+        message: "Le détail du conditionnement émis est obligatoire",
+        extensions: expect.objectContaining({
+          code: ErrorCode.BAD_USER_INPUT
+        })
+      })
+    ]);
   });
 });

@@ -6,6 +6,15 @@ type CompanyPrivate {
   "Profil de l'établissement"
   companyTypes: [CompanyType!]!
 
+  "Sous-types pour les Installation de Tri, Transit Regroupement de déchets"
+  collectorTypes: [CollectorType!]!
+
+  "Sous-types d'entreprises pour les installation de traitement de déchets"
+  wasteProcessorTypes: [WasteProcessorType!]!
+
+  "Sous-types d'entreprises pour les installation de traitement VHU"
+  wasteVehiclesTypes: [WasteVehiclesType!]!
+
   "Identifiant GEREP"
   gerepId: String
 
@@ -14,6 +23,9 @@ type CompanyPrivate {
 
   "État du processus de vérification de l'établissement"
   verificationStatus: CompanyVerificationStatus!
+
+  "Prénom et nom du contact"
+  contact: String
 
   "Email de contact (visible sur la fiche entreprise)"
   contactEmail: String
@@ -27,8 +39,14 @@ type CompanyPrivate {
   "Liste des utilisateurs appartenant à cet établissement"
   users: [CompanyMember!]
 
-  "Rôle de l'utilisateur authentifié cau sein de cet établissement"
+  "Rôle de l'utilisateur authentifié au sein de cet établissement"
   userRole: UserRole
+
+  "Liste des permissions de l'utilisateur authentifié au sein de cet établissement"
+  userPermissions: [UserPermission!]!
+
+  "Liste des notifications auquels l'utilisateur authentifié est abonné pour cet établissement"
+  userNotifications: UserNotifications!
 
   """
   Nom d'usage de l'entreprise qui permet de différencier
@@ -36,8 +54,14 @@ type CompanyPrivate {
   """
   givenName: String
 
+  "SIRET ou TVA de l'établissement"
+  orgId: String!
+
   "SIRET de l'établissement"
-  siret: String!
+  siret: String
+
+  "Numéro de TVA de l'établissement"
+  vatNumber: String
 
   "Adresse de l'établissement"
   address: String
@@ -83,33 +107,106 @@ type CompanyPrivate {
   vhuAgrementBroyeur: VhuAgrement
 
   """
+  Informations de certifications pour les entreprise de travaux
+  """
+  workerCertification: WorkerCertification
+
+  """
   Liste des agréments de l'éco-organisme
   """
   ecoOrganismeAgreements: [URL!]!
 
+  "L'entreprise autorise l'enlèvement d'un Dasri sans sa signature"
   allowBsdasriTakeOverWithoutSignature: Boolean!
+
+  """
+  L'entreprise autorise la signature automatique de l'annexe 1 pour les entreprises saisies
+  """
+  allowAppendix1SignatureAutomation: Boolean!
+
+  """
+  Liste des automatisations de signature accordées par l'entreprise
+  """
+  signatureAutomations: [SignatureAutomation!]!
+
+  """
+  Liste des automatisations de signature reçues par l'entreprise
+  """
+  receivedSignatureAutomations: [SignatureAutomation!]!
+
+  """
+  Liste des featureFlags
+  """
+  featureFlags: [String]!
+
+  """
+  Date depuis laquelle l'entreprise est en sommeil sur Trackdéchets.
+  Vide si l'entreprise n'est pas en sommeil.
+  """
+  isDormantSince: DateTime
+
+  """
+  Date à partir de laquelle l'entreprise a choisi de prendre en compte
+  ses BSD de déchet non dangereux dans les exports de registres
+  Vide si l'entreprise n'a pas fait ce choix.
+  """
+  hasEnabledRegistryDndFromBsdSince: DateTime
+
+  """
+  Liste des transferts administratifs initiés par l'établissement
+  """
+  givenAdministrativeTransfers: [AdministrativeTransfer!]
+
+  """
+  Liste des transferts administratifs reçus par l'établissement
+  """
+  receivedAdministrativeTransfers: [AdministrativeTransfer!]
+
+  """
+  Liste des entreprises ayant délégué la déclaration de leurs registres
+  """
+  delegators: [CompanyPublic!]
 }
 
-"Information sur un établissement accessible publiquement"
+type CompanyPrivateEdge {
+  cursor: String!
+  node: CompanyPrivate!
+}
+
+type CompanyPrivateConnection {
+  totalCount: Int!
+  pageInfo: PageInfo!
+  edges: [CompanyPrivateEdge!]!
+}
+
+type CompanyRegistryConnection {
+  totalCount: Int!
+  myCompanies: [CompanyPrivate!]!
+  delegators: [CompanyPublic!]!
+}
+
+"Information sur un établissement accessible publiquement en recherche"
 type CompanyPublic {
-  "Email de contact"
-  contactEmail: String
-
-  "Numéro de téléphone de contact"
-  contactPhone: String
-
-  "Site web"
-  website: String
-
+  "SIRET ou TVA de l'établissement"
+  orgId: String!
   "SIRET de l'établissement"
   siret: String
-
+  "TVA de l'établissement"
+  vatNumber: String
+  "Code pays de l'établissement"
+  codePaysEtrangerEtablissement: String
   "État administratif de l'établissement. A = Actif, F = Fermé"
   etatAdministratif: String
+  "Statut de diffusion de l'établissement selon l'INSEE. O = Oui, P = Non ou Partiel"
+  statutDiffusionEtablissement: StatutDiffusionEtablissement
   "Adresse de l'établissement"
   address: String
-  "Nom de l'établissement"
+  "Code commune de l'établissement"
+  codeCommune: String
+  "Raison sociale de l'établissement"
   name: String
+  "Nom de l'établissement"
+  givenName: String
   "Code NAF"
   naf: String
   "Libellé NAF"
@@ -119,18 +216,41 @@ type CompanyPublic {
   associé à cet établissement
   """
   installation: Installation
-
+  "Prénom et nom du contact"
+  contact: String
+  "Email de contact"
+  contactEmail: String
+  "Numéro de téléphone de contact"
+  contactPhone: String
+  "Site web"
+  website: String
   """
   Si oui on non cet établissement est inscrit sur la plateforme Trackdéchets
   """
   isRegistered: Boolean
-
   """
   Profil de l'établissement sur Trackdéchets
   ayant pour valeur un tableau vide quand l'établissement
   n'est pas inscrit sur la plateforme `isRegistered=false`
   """
   companyTypes: [CompanyType!]!
+
+  "Sous-types d'entreprises pour les installation de Tri, Transit Regroupement de déchets"
+  collectorTypes: [CollectorType!]
+
+  "Sous-types d'entreprises pour les installation de traitement de déchets"
+  wasteProcessorTypes: [WasteProcessorType!]
+
+  "Sous-types d'installation de traitement VHU"
+  wasteVehiclesTypes: [WasteVehiclesType!]
+
+  """
+  Liste des agréments de l'éco-organisme
+  """
+  ecoOrganismeAgreements: [URL!]!
+
+  "L'entreprise autorise l'enlèvement d'un Dasri sans sa signature"
+  allowBsdasriTakeOverWithoutSignature: Boolean
 
   """
   Récépissé transporteur associé à cet établissement (le cas échéant)
@@ -156,25 +276,133 @@ type CompanyPublic {
   Agrément VHU broyeur (le cas échéant, pour les profils VHU)
   """
   vhuAgrementBroyeur: VhuAgrement
+  """
+  Certification entreprise de travaux
+  """
+  workerCertification: WorkerCertification
 
   """
-  Liste des agréments de l'éco-organisme
+  Indique si l'entreprise est en sommeil sur Trackdéchets
   """
-  ecoOrganismeAgreements: [URL!]!
-
-  "L'entreprise autorise l'enlèvement d'un Dasri sans sa signature"
-  allowBsdasriTakeOverWithoutSignature: Boolean
+  isDormant: Boolean!
 }
 
-"Information sur un établissement accessible publiquement en recherche"
-type CompanySearchResult {
+interface CompanySearchPrivateCommon {
+  "SIRET ou TVA de l'établissement"
+  orgId: String!
   "SIRET de l'établissement"
   siret: String
-
+  "TVA de l'établissement"
+  vatNumber: String
+  "Code pays de l'établissement"
+  codePaysEtrangerEtablissement: String
   "État administratif de l'établissement. A = Actif, F = Fermé"
   etatAdministratif: String
   "Adresse de l'établissement"
   address: String
+  "Nom de l'établissement"
+  name: String
+  "Code NAF"
+  naf: String
+  "Libellé NAF"
+  libelleNaf: String
+  """
+  Installation classée pour la protection de l'environnement (ICPE)
+  associé à cet établissement
+  """
+  installation: Installation
+
+  "Email de contact"
+  contactEmail: String
+  "Numéro de téléphone de contact"
+  contactPhone: String
+  "Nom et prénom de contact"
+  contact: String
+  "Site web"
+  website: String
+  """
+  Si oui on non cet établissement est inscrit sur la plateforme Trackdéchets
+  """
+  isRegistered: Boolean
+  """
+  Identifiant de l'entreprise sur la plateforme Trackdéchets. N'a une valeur que si l'entreprise est inscrite sur Trackdéchets (`isRegistered=true`)
+  """
+  trackdechetsId: ID
+  """
+  Profil de l'établissement sur Trackdéchets
+  ayant pour valeur un tableau vide quand l'établissement
+  n'est pas inscrit sur la plateforme `isRegistered=false`
+  """
+  companyTypes: [CompanyType!]
+
+  """
+  Liste des agréments de l'éco-organisme
+  """
+  ecoOrganismeAgreements: [URL!]
+
+  "L'entreprise autorise l'enlèvement d'un Dasri sans sa signature"
+  allowBsdasriTakeOverWithoutSignature: Boolean
+
+  """
+  Récépissé transporteur associé à cet établissement (le cas échéant)
+  """
+  transporterReceipt: TransporterReceipt
+
+  """
+  Récépissé négociant associé à cet établissement (le cas échant)
+  """
+  traderReceipt: TraderReceipt
+
+  """
+  Récépissé courtier associé à cet établissement (le cas échant)
+  """
+  brokerReceipt: BrokerReceipt
+
+  """
+  Agrément VHU démolisseur (le cas échéant, pour les profils VHU)
+  """
+  vhuAgrementDemolisseur: VhuAgrement
+
+  """
+  Agrément VHU broyeur (le cas échéant, pour les profils VHU)
+  """
+  vhuAgrementBroyeur: VhuAgrement
+  """
+  Statut de diffusion des informations de l'établisement selon l'INSEE. O = Oui, P = Non ou Partiel
+  """
+  statutDiffusionEtablissement: StatutDiffusionEtablissement
+
+  """
+  Certification entreprise de travaux
+  """
+  workerCertification: WorkerCertification
+
+  """
+  Indique si l'entreprise est en sommeil sur Trackdéchets
+  """
+  isDormant: Boolean!
+}
+
+"Information sur un établissement accessible publiquement en recherche floue"
+type CompanySearchResult implements CompanySearchPrivateCommon {
+  "SIRET ou TVA de l'établissement"
+  orgId: String!
+  "SIRET de l'établissement"
+  siret: String
+  "TVA de l'établissement"
+  vatNumber: String
+  "Code pays de l'établissement"
+  codePaysEtrangerEtablissement: String
+  "État administratif de l'établissement. A = Actif, F = Fermé"
+  etatAdministratif: String
+  "Adresse de l'établissement"
+  address: String
+  "Nom de la voie de l'adresse de l'établissement"
+  addressVoie: String
+  "Code Postal de l'adresse de l'établissement"
+  addressPostalCode: String
+  "Ville de l'adresse de l'établissement"
+  addressCity: String
   "Code commune de l'établissement"
   codeCommune: String
   "Nom de l'établissement"
@@ -189,6 +417,46 @@ type CompanySearchResult {
   """
   installation: Installation
 
+  "Email de contact"
+  contactEmail: String
+  "Numéro de téléphone de contact"
+  contactPhone: String
+  "Nom et prénom de contact"
+  contact: String
+  "Site web"
+  website: String
+  """
+  Si oui on non cet établissement est inscrit sur la plateforme Trackdéchets
+  """
+  isRegistered: Boolean
+  """
+  Identifiant de l'entreprise sur la plateforme Trackdéchets. N'a une valeur que si l'entreprise est inscrite sur Trackdéchets (`isRegistered=true`)
+  """
+  trackdechetsId: ID
+  """
+  Profil de l'établissement sur Trackdéchets
+  ayant pour valeur un tableau vide quand l'établissement
+  n'est pas inscrit sur la plateforme `isRegistered=false`
+  """
+  companyTypes: [CompanyType!]
+
+  "Sous-types d'entreprises pour les installation de Tri, Transit Regroupement de déchets"
+  collectorTypes: [CollectorType!]
+
+  "Sous-types d'entreprises pour les installation de traitement de déchets"
+  wasteProcessorTypes: [WasteProcessorType!]
+
+  "Sous-types d'installation de traitement VHU"
+  wasteVehiclesTypes: [WasteVehiclesType!]
+
+  """
+  Liste des agréments de l'éco-organisme
+  """
+  ecoOrganismeAgreements: [URL!]
+
+  "L'entreprise autorise l'enlèvement d'un Dasri sans sa signature"
+  allowBsdasriTakeOverWithoutSignature: Boolean
+
   """
   Récépissé transporteur associé à cet établissement (le cas échéant)
   """
@@ -213,6 +481,21 @@ type CompanySearchResult {
   Agrément VHU broyeur (le cas échéant, pour les profils VHU)
   """
   vhuAgrementBroyeur: VhuAgrement
+
+  """
+  Statut de diffusion des informations de l'établisement selon l'INSEE. O = Oui, P = Non ou Partiel
+  """
+  statutDiffusionEtablissement: StatutDiffusionEtablissement
+
+  """
+  Certification entreprise de travaux
+  """
+  workerCertification: WorkerCertification
+
+  """
+  Indique si l'entreprise est en sommeil sur Trackdéchets
+  """
+  isDormant: Boolean!
 }
 
 """
@@ -233,6 +516,10 @@ type EcoOrganisme {
 
   "Adresse de l'éco-organisme"
   address: String!
+  handleBsdd: Boolean
+  handleBsdasri: Boolean
+  handleBsda: Boolean
+  handleBsvhu: Boolean
 }
 
 """
@@ -318,10 +605,45 @@ type VhuAgrement {
   department: String!
 }
 
+"""
+Certifications pour les entreprise de travaux
+"""
+type WorkerCertification {
+  id: ID!
+
+  """
+  Indique si l'entreprise réalise des travaux relevant de la sous-section 4
+  """
+  hasSubSectionFour: Boolean!
+
+  """
+  Indique si l'entreprise réalise des travaux relevant de la sous-section 3
+  """
+  hasSubSectionThree: Boolean!
+
+  """
+  Numéro de certification (sous-section 3 uniquement)
+  """
+  certificationNumber: String
+
+  """
+  Limite de validité de la certification (sous-section 3 uniquement)
+  """
+  validityLimit: DateTime
+
+  """
+  Organisation qui a décerné la certification (sous-section 3 uniquement)
+  """
+  organisation: String
+}
+
 "Information sur utilisateur au sein d'un établissement"
 type CompanyMember {
   "Identifiant opaque"
   id: ID!
+
+  "Identifiant de la company utile pour la gestion du cache"
+  orgId: ID!
 
   "Email"
   email: String!
@@ -340,6 +662,9 @@ type CompanyMember {
 
   "Si oui ou non cet utilisateur correspond à l'utilisateur authentifié"
   isMe: Boolean
+
+  "Liste des notifications auxquelles l'utilisateur est abonné pour cet établissement"
+  notifications: UserNotifications!
 }
 
 """
@@ -381,15 +706,7 @@ enum GerepType {
   Producteur
   Traiteur
 }
-"Type de déchets autorisé pour une rubrique"
-enum WasteType {
-  "Déchet inerte"
-  INERTE
-  "Déchet non dangereux"
-  NOT_DANGEROUS
-  "Déchet dangereux"
-  DANGEROUS
-}
+
 "Représente une ligne dans une déclaration GEREP"
 type Declaration {
   "Année de la déclaration"
@@ -415,4 +732,46 @@ type Installation {
 
   "Liste des déclarations GEREP"
   declarations: [Declaration!]
+}
+
+enum EtatAdministratif {
+  A
+  F
+}
+
+enum StatutDiffusionEtablissement {
+  O
+  P
+}
+
+"""
+Automatisation de la signature pour les annexes 1.
+Permet à une entreprise de ne pas avoir à signer la collecte de ses annexes.
+Si l'entreprise ciblée collecte l'annexe 1, Trackdéchets signera automatiquement pour l'entreprise émettrice.
+"""
+type SignatureAutomation {
+  id: ID!
+  "Entreprise qui met en place l'automatisation"
+  from: CompanyPublic!
+  "Entreprise qui, si collecteur, déclenche la signature automatique"
+  to: CompanyPublic!
+  "Date de création de l'automatisation de signature"
+  createdAt: DateTime!
+}
+
+"""
+Informations sur un transfert administratif entre deux entreprises
+"""
+type AdministrativeTransfer {
+  id: ID!
+  "Entreprise qui initie le transfert"
+  from: CompanyPublic!
+  "Entreprise qui reçoit le transfert"
+  to: CompanyPublic!
+  "Date de création du transfert"
+  createdAt: DateTime!
+  "Date de validation du transfert"
+  approvedAt: DateTime
+  "Statut du transfert"
+  status: AdministrativeTransferStatus
 }

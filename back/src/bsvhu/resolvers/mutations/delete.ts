@@ -1,11 +1,10 @@
-import prisma from "../../../prisma";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { MutationResolvers } from "../../../generated/graphql/types";
-
-import { getFormOrFormNotFound } from "../../database";
+import type { MutationResolvers } from "@td/codegen-back";
+import { getBsvhuOrNotFound } from "../../database";
 import { expandVhuFormFromDb } from "../../converter";
-import { checkCanDeleteBsdvhu } from "../../permissions";
-import * as elastic from "../../../common/elastic";
+import { getBsvhuRepository } from "../../repository";
+import { checkCanDelete } from "../../permissions";
+
 /**
  *
  * Mark a VHU as deleted
@@ -17,17 +16,13 @@ const deleteBsvhuResolver: MutationResolvers["deleteBsvhu"] = async (
 ) => {
   const user = checkIsAuthenticated(context);
 
-  const bshvhu = await getFormOrFormNotFound(id);
+  const bsvhu = await getBsvhuOrNotFound(id);
   // user must belong to the vhu, and status must be INITIAL
 
-  await checkCanDeleteBsdvhu(user, bshvhu);
+  await checkCanDelete(user, bsvhu);
+  const bsvhuRepository = getBsvhuRepository(user);
 
-  const deletedBsvhu = await prisma.bsvhu.update({
-    where: { id },
-    data: { isDeleted: true }
-  });
-
-  await elastic.deleteBsd(deletedBsvhu, context);
+  const deletedBsvhu = await bsvhuRepository.delete({ id });
 
   return expandVhuFormFromDb(deletedBsvhu);
 };

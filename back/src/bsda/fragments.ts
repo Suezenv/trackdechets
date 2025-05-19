@@ -1,4 +1,4 @@
-import { gql } from "apollo-server-express";
+import { gql } from "graphql-tag";
 
 export const fullBsda = gql`
   fragment FullBsda on Bsda {
@@ -39,12 +39,12 @@ export const fullBsda = gql`
     }
     waste {
       code
-      name
       familyCode
       materialName
       consistence
       sealNumbers
       adr
+      pop
     }
     packagings {
       other
@@ -144,6 +144,13 @@ export const fullBsda = gql`
         contact
         phone
         mail
+      }
+      certification {
+        hasSubSectionFour
+        hasSubSectionThree
+        certificationNumber
+        validityLimit
+        organisation
       }
       work {
         hasEmitterPaperSignature

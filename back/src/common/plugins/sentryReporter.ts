@@ -1,28 +1,32 @@
-import { ApolloError } from "apollo-server-express";
-import { ApolloServerPlugin } from "apollo-server-plugin-base";
+import { ApolloServerPlugin, GraphQLRequestContext } from "@apollo/server";
 import { ValidationError } from "yup";
+import { ZodError } from "zod";
 import * as Sentry from "@sentry/node";
+import { GraphQLError } from "graphql";
+import { GraphQLContext } from "../../types";
 
-const knownErrors = [ApolloError, ValidationError];
+const knownErrors = [GraphQLError, ValidationError, ZodError];
 
 /**
  * Apollo server plugin used to capture unhandled errors in Sentry
  * https://www.apollographql.com/docs/apollo-server/integrations/plugins/
  */
 const sentryReporter: ApolloServerPlugin = {
-  requestDidStart(requestContext) {
+  async requestDidStart(requestContext: GraphQLRequestContext<GraphQLContext>) {
     return {
-      didEncounterErrors(errorContext) {
+      async didEncounterErrors(errorContext) {
         if (!errorContext.operation) {
           // If we couldn't parse the operation, don't do anything here
           return;
         }
 
         for (const error of errorContext.errors) {
-          const err = error.originalError || error;
-
           // don't do anything with errors we expect.
-          if (knownErrors.some(expectedError => err instanceof expectedError)) {
+          if (
+            knownErrors.some(
+              expectedError => error.originalError instanceof expectedError
+            )
+          ) {
             continue;
           }
 
@@ -41,9 +45,9 @@ const sentryReporter: ApolloServerPlugin = {
             });
           }
 
-          if (requestContext.context.user?.email) {
+          if (requestContext.contextValue.user?.email) {
             scope.setUser({
-              email: requestContext.context.user.email
+              email: requestContext.contextValue.user.email
             });
           }
 
@@ -54,11 +58,7 @@ const sentryReporter: ApolloServerPlugin = {
           });
 
           const sentryId = Sentry.captureException(error, scope);
-
-          // kinda of a hack but seems to be the only way to pass
-          // info down to formatError. See also
-          // https://github.com/apollographql/apollo-server/issues/4010
-          (err as any).sentryId = sentryId;
+          error.extensions.sentryId = sentryId;
         }
       }
     };

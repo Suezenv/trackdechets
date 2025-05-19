@@ -59,7 +59,7 @@ type Query {
     Permet en conjonction avec `cursorAfter` de paginer "en avant"
     (des bordereaux les plus récents aux bordereaux les plus anciens)
     Nombre de bordereaux retournés après le `cursorAfter`
-    Défaut à 50, maximum à 500
+    Défaut à 50, maximum à 100
     """
     first: Int
 
@@ -77,7 +77,7 @@ type Query {
     """
     (Optionnel) PAGINATION
     Nombre de bordereaux retournés avant le `cursorBefore`
-    Défaut à 50, maximum à 500
+    Défaut à 50, maximum à 100
     """
     last: Int
 
@@ -138,10 +138,19 @@ type Query {
     Défaut à vide.
     """
     wasteCode: String
+
+    """
+    (Optionnel) CustomId pour affiner la recherche
+    Défaut à vide.
+    """
+    customId: String
   ): [Form!]!
 
-  "Renvoie des statistiques sur le volume de déchets entrant et sortant"
+  "DEPRECATED - Renvoie des statistiques sur le volume de déchets entrant et sortant"
   stats: [CompanyStat!]!
+    @deprecated(
+      reason: "Ne fonctionne pas avec des comptes utilisateurs ayant de nombreux établissements"
+    )
 
   "Renvoie des BSD candidats à un regroupement dans une annexe 2"
   appendixForms(
@@ -156,12 +165,11 @@ type Query {
   Ce token doit être transmis à la route /download pour obtenir le fichier.
   Il est valable 10 secondes
   """
-  formPdf("ID d'un BSD" id: ID): FileDownload!
+  formPdf("ID d'un BSD" id: ID!): FileDownload!
 
   """
-  Renvoie un token pour télécharger un csv du regsitre
-  Ce token doit être transmis à la route /download pour obtenir le fichier.
-  Il est valable 10 secondes
+  DEPRECATED - Renvoie un lien de téléchargement pour télécharger le registre BSDD
+  Le lien est valable 10 secondes
   """
   formsRegister(
     """
@@ -198,7 +206,7 @@ type Query {
     Défaut: csv
     """
     exportFormat: FormsRegisterExportFormat
-  ): FileDownload!
+  ): FileDownload! @deprecated(reason: "Utiliser wastesDownloadLink")
 
   """
   Renvoie les changements de statut des bordereaux de l'entreprise sélectionnée.
@@ -235,4 +243,35 @@ type Query {
     "(Optionnel) ID d'un BSD en particulier"
     formId: ID
   ): formsLifeCycleData!
+
+  """
+  Renvoie les demandes de révisions BSDD associées à un SIRET (demandes soumises et approbations requises)
+  """
+  formRevisionRequests(
+    """
+    SIRET d'un établissement dont je suis membre
+    (ou numéro de TVA intracommunautaire pour les transporteurs étrangers)
+    """
+    siret: String!
+    "(Optionnel) Filtres"
+    where: FormRevisionRequestWhere
+    """
+    (Optionnel) PAGINATION
+    Permet en conjonction avec `first` de paginer "en avant"
+    (des révisions les plus récentes aux révisions les plus ancienness)
+    Curseur après lequel les révisions doivent être retournées
+    Attend un identifiant (propriété `id`) de révision
+    Défaut à vide, pour retourner les révisions les plus récentes
+    La révision précisée dans le curseur ne fait pas partie du résultat
+    """
+    after: String
+    """
+    (Optionnel) PAGINATION
+    Permet en conjonction avec `after` de paginer "en avant"
+    (des révisions les plus récentes aux révisions les plus anciennes)
+    Nombre de révisions retournées après le `after`
+    Défaut à 50
+    """
+    first: Int
+  ): FormRevisionRequestConnection!
 }

@@ -3,15 +3,14 @@ import { useField, useFormikContext } from "formik";
 import React, { useState } from "react";
 import CompanyResults from "../../../common/components/company/CompanyResults";
 import styles from "./EcoOrganismes.module.scss";
-import SearchInput from "common/components/SearchInput";
-import { Query, EcoOrganisme, Form } from "../../../../generated/graphql/types";
-import TdSwitch from "common/components/Switch";
-import { tdContactEmail } from "common/config";
-import { getInitialEcoOrganisme } from "form/bsdd/utils/initial-state";
+import SearchInput from "../../../../common/components/SearchInput";
+import { Query, EcoOrganisme, Form } from "@td/codegen-ui";
+import TdSwitch from "../../../../common/components/Switch";
+import { getInitialEcoOrganisme } from "../../utils/initial-state";
 
 const GET_ECO_ORGANISMES = gql`
   {
-    ecoOrganismes {
+    ecoOrganismes(handleBsdd: true) {
       id
       name
       siret
@@ -22,15 +21,15 @@ const GET_ECO_ORGANISMES = gql`
 
 interface EcoOrganismesProps {
   name: string;
+  disabled: boolean;
 }
 
 export default function EcoOrganismes(props: EcoOrganismesProps) {
   const [field] = useField<Form["ecoOrganisme"]>(props);
   const { setFieldValue } = useFormikContext<Form>();
   const [clue, setClue] = useState("");
-  const { loading, error, data } = useQuery<Pick<Query, "ecoOrganismes">>(
-    GET_ECO_ORGANISMES
-  );
+  const { loading, error, data } =
+    useQuery<Pick<Query, "ecoOrganismes">>(GET_ECO_ORGANISMES);
 
   const hasEcoOrganisme = !!field.value;
 
@@ -48,7 +47,8 @@ export default function EcoOrganismes(props: EcoOrganismesProps) {
         <TdSwitch
           checked={hasEcoOrganisme}
           onChange={handleEcoOrganismeToggle}
-          label="Un éco-organisme est le responsable / producteur des déchets de ce bordereau"
+          label="Un éco-organisme est responsable de la prise en charge des déchets"
+          disabled={props.disabled}
         />
       </div>
 
@@ -58,13 +58,24 @@ export default function EcoOrganismes(props: EcoOrganismesProps) {
           {error && <p>Erreur lors du chargement des éco-organismes...</p>}
           {data && (
             <>
-              <div className="form__row notification notification--info">
-                Veuillez sélectionner ci-dessous un des éco-organismes
-                enregistrés dans Trackdéchets. Si votre éco-organisme n'apparait
-                pas et que vous pensez que c'est une erreur,{" "}
-                <a href={`mailto:${tdContactEmail}`} className="link">
-                  contactez le support.
-                </a>
+              <div className="fr-alert fr-alert--info fr-mt-2w fr-mb-2w">
+                <p>
+                  Veuillez sélectionner dans la liste ci-dessous l’éco-organisme
+                  inscrit sur Trackdéchets que vous souhaitez indiquer sur le
+                  bordereau. Si un éco-organisme est renseigné, il prend la
+                  responsabilité du déchet. Si l’éco-organisme recherché ne
+                  figure pas dans la liste et que vous pensez qu’il s’agit d’une
+                  erreur,{" "}
+                  <a
+                    href="https://faq.trackdechets.fr/pour-aller-plus-loin/assistance"
+                    className="fr-link force-external-link-content force-underline-link"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    contactez le support
+                  </a>
+                  .
+                </p>
               </div>
               <SearchInput
                 id="eco-search"
@@ -73,39 +84,33 @@ export default function EcoOrganismes(props: EcoOrganismesProps) {
                 onChange={event => setClue(event.target.value)}
               />
               <div className={styles.list}>
-                <CompanyResults<EcoOrganisme>
+                <CompanyResults<EcoOrganisme & { orgId: string }>
                   onSelect={eo =>
                     setFieldValue(field.name, {
                       name: eo.name,
-                      siret: eo.siret,
+                      siret: eo.siret
                     })
                   }
-                  results={data.ecoOrganismes.filter(eo =>
-                    eo.name.toLowerCase().includes(clue.toLowerCase())
-                  )}
+                  results={data.ecoOrganismes
+                    .filter(eo =>
+                      eo.name.toLowerCase().includes(clue.toLowerCase())
+                    )
+                    .map(eo => ({
+                      ...eo,
+                      orgId: eo.siret
+                    }))}
                   selectedItem={
-                    data.ecoOrganismes.find(
-                      eo => eo.siret === field.value?.siret
-                    ) || null
+                    data.ecoOrganismes
+                      .map(eo => ({
+                        ...eo,
+                        orgId: eo.siret
+                      }))
+                      .find(eo => eo.siret === field.value?.siret) || null
                   }
                 />
               </div>
             </>
           )}
-
-          <div className="notification warning">
-            Indiquez dans la partie <strong>"Entreprise émettrice"</strong>{" "}
-            ci-dessous l'entreprise du lieu de collecte et son SIRET.
-            L'Eco-organisme est bien identifié comme responsable du déchet.
-            <br />
-            Vous pouvez utiliser la case <strong>
-              Adresse de chantier
-            </strong>{" "}
-            tout en bas si le lieu réel de collecte est différent de l'adresse
-            de l'entreprise (exemple SIRET / adresse communauté de communes pour
-            l'entreprise émettrice, et adresse dechetterie pour lieu de
-            collecte.)
-          </div>
         </>
       )}
     </>

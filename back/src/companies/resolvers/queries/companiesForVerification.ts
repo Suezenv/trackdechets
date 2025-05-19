@@ -1,44 +1,43 @@
 import { CompanyType, Prisma } from "@prisma/client";
 import { applyAuthStrategies, AuthType } from "../../../auth";
 import { checkIsAdmin } from "../../../common/permissions";
-import { getConnectionsArgs } from "../../../forms/pagination";
-import { QueryResolvers } from "../../../generated/graphql/types";
-import prisma from "../../../prisma";
-import * as COMPANY_TYPES from "../../../common/constants/COMPANY_TYPES";
+import type { QueryResolvers } from "@td/codegen-back";
+import { prisma } from "@td/prisma";
+import * as COMPANY_CONSTANTS from "@td/constants";
+import { getPrismaPaginationArgs } from "../../../common/pagination";
 
-const companiesForVerificationResolver: QueryResolvers["companiesForVerification"] = async (
-  parent,
-  { first, last, skip, where },
-  context
-) => {
-  const connectionArgs = getConnectionsArgs({
-    first,
-    last,
-    skip: skip && skip > 0 ? skip : null
-  });
+const companiesForVerificationResolver: QueryResolvers["companiesForVerification"] =
+  async (parent, { first, last, skip, where }, context) => {
+    const paginationArgs = getPrismaPaginationArgs({
+      first,
+      last,
+      skip
+    });
 
-  applyAuthStrategies(context, [AuthType.Session]);
-  checkIsAdmin(context);
+    applyAuthStrategies(context, [AuthType.Session]);
+    checkIsAdmin(context);
 
-  const whereInput = {
-    ...where,
-    companyTypes: { hasSome: COMPANY_TYPES.PROFESSIONALS as CompanyType[] }
+    const whereInput = {
+      ...where,
+      companyTypes: {
+        hasSome: COMPANY_CONSTANTS.PROFESSIONALS as CompanyType[]
+      }
+    };
+
+    const totalCount = await prisma.company.count({ where: whereInput });
+
+    const companies = await prisma.company.findMany({
+      ...paginationArgs,
+      where: whereInput,
+      orderBy: {
+        createdAt: Prisma.SortOrder.desc
+      }
+    });
+
+    return {
+      totalCount,
+      companies
+    };
   };
-
-  const totalCount = await prisma.company.count({ where: whereInput });
-
-  const companies = await prisma.company.findMany({
-    ...connectionArgs,
-    where: whereInput,
-    orderBy: {
-      createdAt: Prisma.SortOrder.desc
-    }
-  });
-
-  return {
-    totalCount,
-    companies
-  };
-};
 
 export default companiesForVerificationResolver;

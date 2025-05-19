@@ -1,9 +1,6 @@
 import { useQuery } from "@apollo/client";
-import Loader from "common/components/Loaders";
-import {
-  QueryCompaniesForVerificationArgs,
-  Query,
-} from "generated/graphql/types";
+import Loader from "../../Apps/common/Components/Loader/Loaders";
+import { QueryCompaniesForVerificationArgs, Query } from "@td/codegen-ui";
 import React, { useCallback } from "react";
 import CompaniesVerificationTable from "./CompaniesVerificationTable";
 import { COMPANIES_FOR_VERIFICATION } from "./queries";
@@ -18,7 +15,7 @@ export default function CompaniesVerification() {
     Pick<Query, "companiesForVerification">,
     Partial<QueryCompaniesForVerificationArgs>
   >(COMPANIES_FOR_VERIFICATION, {
-    variables: { first: pageSize, skip: 0 },
+    variables: { first: pageSize, skip: 0 }
   });
 
   const fetchData = useCallback(
@@ -27,7 +24,11 @@ export default function CompaniesVerification() {
         (acc, filter) => ({ ...acc, [filter.id]: filter.value }),
         {}
       );
-      refetch({ first: pageSize, skip: pageIndex * pageSize, where });
+      refetch({
+        first: pageSize,
+        skip: pageIndex * pageSize,
+        where: Object.keys(where).length ? where : undefined
+      });
     },
     [refetch]
   );

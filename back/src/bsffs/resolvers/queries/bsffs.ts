@@ -1,57 +1,72 @@
-import prisma from "../../../prisma";
-import { QueryResolvers } from "../../../generated/graphql/types";
-import { unflattenBsff } from "../../converter";
+import type { QueryResolvers } from "@td/codegen-back";
+import { expandBsffFromDB } from "../../converter";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { getConnectionsArgs } from "../../../bsvhu/pagination";
-import { toPrismaWhereInput } from "../../where";
+import { toPrismaBsffWhereInput } from "../../where";
 import { applyMask } from "../../../common/where";
-import { getUserCompanies } from "../../../users/database";
+import { getConnection } from "../../../common/pagination";
+import { Prisma } from "@prisma/client";
+import { getReadonlyBsffRepository } from "../../repository";
+import { Permission, can, getUserRoles } from "../../../permissions";
 
-const bsffs: QueryResolvers["bsffs"] = async (_, args, context) => {
+const bsffs: QueryResolvers["bsffs"] = async (
+  _,
+  { where: whereArgs, ...gqlPaginationArgs },
+  context
+) => {
   const user = checkIsAuthenticated(context);
 
-  const companies = await getUserCompanies(user.id);
-  const sirets = companies.map(company => company.siret);
+  const roles = await getUserRoles(user.id);
+  const orgIdsWithListPermission = Object.keys(roles).filter(orgId =>
+    can(roles[orgId], Permission.BsdCanList)
+  );
 
-  const mask = {
+  const orgMask = {
     OR: [
-      { emitterCompanySiret: { in: sirets } },
-      { transporterCompanySiret: { in: sirets } },
-      { destinationCompanySiret: { in: sirets } }
+      { emitterCompanySiret: { in: orgIdsWithListPermission } },
+      { transportersOrgIds: { hasSome: orgIdsWithListPermission } },
+      { destinationCompanySiret: { in: orgIdsWithListPermission } },
+      { detenteurCompanySirets: { hasSome: orgIdsWithListPermission } }
     ]
   };
 
-  const prismaWhere = {
-    ...(args.where ? toPrismaWhereInput(args.where) : {}),
+  const mask: Prisma.Enumerable<Prisma.BsffWhereInput> = {
+    OR: [
+      {
+        isDraft: false,
+        ...orgMask
+      },
+      {
+        isDraft: true,
+        canAccessDraftOrgIds: { hasSome: orgIdsWithListPermission },
+        ...orgMask
+      }
+    ]
+  };
+
+  const prismaWhere: Prisma.BsffWhereInput = {
+    ...(whereArgs ? toPrismaBsffWhereInput(whereArgs) : {}),
     isDeleted: false
   };
 
   const where = applyMask(prismaWhere, mask);
 
-  const totalCount = await prisma.bsff.count({ where });
-  const paginationArgs = await getConnectionsArgs({
-    after: args.after,
-    first: args.first,
-    before: args.before,
-    last: args.last
-  });
-  const bsffs = await prisma.bsff.findMany({
-    ...paginationArgs,
-    where,
-    orderBy: { updatedAt: "desc" }
-  });
+  const { count: countBsff, findMany: findManyBsff } =
+    getReadonlyBsffRepository();
 
-  return {
-    edges: bsffs.map(bsff => ({
-      node: unflattenBsff(bsff),
-      cursor: bsff.id
-    })),
+  const totalCount = await countBsff({ where });
+
+  return getConnection({
     totalCount,
-    pageInfo: {
-      hasNextPage: false,
-      hasPreviousPage: false
-    }
-  };
+    findMany: prismaPaginationArgs =>
+      findManyBsff({
+        where,
+        ...prismaPaginationArgs,
+        orderBy: { rowNumber: "desc" },
+        include: { transporters: true }
+      }),
+    formatNode: bsff => expandBsffFromDB(bsff),
+    ...gqlPaginationArgs
+  });
 };
 
 export default bsffs;

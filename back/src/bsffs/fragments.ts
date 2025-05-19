@@ -1,4 +1,4 @@
-import { gql } from "apollo-server-express";
+import { gql } from "graphql-tag";
 
 // Fragments used for documentation and for tests
 
@@ -60,10 +60,41 @@ export const fullBsff = gql`
       }
     }
     packagings {
+      type
       name
       volume
       numero
       weight
+      acceptation {
+        weight
+        status
+        refusalReason
+        wasteCode
+        wasteDescription
+        signature {
+          date
+          author
+        }
+      }
+      operation {
+        code
+        noTraceability
+        nextDestination {
+          company {
+            siret
+            name
+            address
+            country
+            contact
+            phone
+            mail
+          }
+        }
+        signature {
+          date
+          author
+        }
+      }
     }
     waste {
       code
@@ -89,6 +120,7 @@ export const fullBsff = gql`
         number
         department
         validityLimit
+        isExempted
       }
       transport {
         mode
@@ -113,57 +145,22 @@ export const fullBsff = gql`
       plannedOperationCode
       reception {
         date
-        weight
-        acceptation {
-          status
-          refusalReason
-        }
         signature {
           date
           author
-        }
-      }
-      operation {
-        code
-        nextDestination {
-          company {
-            siret
-            name
-            address
-            country
-            contact
-            phone
-            mail
-          }
-        }
-        signature {
-          author
-          date
         }
       }
     }
     ficheInterventions {
       ...FullFicheIntervention
     }
-    forwarding {
-      id
-    }
-    forwardedIn {
+    grouping {
       id
     }
     repackaging {
       id
     }
-    repackagedIn {
-      id
-    }
-    grouping {
-      id
-      ficheInterventions {
-        ...FullFicheIntervention
-      }
-    }
-    groupedIn {
+    forwarding {
       id
     }
   }

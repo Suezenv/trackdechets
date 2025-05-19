@@ -1,12 +1,11 @@
-import {  resetDatabase } from "../../../../integration-tests/helper";
-import prisma from "../../../prisma";
+import { resetDatabase } from "../../../../integration-tests/helper";
+import { prisma } from "@td/prisma";
 import {
   userWithAccessTokenFactory,
   userFactory
 } from "../../../__tests__/factories";
 import { getUid, hashToken } from "../../../utils";
 import { hashTokens } from "../hashTokens";
-
 
 describe("hashTokens", () => {
   afterAll(async () => {
@@ -29,7 +28,7 @@ describe("hashTokens", () => {
     // run the migration function
     await hashTokens();
     // let's retrieve the previously unhashed token by its hashed value
-    const newlyHashedToken = await prisma.accessToken.findUnique({
+    const newlyHashedToken = await prisma.accessToken.findUniqueOrThrow({
       where: { token: hashToken(unHashedToken.token) }
     });
     expect(newlyHashedToken.id).not.toBeNull();

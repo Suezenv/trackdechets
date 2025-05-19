@@ -1,14 +1,13 @@
-import { UserInputError } from "apollo-server-express";
-import omit from "object.omit";
-import { Prisma, Bsff } from "@prisma/client";
-import prisma from "../../../prisma";
-import { MutationResolvers } from "../../../generated/graphql/types";
+import { Prisma } from "@prisma/client";
+import type { MutationResolvers } from "@td/codegen-back";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { getBsffOrNotFound } from "../../database";
-import { flattenBsffInput, unflattenBsff } from "../../converter";
-import { isBsffContributor } from "../../permissions";
-import { validateBsff } from "../../validation";
-import { indexBsff } from "../../elastic";
+import { getBsffOrNotFound, getFirstTransporterSync } from "../../database";
+import { expandBsffFromDB } from "../../converter";
+import { checkCanUpdate } from "../../permissions";
+import { getBsffRepository } from "../../repository";
+import { BsffWithTransportersInclude } from "../../types";
+import { mergeInputAndParseBsffAsync } from "../../validation/bsff";
+import { UserInputError } from "../../../common/errors";
 
 const updateBsff: MutationResolvers["updateBsff"] = async (
   _,
@@ -18,157 +17,114 @@ const updateBsff: MutationResolvers["updateBsff"] = async (
   const user = checkIsAuthenticated(context);
 
   const existingBsff = await getBsffOrNotFound({ id });
-  await isBsffContributor(user, existingBsff);
 
-  if (existingBsff.destinationOperationSignatureDate) {
+  // Un premier transporteur est initialisé dans la mutation `createBsff`
+  // ce qui permet d'être certain que `transporter` est défini
+  const existingFirstTransporter = getFirstTransporterSync(existingBsff)!;
+
+  await checkCanUpdate(user, existingBsff, input);
+
+  if (input.type && input.type !== existingBsff.type) {
     throw new UserInputError(
-      `Il n'est pas possible d'éditer un bordereau dont le traitement final a été signé`
+      "Vous ne pouvez pas modifier le type de BSFF après création"
     );
   }
 
-  let flatInput = flattenBsffInput(input);
+  const { parsedBsff, updatedFields } = await mergeInputAndParseBsffAsync(
+    existingBsff,
+    input,
+    { user }
+  );
 
-  if (existingBsff.emitterEmissionSignatureDate) {
-    flatInput = omit(flatInput, [
-      "type",
-      "emitterCompanyAddress",
-      "emitterCompanyContact",
-      "emitterCompanyMail",
-      "emitterCompanyName",
-      "emitterCompanyPhone",
-      "emitterCompanySiret",
-      "wasteCode",
-      "wasteDescription",
-      "weightValue",
-      "weightIsEstimate",
-      "destinationPlannedOperationCode"
-    ]);
-
-    delete input.grouping;
-    delete input.forwarding;
-    delete input.ficheInterventions;
+  if (updatedFields.length === 0) {
+    // Évite de faire un update "à blanc" si l'input
+    // ne modifie pas les données. Cela permet de limiter
+    // le nombre d'évenements crées dans Mongo.
+    return expandBsffFromDB(existingBsff);
   }
 
-  if (existingBsff.transporterTransportSignatureDate) {
-    flatInput = omit(flatInput, [
-      "transporterCompanyAddress",
-      "transporterCompanyContact",
-      "transporterCompanyMail",
-      "transporterCompanyName",
-      "transporterCompanyPhone",
-      "transporterCompanySiret",
-      "transporterCompanyVatNumber",
-      "transporterRecepisseDepartment",
-      "transporterRecepisseNumber",
-      "transporterRecepisseValidityLimit",
-      "transporterTransportMode",
-      "packagings",
-      "wasteAdr"
-    ]);
-  }
+  const { updateBsff } = getBsffRepository(user);
 
-  if (existingBsff.destinationReceptionSignatureDate) {
-    flatInput = omit(flatInput, [
-      "destinationCompanyAddress",
-      "destinationCompanyContact",
-      "destinationCompanyMail",
-      "destinationCompanyName",
-      "destinationCompanyPhone",
-      "destinationCompanySiret",
-      "destinationCap",
-      "destinationReceptionDate",
-      "destinationReceptionWeight",
-      "destinationReceptionAcceptationStatus",
-      "destinationReceptionRefusalReason"
-    ]);
-  }
+  const {
+    createdAt,
+    transporters: parsedTransporters,
+    packagings,
+    ficheInterventions,
+    forwarding,
+    repackaging,
+    grouping,
+    ...bsff
+  } = parsedBsff;
 
-  const futureBsff: Bsff = { ...existingBsff, ...flatInput };
+  const data: Prisma.BsffUpdateInput = { ...bsff };
 
-  await isBsffContributor(user, futureBsff);
+  const packagingHasChanged = [
+    "forwarding",
+    "grouping",
+    "repackaging",
+    "packagings"
+  ].some(f => updatedFields.includes(f));
 
-  const forwardedBsff = input.forwarding
-    ? await getBsffOrNotFound({ id: input.forwarding })
-    : existingBsff.forwardingId
-    ? await prisma.bsff.findUnique({ where: { id: existingBsff.forwardingId } })
-    : null;
-
-  const repackagedBsffs =
-    input.repackaging?.length > 0
-      ? await prisma.bsff.findMany({ where: { id: { in: input.repackaging } } })
-      : await prisma.bsff.findFirst({ where: { id } }).repackaging();
-
-  const groupedBsffs =
-    input.grouping?.length > 0
-      ? await prisma.bsff.findMany({ where: { id: { in: input.grouping } } })
-      : await prisma.bsff.findFirst({ where: { id } }).grouping();
-
-  const isForwarding = !!forwardedBsff;
-  const isRepackaging = repackagedBsffs.length > 0;
-  const isGrouping = groupedBsffs.length > 0;
-
-  if ([isForwarding, isRepackaging, isGrouping].filter(b => b).length > 1) {
-    throw new UserInputError(
-      "Les opérations d'entreposage provisoire, reconditionnement et groupement ne sont pas compatibles entre elles"
-    );
-  }
-
-  const previousBsffs = [
-    ...(isForwarding ? [forwardedBsff] : []),
-    ...groupedBsffs,
-    ...repackagedBsffs
-  ];
-
-  const ficheInterventions = await prisma.bsffFicheIntervention.findMany({
-    where:
-      input.ficheInterventions?.length > 0
-        ? { id: { in: input.ficheInterventions } }
-        : { bsffId: existingBsff.id }
-  });
-
-  await validateBsff(futureBsff, previousBsffs, ficheInterventions);
-
-  const data: Prisma.BsffUpdateInput = flatInput;
-
-  if (input.grouping?.length > 0) {
-    data.grouping = {
-      set: input.grouping.map(id => ({
-        id
-      }))
+  if (packagingHasChanged) {
+    data.packagings = {
+      deleteMany: {},
+      create: (packagings ?? []).map(packaging => {
+        const { id, previousPackagings, ...packagingData } = packaging;
+        return {
+          ...packagingData,
+          previousPackagings: {
+            connect: (previousPackagings ?? []).map(id => ({ id }))
+          }
+        };
+      })
     };
   }
 
-  if (input.repackaging?.length > 0) {
-    data.repackaging = {
-      set: input.repackaging.map(id => ({
-        id
-      }))
-    };
+  let transporters:
+    | Prisma.BsffTransporterUpdateManyWithoutBsffNestedInput
+    | undefined = undefined;
+
+  if (updatedFields.includes("transporters")) {
+    if (input.transporter) {
+      if (existingFirstTransporter) {
+        // on met à jour le premier transporteur existant
+        const { id, number, bsffId, ...data } = parsedTransporters![0];
+        transporters = { update: { where: { id: id! }, data } };
+      } else {
+        // on crée le premier transporteur
+        const { id, bsffId, ...data } = parsedTransporters![0];
+        transporters = { create: { ...data, number: 1 } };
+      }
+    } else {
+      // Cas où l'update est fait via `BsffInput.transporters`. On déconnecte tous les transporteurs qui étaient
+      // précédement associés et on connecte les nouveaux transporteurs de la table `BsffTransporter`
+      // avec ce bordereau. La fonction `update` du repository s'assure que la numérotation des
+      // transporteurs correspond à l'ordre du tableau d'identifiants.
+      transporters = {
+        set: [],
+        connect: parsedTransporters!.map(t => ({ id: t.id! }))
+      };
+    }
+
+    data.transporters = transporters;
   }
 
-  if (input.forwarding) {
-    // disconnect current relation
-    await prisma.bsff.update({
-      where: { id },
-      data: { forwarding: { disconnect: true } }
-    });
-    data.forwarding = { connect: { id: input.forwarding } };
-  }
-
-  if (ficheInterventions.length > 0) {
+  if (updatedFields.includes("ficheInterventions")) {
     data.ficheInterventions = {
-      set: ficheInterventions.map(({ id }) => ({ id }))
+      set: [],
+      connect: (ficheInterventions ?? []).map(id => {
+        return { id };
+      })
     };
   }
 
-  const updatedBsff = await prisma.bsff.update({
+  const updatedBsff = await updateBsff({
+    where: { id },
     data,
-    where: { id }
+    include: BsffWithTransportersInclude
   });
 
-  await indexBsff(updatedBsff, context);
-
-  return unflattenBsff(updatedBsff);
+  return expandBsffFromDB(updatedBsff);
 };
 
 export default updateBsff;

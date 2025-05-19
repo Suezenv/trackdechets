@@ -1,11 +1,17 @@
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import { Query } from "../../../../generated/graphql/types";
+import type { Query } from "@td/codegen-back";
 import {
   companyAssociatedToExistingUserFactory,
+  companyFactory,
   userWithCompanyFactory
 } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
-import { vhuFormFactory } from "../../../__tests__/factories.vhu";
+import {
+  bsvhuFactory,
+  toIntermediaryCompany
+} from "../../../__tests__/factories.vhu";
+import { UserRole } from "@prisma/client";
+import { ErrorCode } from "../../../../common/errors";
 
 const GET_BSVHUS = `
   query GetBsvhus($where: BsvhuWhere) {
@@ -19,6 +25,7 @@ const GET_BSVHUS = `
       edges {
         node {
           id
+          customId
           isDraft
           destination {
             company {
@@ -44,6 +51,26 @@ const GET_BSVHUS = `
             recepisse {
               number
             }
+            transport {
+              mode
+              plates
+            }
+          }
+          broker {
+            company {
+              siret
+            }
+            recepisse {
+              number
+            }
+          }
+          trader {
+            company {
+              siret
+            }
+            recepisse {
+              number
+            }
           }
           weight {
             value
@@ -57,16 +84,35 @@ const GET_BSVHUS = `
 describe("Query.Bsvhus", () => {
   afterEach(resetDatabase);
 
+  it("should disallow unauthenticated user", async () => {
+    const { query } = makeClient();
+    const { company } = await userWithCompanyFactory("MEMBER");
+
+    await bsvhuFactory({
+      opt: { emitterCompanySiret: company.siret, customId: "some custom ID" }
+    });
+
+    const { errors } = await query<Pick<Query, "bsvhus">>(GET_BSVHUS);
+    expect(errors).toEqual([
+      expect.objectContaining({
+        message: "Vous n'êtes pas connecté.",
+        extensions: expect.objectContaining({
+          code: ErrorCode.UNAUTHENTICATED
+        })
+      })
+    ]);
+  });
+
   it("should get a list of bsvhus when user belongs to only 1 company", async () => {
     const { user, company } = await userWithCompanyFactory("MEMBER");
     const opt = {
       emitterCompanySiret: company.siret
     };
     // Create 4 forms
-    await vhuFormFactory({ opt });
-    await vhuFormFactory({ opt });
-    await vhuFormFactory({ opt });
-    await vhuFormFactory({ opt });
+    await bsvhuFactory({ opt });
+    await bsvhuFactory({ opt });
+    await bsvhuFactory({ opt });
+    await bsvhuFactory({ opt });
 
     const { query } = makeClient(user);
 
@@ -75,16 +121,91 @@ describe("Query.Bsvhus", () => {
     expect(data.bsvhus.edges.length).toBe(4);
   });
 
+  it("should retrieve queried fields", async () => {
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+
+    const bsvhu = await bsvhuFactory({
+      opt: {
+        emitterCompanySiret: company.siret,
+        customId: "some custom ID",
+        transporterTransportPlates: ["FD-87-98"]
+      }
+    });
+
+    const { query } = makeClient(user);
+
+    const { data } = await query<Pick<Query, "bsvhus">>(GET_BSVHUS);
+
+    expect(data.bsvhus.edges.length).toBe(1);
+
+    const expected = {
+      id: bsvhu.id,
+      customId: "some custom ID",
+      isDraft: false,
+      destination: { company: { siret: bsvhu.destinationCompanySiret } },
+      emitter: {
+        agrementNumber: bsvhu.emitterAgrementNumber,
+        company: { siret: bsvhu.emitterCompanySiret }
+      },
+      transporter: {
+        company: {
+          siret: bsvhu.transporterCompanySiret,
+          name: bsvhu.transporterCompanyName,
+          address: bsvhu.transporterCompanyAddress,
+          contact: bsvhu.transporterCompanyContact,
+          mail: bsvhu.transporterCompanyMail,
+          phone: bsvhu.transporterCompanyPhone,
+          vatNumber: null
+        },
+        transport: {
+          mode: "ROAD",
+          plates: ["FD-87-98"]
+        },
+        recepisse: { number: bsvhu.transporterRecepisseNumber }
+      },
+
+      broker: {
+        company: { siret: bsvhu.brokerCompanySiret },
+        recepisse: { number: bsvhu.brokerRecepisseNumber }
+      },
+      trader: {
+        company: { siret: bsvhu.traderCompanySiret },
+        recepisse: { number: bsvhu.traderRecepisseNumber }
+      },
+      weight: { value: 0.0014 } // cf. getVhuFormdata()
+    };
+
+    expect(data.bsvhus.edges[0].node).toEqual(expected);
+  });
+
+  it("should return bsvhus where user company is an intermediary", async () => {
+    const otherCompany = await companyFactory();
+    const { company, user } = await userWithCompanyFactory(UserRole.ADMIN);
+    await bsvhuFactory({
+      opt: {
+        emitterCompanySiret: otherCompany.siret,
+        intermediaries: {
+          create: [toIntermediaryCompany(company)]
+        }
+      }
+    });
+
+    const { query } = makeClient(user);
+    const { data } = await query<Pick<Query, "bsvhus">>(GET_BSVHUS);
+
+    expect(data.bsvhus.edges.length).toBe(1);
+  });
+
   it("should return paging infos", async () => {
     const { user, company } = await userWithCompanyFactory("MEMBER");
     const opt = {
       emitterCompanySiret: company.siret
     };
     // Create 4 forms
-    const firstForm = await vhuFormFactory({ opt });
-    await vhuFormFactory({ opt });
-    await vhuFormFactory({ opt });
-    const lastForm = await vhuFormFactory({ opt });
+    const firstForm = await bsvhuFactory({ opt });
+    await bsvhuFactory({ opt });
+    await bsvhuFactory({ opt });
+    const lastForm = await bsvhuFactory({ opt });
 
     const { query } = makeClient(user);
 
@@ -102,13 +223,13 @@ describe("Query.Bsvhus", () => {
       emitterCompanySiret: company.siret
     };
     // Create 3 forms on emitter Company
-    await vhuFormFactory({ opt });
-    await vhuFormFactory({ opt });
-    await vhuFormFactory({ opt });
-    await vhuFormFactory({ opt });
+    await bsvhuFactory({ opt });
+    await bsvhuFactory({ opt });
+    await bsvhuFactory({ opt });
+    await bsvhuFactory({ opt });
 
     // And 1 on recipient company
-    await vhuFormFactory({ opt: { destinationCompanySiret: company.siret } });
+    await bsvhuFactory({ opt: { destinationCompanySiret: company.siret } });
 
     const { query } = makeClient(user);
     const { data } = await query<Pick<Query, "bsvhus">>(GET_BSVHUS, {
@@ -118,6 +239,30 @@ describe("Query.Bsvhus", () => {
     });
 
     expect(data.bsvhus.edges.length).toBe(1);
+  });
+
+  it("should get a filtered list of bsvhus when wehre condition filters by customId", async () => {
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+    const opt = {
+      emitterCompanySiret: company.siret
+    };
+    // Create 3 forms on emitter Company
+    const bsvhu = await bsvhuFactory({
+      opt: { ...opt, customId: "mycustomid" }
+    });
+    await bsvhuFactory({ opt });
+    await bsvhuFactory({ opt });
+    await bsvhuFactory({ opt });
+
+    const { query } = makeClient(user);
+    const { data } = await query<Pick<Query, "bsvhus">>(GET_BSVHUS, {
+      variables: {
+        where: { customId: { _eq: "mycustomid" } }
+      }
+    });
+
+    expect(data.bsvhus.edges.length).toBe(1);
+    expect(data.bsvhus.edges[0].node.id).toBe(bsvhu.id);
   });
 
   it("should get bsvhus from every companies when no filter is passed and user belongs to several companies", async () => {
@@ -131,10 +276,10 @@ describe("Query.Bsvhus", () => {
     );
 
     // 2 forms belonging to the current user
-    await vhuFormFactory({ opt: { emitterCompanySiret: company.siret } });
-    await vhuFormFactory({ opt: { emitterCompanySiret: secondCompany.siret } });
+    await bsvhuFactory({ opt: { emitterCompanySiret: company.siret } });
+    await bsvhuFactory({ opt: { emitterCompanySiret: secondCompany.siret } });
     // 1 form belonging to someone else
-    await vhuFormFactory({
+    await bsvhuFactory({
       opt: { emitterCompanySiret: outOfScopeCompany.siret }
     });
 
@@ -150,7 +295,7 @@ describe("Query.Bsvhus", () => {
       "MEMBER"
     );
 
-    await vhuFormFactory({
+    await bsvhuFactory({
       opt: { emitterCompanySiret: outOfScopeCompany.siret }
     });
 
@@ -158,5 +303,34 @@ describe("Query.Bsvhus", () => {
 
     const { data } = await query<Pick<Query, "bsvhus">>(GET_BSVHUS);
     expect(data.bsvhus.edges.length).toBe(0);
+  });
+
+  it("should get a list of bsvhus filtered by plate", async () => {
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+    const opt = {
+      emitterCompanySiret: company.siret
+    };
+    // Create 3 forms on emitter Company
+    await bsvhuFactory({ opt });
+    await bsvhuFactory({ opt });
+    await bsvhuFactory({ opt });
+    const vhu = await bsvhuFactory({
+      opt: { ...opt, transporterTransportPlates: ["XY-23-TT"] }
+    });
+
+    // And 1 on recipient company
+    await bsvhuFactory({ opt: { destinationCompanySiret: company.siret } });
+
+    const { query } = makeClient(user);
+    const { data } = await query<Pick<Query, "bsvhus">>(GET_BSVHUS, {
+      variables: {
+        where: {
+          transporter: { transport: { plates: { _has: "XY-23-TT" } } }
+        }
+      }
+    });
+
+    expect(data.bsvhus.edges.length).toBe(1);
+    expect(data.bsvhus.edges[0].node.id).toBe(vhu.id);
   });
 });

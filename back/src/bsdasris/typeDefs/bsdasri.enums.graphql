@@ -25,6 +25,12 @@ enum BsdasriStatus {
 
   "Déchet refusé"
   REFUSED
+
+  "En attente de groupement"
+  AWAITING_GROUP
+
+  "Bordereau annulé. L'annulation peut être demandée via le processus de révision"
+  CANCELED
 }
 
 "Type de packaging du déchet"
@@ -51,7 +57,7 @@ enum BsdasriPackagingType {
 enum destinationOperationCodeTypes {
   D9
   D10
-  D12
+  D13
   R1
   R12
 }
@@ -69,6 +75,7 @@ enum BsdasriSignatureType {
   "Signature du traitement du déchet"
   OPERATION
 }
+
 enum BsdasriType {
   "Bordereau dasri simple"
   SIMPLE
@@ -76,6 +83,6 @@ enum BsdasriType {
   "Bordereau dasri de groupement"
   GROUPING
 
-  "(Bientôt disponible) - Bordereau dasri de synthèse"
+  "Bordereau dasri de synthèse"
   SYNTHESIS
 }

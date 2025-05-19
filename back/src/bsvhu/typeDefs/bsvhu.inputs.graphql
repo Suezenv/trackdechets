@@ -2,6 +2,8 @@
 input BsvhuWhere {
   "Filtre sur l'ID"
   id: IdFilter
+  ""
+  customId: StringFilter
   "Filtre sur le statut de brouillon."
   isDraft: Boolean
   "Filtre sur le statut"
@@ -16,6 +18,10 @@ input BsvhuWhere {
   transporter: BsvhuTransporterWhere
   "Filtre sur le champ destination."
   destination: BsvhuDestinationWhere
+  "Filtre sur le champ broker."
+  broker: BsvhuBrokerWhere
+  "Filtre sur le champ négociant."
+  trader: BsvhuTraderWhere
   "ET logique"
   _and: [BsvhuWhere!]
   "OU logique"
@@ -50,6 +56,7 @@ input BsvhuTransporterWhere {
 "Champs possible pour le filtre sur le transport."
 input BsvhuTransportWhere {
   signature: SignatureWhere
+  plates: StringNullableListFilter
 }
 
 "Champs possible pour le filtre sur la destination."
@@ -57,6 +64,16 @@ input BsvhuDestinationWhere {
   company: CompanyWhere
   reception: BsvhuReceptionWhere
   operation: BsvhuOperationWhere
+}
+
+"Champs possible pour le filtre sur le courtier."
+input BsvhuBrokerWhere {
+  company: CompanyWhere
+}
+
+"Champs possible pour le filtre sur le négociant."
+input BsvhuTraderWhere {
+  company: CompanyWhere
 }
 
 "Champs possibles pour le filtre sur la réception"
@@ -73,41 +90,140 @@ input BsvhuOperationWhere {
 input BsvhuInput {
   "Détails sur l'émetteur"
   emitter: BsvhuEmitterInput
-
+  """
+  Identifiant personnalisé permettant de faire le lien avec un
+  objet un système d'information tierce
+  """
+  customId: String
   "Code déchet. Presque toujours 16 01 06"
   wasteCode: String
-  "Conditionnement du déchet"
+  """
+  Conditionnement du déchet
+
+  Pour les bsvhus créés après le 17/12/2024:
+
+  - LOT : identification.type doit être null
+  - UNITE : identification.type doit être renseigné
+  """
   packaging: BsvhuPackaging
-  "Identification des VHUs"
+  """
+  Identification des VHUs
+  """
   identification: BsvhuIdentificationInput
   "Quantité de VHUs"
   quantity: Int
-  "Poids des VHUs"
+  "Poids des VHUs en tonnes"
   weight: BsvhuWeightInput
+
+  "Comprend des véhicules éléctriques ou hybrides"
+  containsElectricOrHybridVehicles: Boolean
 
   "Détails sur la destination"
   destination: BsvhuDestinationInput
   "Détails sur le transporteur"
   transporter: BsvhuTransporterInput
+
+  "Courtier"
+  broker: BsvhuBrokerInput
+
+  "Négociant"
+  trader: BsvhuTraderInput
+
+  """
+  Liste d'entreprises intermédiaires. Un intermédiaire est une entreprise qui prend part à la gestion du déchet,
+  mais pas à la responsabilité de la traçabilité. Il pourra lire ce bordereau, sans étape de signature.
+
+  Le nombre maximal d'intermédiaires sur un bordereau est de 3.
+  """
+  intermediaries: [CompanyInput!]
+
+  "Eco-organisme"
+  ecoOrganisme: BsvhuEcoOrganismeInput
 }
 
 input BsvhuEmitterInput {
   "Numéro d'agrément émetteur"
   agrementNumber: String
-
+  "Indique si l'émetteur est en situation irrégulière"
+  irregularSituation: Boolean
+  "Indique si l'émetteur est un particulier ou une entreprise sans SIRET"
+  noSiret: Boolean
   "Coordonnées de l'entreprise émétrice"
-  company: CompanyInput
+  company: BsvhuCompanyInput
+}
+
+input BsvhuEcoOrganismeInput {
+  name: String!
+  siret: String!
+}
+
+"Extension de CompanyInput ajoutant des champs d'adresse séparés"
+input BsvhuCompanyInput {
+  """
+  SIRET de l'établissement composé de 14 caractères numériques.
+
+  Un établissement visé sur un bordereau en tant que transporteur doit être inscrit sur Trackdéchets avec le profil Transporteur.
+  Un établissement visé sur un bordereau en tant qu'installation de destination doit être inscrit sur Trackdéchets avec un profil d'installation
+  de transit ou de traitement.
+  """
+  siret: String
+
+  """
+  Numéro de TVA intra-communautaire de l'établissement. À renseigner pour
+  les transporteurs étrangers uniquement.
+
+  Un transporteur étranger visé sur un bordereau par son numéro de TVA intra-communautaire doit être inscrit sur Trackdéchets
+  avec le profil Transporteur.
+  """
+  vatNumber: String
+
+  "Nom de l'établissement"
+  name: String
+
+  "Adresse de l'établissement"
+  address: String
+  "Rue de l'adresse de l'établissement"
+  street: String
+  "Ville de l'adresse de l'établissement"
+  city: String
+  "Code postal de l'adresse de l'établissement"
+  postalCode: String
+
+  "Nom du contact dans l'établissement"
+  contact: String
+
+  "Email du contact dans l'établissement"
+  mail: String
+
+  "Numéro de téléphone de contact dans l'établissement"
+  phone: String
+
+  "Code ISO 3166-1 alpha-2 du pays d'origine de l'entreprise"
+  country: String
+
+  """
+  Numéro OMI ou IMO (International Maritime Organization) pour les navires étrangers (sans SIRET).
+  Il est composé des trois lettres IMO suivi d'un nombre de sept chiffres (ex: IMO 1234567).
+  """
+  omiNumber: String
+
+  "Un identifiant d'établissement hors EU"
+  extraEuropeanId: String
 }
 
 input BsvhuIdentificationInput {
   "Numéros d'identification"
-  numbers: [String]
-  "Type de numéros d'indentification"
+  numbers: [String!]
+  "Type de numéros d'identification"
   type: BsvhuIdentificationType
 }
 
 input BsvhuWeightInput {
-  "Poids en tonnes"
+  """
+  Poids   en tonnes
+
+  Doit être inférieur à 40T en cas de transport routier et inférieur à 50 000 T tout type de transport confondu.
+  """
   value: Float
   "Est-ce une estimation?"
   isEstimate: Boolean
@@ -134,10 +250,15 @@ input BsvhuReceptionInput {
   date: DateTime
   "Quantité de VHUs reçue"
   quantity: Int
-  "Poids réel reçu"
+
+  """
+  Poids réel reçu en tonnes
+
+  Doit être inférieur à 40T en cas de transport routier et inférieur à 50 000 T tout type de transport confondu.
+  """
   weight: Float
   "Lot accepté oui/non"
-  acceptationStatus: WasteAcceptationStatusInput
+  acceptationStatus: WasteAcceptationStatus
   "Motif de refus"
   refusalReason: String
   "Identification éventuelle des VHU à la reception (numéro de lots ou d'ordre)"
@@ -149,6 +270,8 @@ input BsvhuOperationInput {
   date: DateTime
   "Opération de traitement réalisée (R4 ou R12)"
   code: String
+  "Qualification du traitement final"
+  mode: OperationMode
   "Broyeur de destination, à remplir uniquement lorsque la destination est lui même un centre VHU"
   nextDestination: BsvhuNextDestinationInput
 }
@@ -162,19 +285,50 @@ input BsvhuTransporterInput {
   company: CompanyInput
   "Récépissé transporteur"
   recepisse: BsvhuRecepisseInput
+  "Champ libre"
+  customInfo: String
   "Informations liés au transport"
   transport: BsvhuTransportInput
 }
 
+input BsvhuBrokerInput {
+  "Coordonnées de l'entreprise courtier"
+  company: CompanyInput
+  "Récépissé courtier"
+  recepisse: BsvhuRecepisseInput
+}
+
+input BsvhuTraderInput {
+  "Coordonnées de l'entreprise de négoce"
+  company: CompanyInput
+  "Récépissé courtier"
+  recepisse: BsvhuRecepisseInput
+}
+
 input BsvhuTransportInput {
+  "Mode de transport"
+  mode: TransportMode
+  "Plaque(s) d'immatriculation - maximum 2 - 4 à 12 caractères"
+  plates: [String!]
   "Date de prise en charge"
   takenOverAt: DateTime
 }
 
 input BsvhuRecepisseInput {
+  "Exemption de récépissé"
+  isExempted: Boolean
   number: String
+    @deprecated(
+      reason: "Ignoré - Complété par Trackdéchets en fonction des informations renseignées par l'entreprise de transport "
+    )
   department: String
+    @deprecated(
+      reason: "Ignoré - Complété par Trackdéchets en fonction des informations renseignées par l'entreprise de transport "
+    )
   validityLimit: DateTime
+    @deprecated(
+      reason: "Ignoré - Complété par Trackdéchets en fonction des informations renseignées par l'entreprise de transport "
+    )
 }
 
 input BsvhuSignatureInput {

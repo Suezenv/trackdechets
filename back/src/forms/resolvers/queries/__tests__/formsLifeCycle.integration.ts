@@ -1,7 +1,6 @@
-import { UserRole } from "@prisma/client";
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import prisma from "../../../../prisma";
-import * as mailsHelper from "../../../../mailer/mailing";
+import { prisma } from "@td/prisma";
+import { sendMail } from "../../../../mailer/mailing";
 import {
   companyFactory,
   formFactory,
@@ -10,16 +9,13 @@ import {
   userWithCompanyFactory
 } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
-import {
-  prepareDB,
-  prepareRedis,
-  storeRedisCompanyInfo
-} from "../../../__tests__/helpers";
-import { Query } from "../../../../generated/graphql/types";
+import { prepareDB, storeRedisCompanyInfo } from "../../../__tests__/helpers";
+import type { Query } from "@td/codegen-back";
+import { StatusLog } from "@prisma/client";
 
 // No mails
-const sendMailSpy = jest.spyOn(mailsHelper, "sendMail");
-sendMailSpy.mockImplementation(() => Promise.resolve());
+jest.mock("../../../../mailer/mailing");
+(sendMail as jest.Mock).mockImplementation(() => Promise.resolve());
 
 const FORMS_LIFECYCLE = `query FormsLifeCycle($loggedAfter: String, $loggedBefore: String, $formId: ID, $siret: String){
   formsLifeCycle(loggedAfter: $loggedAfter, loggedBefore: $loggedBefore, formId: $formId, siret: $siret){
@@ -51,18 +47,7 @@ describe("Test formsLifeCycle query", () => {
     await resetDatabase();
   });
   it("should return statusLog data", async () => {
-    const {
-      emitter,
-      emitterCompany,
-      recipient,
-      recipientCompany,
-      form
-    } = await prepareDB();
-
-    await prepareRedis({
-      emitterCompany,
-      recipientCompany
-    });
+    const { emitter, recipient, form } = await prepareDB();
 
     await statusLogFactory({
       status: "SENT",
@@ -83,18 +68,7 @@ describe("Test formsLifeCycle query", () => {
   });
 
   it("should return not statusLog objects without null loggedAt", async () => {
-    const {
-      emitter,
-      emitterCompany,
-      recipient,
-      recipientCompany,
-      form
-    } = await prepareDB();
-
-    await prepareRedis({
-      emitterCompany,
-      recipientCompany
-    });
+    const { emitter, recipient, form } = await prepareDB();
 
     // create a statusLog without loggedAt field (as it was before formsLifeCycle feature)
     await statusLogFactory({
@@ -113,18 +87,8 @@ describe("Test formsLifeCycle query", () => {
   });
 
   it("should return statusLog data after a given date", async () => {
-    const {
-      emitter,
-      emitterCompany,
-      recipient,
-      recipientCompany,
-      form
-    } = await prepareDB();
+    const { emitter, recipient, form } = await prepareDB();
 
-    await prepareRedis({
-      emitterCompany,
-      recipientCompany
-    });
     const today = new Date();
     const yesterday = (d => new Date(d.setDate(d.getDate() - 1)))(new Date());
     const todayStr = today.toISOString().substring(0, 10);
@@ -157,18 +121,8 @@ describe("Test formsLifeCycle query", () => {
   });
 
   it("should return statusLog data before a given date", async () => {
-    const {
-      emitter,
-      emitterCompany,
-      recipient,
-      recipientCompany,
-      form
-    } = await prepareDB();
+    const { emitter, recipient, form } = await prepareDB();
 
-    await prepareRedis({
-      emitterCompany,
-      recipientCompany
-    });
     const today = new Date();
     const yesterday = (d => new Date(d.setDate(d.getDate() - 1)))(new Date());
     const todayStr = today.toISOString().substring(0, 10);
@@ -201,13 +155,8 @@ describe("Test formsLifeCycle query", () => {
   });
 
   it("should return statusLog data filtered by formID", async () => {
-    const {
-      emitter,
-      emitterCompany,
-      recipient,
-      recipientCompany,
-      form
-    } = await prepareDB();
+    const { emitter, emitterCompany, recipient, recipientCompany, form } =
+      await prepareDB();
 
     const otherForm = await formFactory({
       ownerId: emitter.id,
@@ -216,11 +165,6 @@ describe("Test formsLifeCycle query", () => {
         emitterCompanySiret: emitterCompany.siret,
         recipientCompanySiret: recipientCompany.siret
       }
-    });
-
-    await prepareRedis({
-      emitterCompany,
-      recipientCompany
     });
 
     await statusLogFactory({
@@ -249,25 +193,16 @@ describe("Test formsLifeCycle query", () => {
   });
 
   it("should return statusLog data filtered by siret", async () => {
-    const {
-      emitter,
-      emitterCompany,
-      recipient,
-      recipientCompany,
-      form
-    } = await prepareDB();
-    await prepareRedis({
-      emitterCompany,
-      recipientCompany
-    });
+    const { emitter, emitterCompany, recipient, recipientCompany, form } =
+      await prepareDB();
 
     // let's create another company, associate it to recipient user, then create a form and its status log
     const otherCompany = await companyFactory();
     await prisma.companyAssociation.create({
       data: {
         user: { connect: { id: recipient.id } },
-        role: "MEMBER" as UserRole,
-        company: { connect: { siret: otherCompany.siret } }
+        role: "MEMBER",
+        company: { connect: { id: otherCompany.id } }
       }
     });
     const otherForm = await formFactory({
@@ -281,7 +216,7 @@ describe("Test formsLifeCycle query", () => {
 
     await storeRedisCompanyInfo({
       company: otherCompany,
-      companyTypes: ["WASTE_PROCESSOR"]
+      companyTypes: ["WASTEPROCESSOR"]
     });
     await statusLogFactory({
       status: "RECEIVED",
@@ -310,18 +245,7 @@ describe("Test formsLifeCycle query", () => {
   });
 
   it("should not return statusLog data for deleted forms", async () => {
-    const {
-      emitter,
-      emitterCompany,
-      recipient,
-      recipientCompany,
-      form
-    } = await prepareDB();
-
-    await prepareRedis({
-      emitterCompany,
-      recipientCompany
-    });
+    const { emitter, recipient, form } = await prepareDB();
 
     await statusLogFactory({
       status: "SENT",
@@ -346,10 +270,8 @@ describe("Test formsLifeCycle query", () => {
   });
 
   it("should return statusLog data for which the current user is a trader on", async () => {
-    const {
-      user: trader,
-      company: tradingCompany
-    } = await userWithCompanyFactory("MEMBER");
+    const { user: trader, company: tradingCompany } =
+      await userWithCompanyFactory("MEMBER");
     const owner = await userFactory();
 
     const form = await formFactory({
@@ -373,7 +295,44 @@ describe("Test formsLifeCycle query", () => {
     expect(statusLogs.length).toBe(1);
     expect(statusLogs[0].status).toBe("SENT");
     expect(statusLogs[0].updatedFields.lorem).toBe("ipsum");
-    expect(statusLogs[0].form.id).toBe(form.id);
-    expect(statusLogs[0].user.id).toBe(owner.id);
+    expect(statusLogs[0].form!.id).toBe(form.id);
+    expect(statusLogs[0].user!.id).toBe(owner.id);
+  });
+
+  it("should return pagination info", async () => {
+    const { emitter, recipient, form } = await prepareDB();
+
+    const statusLogsData: StatusLog[] = [];
+
+    for (let i = 0; i < 60; i++) {
+      statusLogsData.push(
+        await statusLogFactory({
+          status: "SENT",
+          formId: form.id,
+          userId: emitter.id,
+          updatedFields: { lorem: "ipsum" }
+        })
+      );
+    }
+
+    const { query } = makeClient(recipient);
+
+    const { data } = (await query(FORMS_LIFECYCLE)) as any;
+    const {
+      statusLogs,
+      count,
+      hasNextPage,
+      hasPreviousPage,
+      startCursor,
+      endCursor
+    } = data.formsLifeCycle;
+    // 50 items par page
+    expect(statusLogs.length).toBe(50);
+    // sur un total de 60
+    expect(count).toEqual(60);
+    expect(hasPreviousPage).toEqual(false);
+    expect(hasNextPage).toEqual(true);
+    expect(endCursor).toEqual([...statusLogsData].reverse()[50 - 1].id);
+    expect(startCursor).toEqual([...statusLogsData].reverse()[0].id);
   });
 });

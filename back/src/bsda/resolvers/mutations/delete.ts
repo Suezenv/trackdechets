@@ -1,11 +1,11 @@
-import { deleteBsd } from "../../../common/elastic";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { MutationDeleteBsdaArgs } from "../../../generated/graphql/types";
-import prisma from "../../../prisma";
+import type { MutationDeleteBsdaArgs } from "@td/codegen-back";
 import { expandBsdaFromDb } from "../../converter";
 import { getBsdaOrNotFound } from "../../database";
-import { checkCanDeleteBsda } from "../../permissions";
 import { GraphQLContext } from "../../../types";
+import { getBsdaRepository } from "../../repository";
+import { checkCanDelete } from "../../permissions";
+import { getBsdaForElastic } from "../../elastic";
 
 export default async function deleteBsda(
   _,
@@ -14,15 +14,12 @@ export default async function deleteBsda(
 ) {
   const user = checkIsAuthenticated(context);
 
-  const bsda = await getBsdaOrNotFound(id);
-  await checkCanDeleteBsda(user, bsda);
-
-  const deletedBsda = await prisma.bsda.update({
-    where: { id },
-    data: { isDeleted: true }
+  const bsda = await getBsdaOrNotFound(id, {
+    include: { intermediaries: true, transporters: true }
   });
+  await checkCanDelete(user, bsda);
 
-  await deleteBsd(deletedBsda, context);
-
-  return expandBsdaFromDb(deletedBsda);
+  const bsdaRepository = getBsdaRepository(user);
+  const deletedBsda = await bsdaRepository.delete({ id });
+  return expandBsdaFromDb(await getBsdaForElastic(deletedBsda));
 }

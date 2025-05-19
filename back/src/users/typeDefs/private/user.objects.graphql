@@ -22,3 +22,78 @@ type Invitation {
   "Date when the invitation was accepted and the user joined"
   acceptedAt: DateTime
 }
+
+"""
+Application tierce ayant accès à mon compte via le protocole OAuth2
+"""
+type AuthorizedApplication {
+  "Identifiant de l'application"
+  id: ID!
+  "Nom de l'application"
+  name: String!
+  "Date de dernière connexion"
+  lastConnection: DateTime
+  "Email de l'administrateur"
+  admin: String
+}
+
+"""
+Personnal access token
+"""
+type AccessToken {
+  id: ID!
+  "Permet de décrire l'utilité de ce token"
+  description: String
+  "Date de dernière utilisation du token"
+  lastUsed: DateTime
+}
+
+"""
+Personnal access token
+"""
+type NewAccessToken {
+  id: ID!
+  "Token en clair"
+  token: String!
+  "Permet de décrire l'utilité de ce token"
+  description: String!
+}
+
+"""
+Demande de rattachement à un établissement effectué par
+un utilisateur.
+
+Ce modèle est un peu différent car destiné aux admins qui
+peuvent voir toutes les demandes de rattachement concernant
+leur établissement
+"""
+type MembershipRequestForAdmin {
+  "ID de la requête"
+  id: ID!
+
+  "Email de l'utilisateur faisant la demande"
+  email: String!
+
+  "Nom de l'utilisateur faisant la demande"
+  name: String!
+
+  "Statut de la demande de rattachement"
+  status: MembershipRequestStatus!
+
+  "Date de création de la demande"
+  createdAt: DateTime!
+}
+
+type MembershipRequestEdge {
+  cursor: String!
+  node: MembershipRequestForAdmin!
+}
+
+"""
+List paginée de membership requests
+"""
+type MembershipRequestsConnection {
+  totalCount: Int!
+  pageInfo: PageInfo!
+  edges: [MembershipRequestEdge!]!
+}

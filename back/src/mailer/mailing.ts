@@ -1,20 +1,27 @@
-import { Mail, Contact } from "./types";
-import consoleBackend from "./backends/consoleBackend";
-import mailjetBackend from "./backends/mailjetBackend";
-import sendInBlueBackend from "./backends/sendInBlueBackend";
+import { backend, Mail, Contact } from "@td/mail";
+import { addToMailQueue } from "../queue/producers/mail";
+import { logger } from "@td/logger";
 
-const backends = {
-  console: consoleBackend,
-  mailjet: mailjetBackend,
-  sendinblue: sendInBlueBackend
+type SendMailOpts = {
+  sync: boolean;
 };
-const backend = backends[process.env.EMAIL_BACKEND];
 
-if (!backend) {
-  throw new Error("Invalid email backend configuration: EMAIL_BACKEND");
+// push job to the job queue for the api server not to execute the sendMail itself
+export async function sendMail(mail: Mail, opts?: SendMailOpts): Promise<void> {
+  if (opts?.sync) {
+    await sendMailSync(mail);
+    return;
+  }
+  try {
+    await addToMailQueue(mail);
+  } catch (err) {
+    logger.error(`Error adding sendmail Job to the queue`, err);
+    await sendMailSync(mail);
+  }
 }
 
-export function sendMail(mail: Mail) {
+// by-pass the job queue for a cron task execution for example
+export function sendMailSync(mail: Mail) {
   return backend.sendMail(mail);
 }
 

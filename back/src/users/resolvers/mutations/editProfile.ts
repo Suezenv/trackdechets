@@ -1,10 +1,11 @@
-import prisma from "../../../prisma";
-import {
+import { prisma } from "@td/prisma";
+import type {
   MutationEditProfileArgs,
   MutationResolvers
-} from "../../../generated/graphql/types";
+} from "@td/codegen-back";
 import { checkIsAuthenticated } from "../../../common/permissions";
 import { applyAuthStrategies, AuthType } from "../../../auth";
+import * as yup from "yup";
 
 /**
  * Edit user profile
@@ -17,13 +18,26 @@ export async function editProfileFn(
   userId: string,
   payload: MutationEditProfileArgs
 ) {
-  const { name, phone, email } = payload;
+  const editProfileSchema = yup.object({
+    name: yup
+      .string()
+      .test(
+        "empty",
+        "The name cannot be an empty string",
+        name => name?.length !== 0
+      )
+      .isSafeSSTI(),
+    phone: yup.string()
+  });
+  editProfileSchema.validateSync(payload);
 
-  const data = {
-    ...(name !== undefined ? { name } : {}),
-    ...(phone !== undefined ? { phone } : {}),
-    ...(email !== undefined ? { email } : {})
+  const { name, phone } = payload;
+
+  const data: { name?: string; phone?: string | null } = {
+    ...(name != null ? { name } : {}),
+    ...(phone !== undefined ? { phone } : {})
   };
+
   const updatedUser = await prisma.user.update({
     where: { id: userId },
     data
@@ -32,7 +46,8 @@ export async function editProfileFn(
   return {
     ...updatedUser,
     // companies are resolved through a separate resolver (User.companies)
-    companies: []
+    companies: [],
+    featureFlags: []
   };
 }
 

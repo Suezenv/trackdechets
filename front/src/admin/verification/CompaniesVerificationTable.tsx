@@ -1,13 +1,15 @@
 import {
   CompanyForVerification,
   CompanyVerificationStatus,
-  CompanyVerificationMode,
-} from "generated/graphql/types";
+  CompanyVerificationMode
+} from "@td/codegen-ui";
 import React, { useMemo, useEffect } from "react";
 import { useTable, usePagination, useFilters } from "react-table";
 import { format } from "date-fns";
 import "./CompaniesVerificationTable.scss";
 import CompanyVerificationActions from "./actions/CompanyVerificationActions";
+import { Table } from "@codegouvfr/react-dsfr/Table";
+import { Pagination } from "@codegouvfr/react-dsfr/Pagination";
 
 type Props = {
   data: CompanyForVerification[];
@@ -20,9 +22,8 @@ type Props = {
 export default function CompaniesVerificationTable({
   data,
   fetchData,
-  loading,
   totalCount,
-  pageSize,
+  pageSize
 }: Props) {
   const columns = useMemo(
     () => [
@@ -31,18 +32,18 @@ export default function CompaniesVerificationTable({
         accessor: "createdAt" as const,
         disableFilters: true,
         Cell: ({ value: createdAt }) =>
-          createdAt && format(new Date(createdAt), "yyyy-MM-dd"),
+          createdAt && format(new Date(createdAt), "yyyy-MM-dd à HH:mm")
       },
       {
         Header: "Établissement",
-        accessor: row => ({ siret: row.siret, name: row.name }),
+        accessor: row => ({ orgId: row.orgId, name: row.name }),
         disableFilters: true,
         Cell: ({ value }) => (
           <>
-            <div>{value.siret}</div>
+            <div>{value.orgId}</div>
             <div>{value.name}</div>
           </>
-        ),
+        )
       },
       {
         Header: "Profil",
@@ -56,23 +57,20 @@ export default function CompaniesVerificationTable({
               ))}
             </ul>
           );
-        },
+        }
       },
       {
         Header: "Admin",
         accessor: "admin" as const,
         disableFilters: true,
-        Cell: ({ value: admin }) => (
-          <>
-            {admin && (
-              <>
-                <div>{admin.email}</div>
-                {admin?.name && <div>{admin?.name}</div>}
-                {admin?.phone && <div>{admin?.phone}</div>}
-              </>
-            )}
-          </>
-        ),
+        Cell: ({ value: admin }) =>
+          admin && (
+            <>
+              <div>{admin.email}</div>
+              {admin?.name && <div>{admin?.name}</div>}
+              {admin?.phone && <div>{admin?.phone}</div>}
+            </>
+          )
       },
       {
         Header: "Statut de vérification",
@@ -82,15 +80,19 @@ export default function CompaniesVerificationTable({
         Cell: ({ row, value }) => {
           const verificationStatus = value;
           if (verificationStatus === CompanyVerificationStatus.ToBeVerified) {
-            return "À vérifier";
+            return <>À vérifier</>;
           } else if (
             verificationStatus === CompanyVerificationStatus.LetterSent
           ) {
-            return "Courrier envoyé";
+            return <>Courrier envoyé</>;
+          } else if (verificationStatus === CompanyVerificationStatus.Standby) {
+            return <>Stand by</>;
           } else {
             const verificationMode = row.original.verificationMode;
             if (verificationMode === CompanyVerificationMode.Letter) {
-              return "Vérifié par code de sécurité";
+              return <>Vérifié par code de sécurité</>;
+            } else if (verificationMode === CompanyVerificationMode.Auto) {
+              return <>Vérifié automatiquement</>;
             } else {
               const comment = row.original.verificationComment;
               const hasComment = comment && comment.length > 0;
@@ -102,8 +104,8 @@ export default function CompaniesVerificationTable({
               );
             }
           }
-        },
-      },
+        }
+      }
     ],
     []
   );
@@ -111,7 +113,7 @@ export default function CompaniesVerificationTable({
   const defaultColumn = useMemo(
     () => ({
       // Let's set up our default Filter UI
-      Filter: DefaultColumnFilter,
+      Filter: DefaultColumnFilter
     }),
     []
   );
@@ -122,30 +124,32 @@ export default function CompaniesVerificationTable({
     {
       columns,
       data,
-      initialState: { pageIndex: 0, pageSize },
+      initialState: {
+        pageIndex: 0,
+        pageSize,
+        filters: [
+          {
+            id: "verificationStatus",
+            value: CompanyVerificationStatus.ToBeVerified
+          }
+        ]
+      },
       manualPagination: true,
       manualFilters: true,
       pageCount,
-      defaultColumn,
+      defaultColumn
     },
     useFilters,
     usePagination
   );
 
   const {
-    getTableProps,
-    getTableBodyProps,
     headerGroups,
     prepareRow,
     page,
-    canPreviousPage,
-    canNextPage,
-    pageOptions,
     gotoPage,
-    nextPage,
-    previousPage,
     // Get the state from the instance
-    state: { pageIndex, filters },
+    state: { pageIndex, filters }
   } = tableInstance;
 
   // Listen for changes in pagination and filters and use the state to fetch our new data
@@ -153,119 +157,49 @@ export default function CompaniesVerificationTable({
     fetchData({ pageIndex, pageSize, filters });
   }, [fetchData, pageIndex, pageSize, filters]);
 
+  const tableHeaders = [
+    ...headerGroups[0].headers.map(column => (
+      <>
+        {column.render("Header")}
+        <div>{column.canFilter ? column.render("Filter") : null}</div>
+      </>
+    )),
+    "Actions"
+  ].map(c => <div className="textCenter fr-text--lg">{c}</div>);
+
+  const tableData = page.map(row => {
+    prepareRow(row);
+    return [
+      ...row.cells.map(cell => cell.render("Cell")),
+      <CompanyVerificationActions company={row.original} />
+    ];
+  });
+
   return (
-    // apply the table props
-    <div className="companiesVerificationTable">
-      <table {...getTableProps()}>
-        <thead>
-          {
-            // Loop over the header rows
-            headerGroups.map(headerGroup => (
-              // Apply the header row props
-              <tr {...headerGroup.getHeaderGroupProps()}>
-                {
-                  // Loop over the headers in each row
-                  headerGroup.headers.map(column => (
-                    // Apply the header cell props
-                    <th {...column.getHeaderProps()}>
-                      {
-                        // Render the header
-                        column.render("Header")
-                      }
-                      {/* Render the columns filter UI */}
-                      <div>
-                        {column.canFilter ? column.render("Filter") : null}
-                      </div>
-                    </th>
-                  ))
-                }
-                <th>Actions</th>
-              </tr>
-            ))
-          }
-        </thead>
+    <>
+      <Table
+        caption={`Affichage de ${page.length} établissements sur ${totalCount}`}
+        data={tableData}
+        headers={tableHeaders}
+        fixed
+        bottomCaption
+      />
 
-        {/* Apply the table body props */}
-        <tbody {...getTableBodyProps()}>
-          {
-            // Loop over the table rows
-            page.map(row => {
-              // Prepare the row for display
-              prepareRow(row);
-              return (
-                // Apply the row props
-                <tr {...row.getRowProps()}>
-                  {
-                    // Loop over the rows cells
-                    row.cells.map(cell => {
-                      // Apply the cell props
-                      return (
-                        <td {...cell.getCellProps()}>
-                          {
-                            // Render the cell contents
-                            cell.render("Cell")
-                          }
-                        </td>
-                      );
-                    })
-                  }
-
-                  <td>
-                    {row.values.verificationStatus ===
-                      CompanyVerificationStatus.ToBeVerified && (
-                      <CompanyVerificationActions company={row.original} />
-                    )}
-                  </td>
-                </tr>
-              );
-            })
-          }
-          <tr>
-            {loading ? (
-              // Use our custom loading state to show a loading indicator
-              <td>Chargement...</td>
-            ) : (
-              <td>
-                Affichage de {page.length} établissements sur {totalCount}
-              </td>
-            )}
-          </tr>
-        </tbody>
-      </table>
-
-      <div className="pagination">
-        <button onClick={() => gotoPage(0)} disabled={!canPreviousPage}>
-          {"<<"}
-        </button>{" "}
-        <button onClick={() => previousPage()} disabled={!canPreviousPage}>
-          {"<"}
-        </button>{" "}
-        <button onClick={() => nextPage()} disabled={!canNextPage}>
-          {">"}
-        </button>{" "}
-        <button onClick={() => gotoPage(pageCount - 1)} disabled={!canNextPage}>
-          {">>"}
-        </button>{" "}
-        <span>
-          Page{" "}
-          <strong>
-            {pageIndex + 1} sur {pageOptions.length}
-          </strong>{" "}
-        </span>
-        <span>
-          | Aller à la page:{" "}
-          <input
-            type="number"
-            defaultValue={pageIndex + 1}
-            onChange={e => {
-              const page = e.target.value ? Number(e.target.value) - 1 : 0;
-              gotoPage(page);
-            }}
-            style={{ width: "100px" }}
-          />
-        </span>{" "}
-      </div>
-    </div>
+      <Pagination
+        showFirstLast
+        count={pageCount}
+        defaultPage={pageIndex + 1}
+        getPageLinkProps={pageNumber => ({
+          onClick: event => {
+            event.preventDefault();
+            gotoPage(pageNumber - 1);
+          },
+          href: "#",
+          key: `pagination-link-${pageNumber}`
+        })}
+        className={"fr-mt-1w"}
+      />
+    </>
   );
 }
 
@@ -273,10 +207,11 @@ function VerificationStatusFilter({ column: { filterValue, setFilter } }) {
   const options = [
     {
       value: CompanyVerificationStatus.Verified,
-      label: "Vérifié",
+      label: "Vérifié"
     },
     { value: CompanyVerificationStatus.ToBeVerified, label: "À vérifier" },
     { value: CompanyVerificationStatus.LetterSent, label: "Courrier envoyé" },
+    { value: CompanyVerificationStatus.Standby, label: "Stand by" }
   ];
 
   return (
@@ -297,9 +232,7 @@ function VerificationStatusFilter({ column: { filterValue, setFilter } }) {
 }
 
 // Define a default UI for filtering
-function DefaultColumnFilter({
-  column: { filterValue, preFilteredRows, setFilter },
-}) {
+function DefaultColumnFilter({ column: { filterValue, setFilter } }) {
   return (
     <input
       value={filterValue || ""}

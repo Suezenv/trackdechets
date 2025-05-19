@@ -1,45 +1,68 @@
 import { parseString } from "@fast-csv/parse";
 import * as Excel from "exceljs";
 import fs, { createWriteStream } from "fs";
-import { resetDatabase } from "../../../../../integration-tests/helper";
-import prisma from "../../../../prisma";
+import { tmpdir } from "node:os";
+import { join, sep } from "node:path";
+import {
+  refreshElasticSearch,
+  resetDatabase
+} from "../../../../../integration-tests/helper";
 import supertest from "supertest";
 import { ErrorCode } from "../../../../common/errors";
 import { app } from "../../../../server";
 import {
   formFactory,
-  formWithTempStorageFactory,
   userWithCompanyFactory
 } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
-import { Query } from "../../../../generated/graphql/types";
+import type { Query } from "@td/codegen-back";
+import { getFormForElastic, indexForm } from "../../../elastic";
 
-function emitterFormFactory(ownerId: string, siret: string) {
-  return formFactory({
+async function emitterFormFactory(ownerId: string, siret: string) {
+  const form = await formFactory({
     ownerId,
-    opt: { emitterCompanySiret: siret, status: "PROCESSED" }
+    opt: { emitterCompanySiret: siret, sentAt: new Date() }
   });
+  await indexForm(await getFormForElastic(form));
+  return form;
 }
 
-function recipientFormFactory(ownerId: string, siret: string) {
-  return formFactory({
+async function recipientFormFactory(ownerId: string, siret: string) {
+  const form = await formFactory({
     ownerId,
-    opt: { recipientCompanySiret: siret, status: "PROCESSED" }
+    opt: {
+      recipientCompanySiret: siret,
+      receivedAt: new Date()
+    }
   });
+  await indexForm(await getFormForElastic(form));
+  return form;
 }
 
-function transporterFormFactory(ownerId: string, siret: string) {
-  return formFactory({
+async function transporterFormFactory(ownerId: string, siret: string) {
+  const form = await formFactory({
     ownerId,
-    opt: { transporterCompanySiret: siret, status: "PROCESSED" }
+    opt: {
+      transporters: {
+        create: {
+          transporterCompanySiret: siret,
+          number: 1,
+          takenOverAt: new Date()
+        }
+      }
+    }
   });
+  await indexForm(await getFormForElastic(form));
+  return form;
 }
 
-function traderFormFactory(ownerId: string, siret: string) {
-  return formFactory({
+async function traderFormFactory(ownerId: string, siret: string) {
+  const form = await formFactory({
     ownerId,
-    opt: { traderCompanySiret: siret, status: "PROCESSED" }
+    opt: { traderCompanySiret: siret, sentAt: new Date() }
   });
+  await indexForm(await getFormForElastic(form));
+  return form;
 }
 
 describe("query { formsRegister }", () => {
@@ -67,14 +90,14 @@ describe("query { formsRegister }", () => {
     const { query } = makeClient(user);
     const { errors } = await query<Pick<Query, "formsRegister">>(`
       query {
-        formsRegister(sirets: ["${company.siret}", "11111111111111"], exportType: OUTGOING, exportFormat: CSV) {
+        formsRegister(sirets: ["${company.siret}", "22222222222222"], exportType: OUTGOING, exportFormat: CSV) {
           token
           downloadLink
         }
       }
     `);
     expect(errors).toHaveLength(1);
-    expect(errors[0].extensions.code).toEqual(ErrorCode.FORBIDDEN);
+    expect(errors[0].extensions?.code).toEqual(ErrorCode.FORBIDDEN);
   });
 
   // Test CSV export for different exportType
@@ -94,7 +117,9 @@ describe("query { formsRegister }", () => {
             ? traderFormFactory
             : emitterFormFactory;
 
-        const form = await customFormFactory(user.id, company.siret);
+        const form = await customFormFactory(user.id, company.siret!);
+
+        await refreshElasticSearch();
 
         const { query } = makeClient(user);
 
@@ -118,7 +143,7 @@ describe("query { formsRegister }", () => {
 
         expect(res.status).toBe(200);
 
-        const rows = [];
+        const rows: any[] = [];
 
         parseString(res.text, { headers: true, delimiter: ";" })
           .on("data", row => rows.push(row))
@@ -148,7 +173,8 @@ describe("query { formsRegister }", () => {
             ? traderFormFactory
             : emitterFormFactory;
 
-        const form = await customFormFactory(user.id, company.siret);
+        const form = await customFormFactory(user.id, company.siret!);
+        await refreshElasticSearch();
 
         const { query } = makeClient(user);
 
@@ -170,7 +196,7 @@ describe("query { formsRegister }", () => {
           .get("/download")
           .query({ token: data.formsRegister.token });
 
-        const tmpFolder = fs.mkdtempSync("/");
+        const tmpFolder = fs.mkdtempSync(join(tmpdir(), sep));
         const filename = `${tmpFolder}/registre.xlsx`;
         const writeStream = createWriteStream(filename);
 
@@ -178,7 +204,7 @@ describe("query { formsRegister }", () => {
 
         await new Promise<void>(resolve => {
           req.on("end", async () => {
-            resolve();
+            writeStream.on("finish", () => resolve());
           });
         });
 
@@ -193,107 +219,4 @@ describe("query { formsRegister }", () => {
       });
     }
   );
-
-  it("should returns specific columns for temporary storage", async () => {
-    const { user, company } = await userWithCompanyFactory("MEMBER");
-
-    const form = await formWithTempStorageFactory({
-      ownerId: user.id,
-      opt: {
-        emitterCompanySiret: company.siret
-      }
-    });
-
-    const tempStorageDetail = await prisma.form
-      .findUnique({ where: { id: form.id } })
-      .temporaryStorageDetail();
-
-    const { query } = makeClient(user);
-
-    const { data } = await query<Pick<Query, "formsRegister">>(`
-      query {
-        formsRegister(sirets: ["${company.siret}"], exportType: OUTGOING, exportFormat: CSV) {
-          token
-          downloadLink
-        }
-      }
-    `);
-
-    expect(data.formsRegister.token).not.toBeUndefined();
-    expect(data.formsRegister.token).not.toBeNull();
-
-    const request = supertest(app);
-
-    const res = await request
-      .get("/download")
-      .query({ token: data.formsRegister.token });
-
-    expect(res.status).toBe(200);
-
-    const rows = [];
-
-    parseString(res.text, { headers: true, delimiter: ";" })
-      .on("data", row => rows.push(row))
-      .on("end", (rowCount: number) => {
-        expect(rowCount).toEqual(1);
-        const row = rows[0];
-        expect(row["Entreposage ou reconditonnement siret"]).toEqual(
-          form.recipientCompanySiret
-        );
-        expect(row["Entreposage ou reconditonnement nom"]).toEqual(
-          form.recipientCompanyName
-        );
-        expect(row["Entreposage ou reconditonnement contact"]).toEqual(
-          form.recipientCompanyContact
-        );
-        expect(row["Entreposage ou reconditonnement N°tél"]).toEqual(
-          form.recipientCompanyPhone
-        );
-        expect(row["Entreposage ou reconditonnement adresse"]).toEqual(
-          form.recipientCompanyAddress
-        );
-        expect(row["Entreposage ou reconditonnement email"]).toEqual(
-          form.recipientCompanyMail
-        );
-        expect(row["Destination siret"]).toEqual(
-          tempStorageDetail.destinationCompanySiret
-        );
-        expect(row["Destination nom"]).toEqual(
-          tempStorageDetail.destinationCompanyName
-        );
-        expect(row["Destination adresse"]).toEqual(
-          tempStorageDetail.destinationCompanyAddress
-        );
-        expect(row["Destination email"]).toEqual(
-          tempStorageDetail.destinationCompanyMail
-        );
-        expect(
-          row["Transporteur après entreposage ou reconditionnement siret"]
-        ).toEqual(tempStorageDetail.transporterCompanySiret);
-        expect(
-          row["Transporteur après entreposage ou reconditionnement nom"]
-        ).toEqual(tempStorageDetail.transporterCompanyName);
-        expect(
-          row["Transporteur après entreposage ou reconditionnement adresse"]
-        ).toEqual(tempStorageDetail.transporterCompanyAddress);
-        expect(
-          row[
-            "Transporteur après entreposage ou reconditionnement exemption de récépissé"
-          ]
-        ).toEqual("N");
-        expect(
-          row["Transporteur après entreposage ou reconditionnement récépissé"]
-        ).toEqual(tempStorageDetail.transporterReceipt);
-        expect(
-          row[
-            "Transporteur après entreposage ou reconditionnement récépissé validité"
-          ]
-        ).toEqual("2019-11-27");
-        expect(
-          row[
-            "Transporteur après entreposage ou reconditionnement plaque d'immatriculation"
-          ]
-        ).toEqual(tempStorageDetail.transporterNumberPlate);
-      });
-  });
 });

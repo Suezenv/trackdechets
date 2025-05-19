@@ -1,4 +1,4 @@
-@import "src/scss/Breakpoints.scss";
+@import "../../scss/Breakpoints.scss";
 
 .Stepper {
   display: flex;
@@ -26,7 +26,6 @@
   line-height: 1.5;
   color: #006be6;
   font-weight: 600;
-  white-space: nowrap;
   overflow: visible;
   min-width: 0;
   text-align: center;

@@ -1,14 +1,13 @@
-import { sign } from "jsonwebtoken";
 import queryString from "querystring";
 import supertest from "supertest";
 import { resetDatabase } from "../../integration-tests/helper";
 import { getLoginError } from "../auth";
-import prisma from "../prisma";
+import { prisma } from "@td/prisma";
 import { app, sess } from "../server";
 import { getUid, hashToken } from "../utils";
-import { userFactory } from "./factories";
+import { userFactory, userWithAccessTokenFactory } from "./factories";
 
-const { UI_HOST, JWT_SECRET } = process.env;
+const { UI_HOST } = process.env;
 
 const request = supertest(app);
 const loginError = getLoginError("Some User");
@@ -27,7 +26,9 @@ describe("POST /login", () => {
     // should send trackdechets.connect.sid cookie
     expect(login.header["set-cookie"]).toHaveLength(1);
     const cookieRegExp = new RegExp(
-      `${sess.name}=(.+); Domain=${sess.cookie.domain}; Path=/; Expires=.+; HttpOnly`
+      `${sess.name}=(.+); Domain=${
+        sess.cookie!.domain
+      }; Path=/; Expires=.+; HttpOnly`
     );
     const sessionCookie = login.header["set-cookie"][0];
     expect(sessionCookie).toMatch(cookieRegExp);
@@ -49,7 +50,7 @@ describe("POST /login", () => {
     });
   });
 
-  it("should authenticate user regarldess of their email's casing", async () => {
+  it("should authenticate user regardless of their email's casing", async () => {
     const user = await userFactory();
 
     const login = await request
@@ -74,10 +75,7 @@ describe("POST /login", () => {
     const redirect = login.header.location;
     expect(redirect).toContain(`http://${UI_HOST}/login`);
     expect(redirect).toContain(
-      queryString.escape(loginError.UNKNOWN_USER.message)
-    );
-    expect(redirect).toContain(
-      queryString.escape(loginError.UNKNOWN_USER.errorField)
+      queryString.escape(loginError.INVALID_USER_OR_PASSWORD.code)
     );
   });
 
@@ -97,7 +95,7 @@ describe("POST /login", () => {
     const redirect = login.header.location;
     expect(redirect).toContain(`http://${UI_HOST}/login`);
     expect(redirect).toContain(
-      queryString.escape(loginError.NOT_ACTIVATED.message)
+      queryString.escape(loginError.NOT_ACTIVATED.code)
     );
   });
 
@@ -117,10 +115,7 @@ describe("POST /login", () => {
     const redirect = login.header.location;
     expect(redirect).toContain(`http://${UI_HOST}/login`);
     expect(redirect).toContain(
-      queryString.escape(loginError.INVALID_PASSWORD.message)
-    );
-    expect(redirect).toContain(
-      queryString.escape(loginError.INVALID_PASSWORD.errorField)
+      queryString.escape(loginError.INVALID_USER_OR_PASSWORD.code)
     );
   });
 
@@ -140,6 +135,8 @@ describe("POST /login", () => {
     jest.resetModules();
     const a = require("../server").app;
     const s = require("../server").sess;
+    const startApolloServer = require("../server").startApolloServer;
+    await startApolloServer();
     const r = supertest(a);
 
     const user = await userFactory();
@@ -176,27 +173,7 @@ describe("POST /login", () => {
     });
 
     process.env = OLD_ENV;
-  });
-
-  it("should authenticate with invalid password if already connected user is admin", async () => {
-    const admin = await userFactory({ isAdmin: true });
-
-    // Login as admin
-    const adminLogin = await request
-      .post("/login")
-      .send(`email=${admin.email.toUpperCase()}`)
-      .send(`password=pass`);
-
-    // Then login as someone else (req.user is not null)
-    const user = await userFactory();
-    const login = await request
-      .post("/login")
-      .set("Cookie", adminLogin.header["set-cookie"])
-      .send(`email=${user.email.toUpperCase()}`)
-      .send(`password=invalidPwd`);
-
-    expect(login.header["set-cookie"]).toHaveLength(1);
-  });
+  }, 10000);
 
   it("should not authenticate with invalid password if connected user is not admin", async () => {
     const nonAdmin = await userFactory({ isAdmin: false });
@@ -223,22 +200,22 @@ describe("POST /login", () => {
     const redirect = login.header.location;
     expect(redirect).toContain(`http://${UI_HOST}/login`);
     expect(redirect).toContain(
-      queryString.escape(loginError.INVALID_PASSWORD.message)
-    );
-    expect(redirect).toContain(
-      queryString.escape(loginError.INVALID_PASSWORD.errorField)
+      queryString.escape(loginError.INVALID_USER_OR_PASSWORD.code)
     );
   });
 });
 
 describe("POST /logout", () => {
-  it("should expire session cookie", async () => {
-    const logout = await request.post("/logout");
-    expect(logout.header["set-cookie"]).toHaveLength(1);
-    const cookieHeader = logout.header["set-cookie"][0];
-    expect(cookieHeader).toEqual(
-      `${sess.name}=; Domain=${UI_HOST}; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT`
-    );
+  it("should change sessionID", async () => {
+    const logout1 = await request.post("/logout");
+    expect(logout1.header["set-cookie"]).toHaveLength(1);
+    const cookieHeader1 = logout1.header["set-cookie"][0];
+
+    const logout2 = await request.post("/logout");
+    expect(logout2.header["set-cookie"]).toHaveLength(1);
+    const cookieHeader2 = logout2.header["set-cookie"][0];
+
+    expect(cookieHeader1).not.toEqual(cookieHeader2);
   });
 });
 
@@ -252,34 +229,22 @@ describe("Authentification with token", () => {
     expect(res.body.data).toBeNull();
   });
 
-  it("should authenticate using JWT token", async () => {
-    const user = await userFactory();
-
-    const token = sign({ userId: user.id }, JWT_SECRET);
+  it("should authenticate using hashed token", async () => {
+    const { user, accessToken } = await userWithAccessTokenFactory();
 
     const res = await request
       .post("/")
       .send({ query: "{ me { email } }" })
-      .set("Authorization", `Bearer ${token}`);
+      .set("Authorization", `Bearer ${accessToken}`);
 
     expect(res.body.data).toEqual({
       me: { email: user.email }
     });
 
-    // should create a new access token to make it revokable
-    // next time this token is used, it will use passport bearer strategy
-    const accessToken = await prisma.accessToken.findUnique({
-      where: { token }
+    const dbToken = await prisma.accessToken.findUniqueOrThrow({
+      where: { token: hashToken(accessToken) }
     });
-
-    expect(accessToken).toBeDefined();
-    expect(accessToken.token).toEqual(token);
-
-    expect(accessToken.lastUsed).not.toBeNull();
-    const accessTokenUser = await prisma.accessToken
-      .findUnique({ where: { token } })
-      .user();
-    expect(accessTokenUser.id).toEqual(user.id);
+    expect(dbToken.lastUsed).not.toBeNull();
   });
 
   it("should not authenticate against previously unHashed token", async () => {
@@ -324,7 +289,7 @@ describe("Authentification with token", () => {
     });
 
     // should update lastUsed field
-    const accessToken = await prisma.accessToken.findUnique({
+    const accessToken = await prisma.accessToken.findUniqueOrThrow({
       where: { token: hashToken(token) }
     });
     expect(accessToken.lastUsed).not.toBeNull();

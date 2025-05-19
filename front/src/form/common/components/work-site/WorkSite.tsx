@@ -1,7 +1,7 @@
-import TdSwitch from "common/components/Switch";
+import TdSwitch from "../../../../common/components/Switch";
 
 import { Field, useFormikContext } from "formik";
-import { Form } from "generated/graphql/types";
+import { Form } from "@td/codegen-ui";
 import React from "react";
 import WorkSiteAddress from "./WorkSiteAddress";
 
@@ -13,7 +13,7 @@ export default function WorkSite({
   designation,
   getInitialEmitterWorkSiteFn,
   disabled = false,
-  modelKey = DEFAULT_KEY,
+  modelKey = DEFAULT_KEY
 }: {
   switchLabel: string;
   headingTitle: string;
@@ -24,7 +24,7 @@ export default function WorkSite({
 }) {
   const { values, setFieldValue } = useFormikContext<Form>();
 
-  const showWorkSite = !!values.emitter?.workSite;
+  const showWorkSite = !!values.emitter?.[modelKey];
 
   function handleWorksiteToggle() {
     if (showWorkSite) {
@@ -39,6 +39,7 @@ export default function WorkSite({
   }
 
   function setAddress(details) {
+    // `address` is passed as `name` because of adresse api return fields
     setFieldValue(`emitter.${modelKey}.address`, details.name);
     setFieldValue(`emitter.${modelKey}.city`, details.city);
     setFieldValue(`emitter.${modelKey}.postalCode`, details.postcode);
@@ -54,7 +55,7 @@ export default function WorkSite({
         />
       )}
 
-      {showWorkSite && values.emitter?.workSite && (
+      {showWorkSite && values.emitter?.[modelKey] && (
         <>
           <h4 className="form__section-heading">{headingTitle}</h4>
 
@@ -73,9 +74,9 @@ export default function WorkSite({
 
           <div className="form__row">
             <WorkSiteAddress
-              adress={values.emitter?.workSite?.address}
-              city={values.emitter?.workSite?.city}
-              postalCode={values.emitter?.workSite?.postalCode}
+              address={values.emitter?.[modelKey]?.address}
+              city={values.emitter?.[modelKey]?.city}
+              postalCode={values.emitter?.[modelKey]?.postalCode}
               onAddressSelection={details => setAddress(details)}
               designation={designation}
               disabled={disabled}
@@ -84,7 +85,7 @@ export default function WorkSite({
 
           <div className="form__row">
             <label>
-              Informations complémentaires
+              Informations complémentaires (optionnel)
               <Field
                 component="textarea"
                 className="textarea-pickup-site td-textarea"

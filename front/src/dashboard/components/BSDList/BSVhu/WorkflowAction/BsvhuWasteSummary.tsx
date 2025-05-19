@@ -1,11 +1,11 @@
 import * as React from "react";
-import { Bsvhu } from "generated/graphql/types";
+import { Bsvhu } from "@td/codegen-ui";
 import {
   DataList,
   DataListItem,
   DataListTerm,
-  DataListDescription,
-} from "common/components";
+  DataListDescription
+} from "../../../../../common/components";
 
 interface Props {
   bsvhu: Bsvhu;
@@ -33,13 +33,13 @@ export function BsvhuWasteSummary({ bsvhu }: Props) {
         <DataListDescription>
           {bsvhu.destination?.reception?.quantity == null ? (
             <>
-              {bsvhu.quantity ?? 0} unité(s){" "}
-              {bsvhu.weight?.value && <>(tonne(s))</>}
+              {bsvhu.quantity ?? 0} unité(s) ({bsvhu.weight?.value || "?"}{" "}
+              tonne(s))
             </>
           ) : (
             <>
-              {bsvhu.destination.reception.quantity} unité(s){" "}
-              {bsvhu.destination.reception.weight && <>(tonne(s))</>}
+              {bsvhu.destination.reception.quantity} unité(s) (
+              {bsvhu.destination.reception.weight || "?"} tonne(s))
             </>
           )}
         </DataListDescription>

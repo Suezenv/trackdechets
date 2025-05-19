@@ -1,16 +1,17 @@
-import { BsdasriResolvers } from "../../../generated/graphql/types";
-import prisma from "../../../prisma";
+import type { BsdasriResolvers } from "@td/codegen-back";
 
-import { unflattenBsdasri } from "../../converter";
+import { expandBsdasriFromDB } from "../../converter";
+import { getReadonlyBsdasriRepository } from "../../repository";
 
 const groupedIn: BsdasriResolvers["groupedIn"] = async bsdasri => {
-  const groupedIn = await prisma.bsdasri
-    .findUnique({ where: { id: bsdasri.id } })
+  const groupedIn = await getReadonlyBsdasriRepository()
+    .findRelatedEntity({ id: bsdasri.id })
     .groupedIn();
+
   if (!groupedIn) {
     return null;
   }
-  return unflattenBsdasri(groupedIn);
+  return expandBsdasriFromDB(groupedIn);
 };
 
 export default groupedIn;

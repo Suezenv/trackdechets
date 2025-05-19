@@ -3,19 +3,19 @@ import {
   CompanyVerificationStatus,
   UserRole
 } from "@prisma/client";
-import { gql } from "apollo-server-express";
+import { gql } from "graphql-tag";
 import { AuthType } from "../../../../auth";
-import prisma from "../../../../prisma";
+import { prisma } from "@td/prisma";
 import {
   companyFactory,
+  siretify,
   userWithCompanyFactory
 } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
-import * as mailsHelper from "../../../../mailer/mailing";
+import { sendMail } from "../../../../mailer/mailing";
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import { renderMail } from "../../../../mailer/templates/renderers";
-import { verificationDone } from "../../../../mailer/templates";
-import { Mutation } from "../../../../generated/graphql/types";
+import { renderMail, verificationDone } from "@td/mail";
+import type { Mutation } from "@td/codegen-back";
 
 const VERIFY_COMPANY = gql`
   mutation VerifyCompany($input: VerifyCompanyInput!) {
@@ -26,14 +26,14 @@ const VERIFY_COMPANY = gql`
 `;
 
 // No mails
-const sendMailSpy = jest.spyOn(mailsHelper, "sendMail");
-sendMailSpy.mockImplementation(() => Promise.resolve());
+jest.mock("../../../../mailer/mailing");
+(sendMail as jest.Mock).mockImplementation(() => Promise.resolve());
 
 describe("mutation verifyCompany", () => {
   afterAll(resetDatabase);
 
   afterEach(() => {
-    sendMailSpy.mockClear();
+    (sendMail as jest.Mock).mockClear();
   });
 
   it("should disallow unauthenticated user", async () => {
@@ -75,7 +75,7 @@ describe("mutation verifyCompany", () => {
     const { mutate } = makeClient(user);
     const { errors } = await mutate(VERIFY_COMPANY, {
       variables: {
-        input: { siret: "11111111111111", code: company.verificationCode }
+        input: { siret: siretify(3), code: company.verificationCode }
       }
     });
     expect(errors).toEqual([
@@ -138,8 +138,8 @@ describe("mutation verifyCompany", () => {
     expect(data.verifyCompany.verificationStatus).toEqual(
       CompanyVerificationStatus.VERIFIED
     );
-    const updatedCompany = await prisma.company.findUnique({
-      where: { siret: company.siret }
+    const updatedCompany = await prisma.company.findUniqueOrThrow({
+      where: { siret: company.siret! }
     });
     expect(updatedCompany.verificationStatus).toEqual(
       CompanyVerificationStatus.VERIFIED
@@ -150,10 +150,12 @@ describe("mutation verifyCompany", () => {
     expect(updatedCompany.verifiedAt).toBeDefined();
     expect(updatedCompany.verifiedAt).not.toBeNull();
 
-    expect(sendMailSpy).toHaveBeenCalledWith(
+    expect(sendMail as jest.Mock).toHaveBeenCalledWith(
       renderMail(verificationDone, {
         to: [{ email: user.email, name: user.name }],
-        variables: { company: updatedCompany }
+        variables: {
+          company: updatedCompany as any
+        }
       })
     );
   });

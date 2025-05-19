@@ -1,26 +1,47 @@
 import React from "react";
 import { ApolloProvider } from "@apollo/client";
-import { BrowserRouter as Router } from "react-router-dom";
-import { ErrorBoundary } from "@sentry/react";
+import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import client from "./graphql-client";
-import LayoutContainer from "./layout/LayoutContainer";
+import LayoutContainer from "./Apps/common/Components/layout/LayoutContainer";
 import setYupLocale from "./common/setYupLocale";
 import BrowserDetect from "./BrowserDetect";
+import ErrorBoundary from "./ErrorBoundary";
+import { FeatureFlagsProvider } from "./common/contexts/FeatureFlagsContext";
+import { PermissionsProvider } from "./common/contexts/PermissionsContext";
+import i18next from "i18next";
+import { z } from "zod";
+import { zodI18nMap } from "zod-i18n-map";
+import translation from "zod-i18n-map/locales/fr/zod.json";
+
+// Zod in FR
+i18next.init({
+  lng: "fr",
+  resources: {
+    fr: { zod: translation }
+  }
+});
+z.setErrorMap(zodI18nMap);
 
 // Defines app-wide french error messages for yup
 // See https://github.com/jquense/yup#using-a-custom-locale-dictionary
 setYupLocale();
 
+const router = createBrowserRouter([
+  { path: "*", element: <LayoutContainer /> }
+]);
+
 export default function App() {
   return (
     <BrowserDetect>
-      <ErrorBoundary showDialog dialogOptions={{ lang: "fr" }}>
+      <ErrorBoundary>
         <ApolloProvider client={client}>
-          <Router>
-            <div className="App">
-              <LayoutContainer />
-            </div>
-          </Router>
+          <PermissionsProvider defaultPermissions={[]}>
+            <FeatureFlagsProvider defaultFeatureFlags={{}}>
+              <div className="App">
+                <RouterProvider router={router} />
+              </div>
+            </FeatureFlagsProvider>
+          </PermissionsProvider>
         </ApolloProvider>
       </ErrorBoundary>
     </BrowserDetect>

@@ -1,6 +1,6 @@
-import prisma from "../../prisma";
+import { prisma } from "@td/prisma";
 import { searchCompany } from "../../companies/sirene/insee/client";
-import geocode from "../../companies/geocode";
+import { geocode } from "../../companies/geo/geocode";
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -21,6 +21,7 @@ function sleep(ms) {
     });
     let counter = 0;
     for (const company of companies) {
+      if (!company.siret) continue;
       counter++;
 
       console.log(`Processing company ${counter}`);

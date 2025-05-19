@@ -1,43 +1,49 @@
-import { ForbiddenError } from "apollo-server-express";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { MutationPublishBsdaArgs } from "../../../generated/graphql/types";
-import prisma from "../../../prisma";
+import type { MutationPublishBsdaArgs } from "@td/codegen-back";
 import { GraphQLContext } from "../../../types";
 import { expandBsdaFromDb } from "../../converter";
-import { getBsdaOrNotFound, getPreviousBsdas } from "../../database";
-import { indexBsda } from "../../elastic";
-import { checkIsBsdaContributor } from "../../permissions";
-import { validateBsda } from "../../validation";
+import { getBsdaOrNotFound } from "../../database";
+import { getBsdaRepository } from "../../repository";
+import { checkCanUpdate } from "../../permissions";
+import { ForbiddenError } from "../../../common/errors";
+import { parseBsdaAsync } from "../../validation";
+import { prismaToZodBsda } from "../../validation/helpers";
 
-export default async function create(
+export default async function publish(
   _,
   { id }: MutationPublishBsdaArgs,
   context: GraphQLContext
 ) {
   const user = checkIsAuthenticated(context);
 
-  const existingBsda = await getBsdaOrNotFound(id);
-  await checkIsBsdaContributor(
-    user,
-    existingBsda,
-    "Vous ne pouvez pas modifier un bordereau sur lequel votre entreprise n'apparait pas"
-  );
+  const bsda = await getBsdaOrNotFound(id, {
+    include: {
+      intermediaries: true,
+      grouping: true,
+      transporters: true
+    }
+  });
 
-  if (!existingBsda.isDraft) {
+  await checkCanUpdate(user, bsda);
+
+  if (!bsda.isDraft) {
     throw new ForbiddenError(
       "Impossible de publier un bordereau qui n'est pas un brouillon"
     );
   }
 
-  const previousBsdas = await getPreviousBsdas(existingBsda);
-  await validateBsda(existingBsda, previousBsdas, { emissionSignature: true });
+  await parseBsdaAsync(
+    { ...prismaToZodBsda(bsda), isDraft: false },
+    {
+      user,
+      currentSignatureType: "EMISSION"
+    }
+  );
 
-  const updatedBsda = await prisma.bsda.update({
-    where: { id },
-    data: { isDraft: false }
-  });
-
-  await indexBsda(updatedBsda, context);
+  const updatedBsda = await getBsdaRepository(user).update(
+    { id },
+    { isDraft: false }
+  );
 
   return expandBsdaFromDb(updatedBsda);
 }

@@ -9,13 +9,13 @@ import express from "express";
 import passport from "passport";
 import { BasicStrategy } from "passport-http";
 import { Strategy as BearerStrategy } from "passport-http-bearer";
-import { ExtractJwt, Strategy as JwtStrategy } from "passport-jwt";
+
 import { Strategy as LocalStrategy } from "passport-local";
 import {
   Strategy as ClientPasswordStrategy,
   VerifyFunction
 } from "passport-oauth2-client-password";
-import prisma from "./prisma";
+import { prisma } from "@td/prisma";
 import { GraphQLContext } from "./types";
 import {
   daysBetween,
@@ -23,15 +23,20 @@ import {
   sanitizeEmail,
   hashToken
 } from "./utils";
-
-const { JWT_SECRET } = process.env;
+import {
+  setUserLoginFailed,
+  clearUserLoginNeedsCaptcha,
+  doesUserLoginNeedsCaptcha
+} from "./common/redis/captcha";
+import { checkCaptcha } from "./captcha/captchaGen";
 
 // Set specific type for req.user
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface User extends PrismaUser {
-      auth?: AuthType;
+      auth: AuthType;
+      ip?: string;
     }
   }
 }
@@ -42,51 +47,103 @@ export enum AuthType {
   Bearer = "BEARER"
 }
 
+enum LoginErrorCode {
+  INVALID_USER_OR_PASSWORD = "INVALID_USER_OR_PASSWORD",
+  NOT_ACTIVATED = "NOT_ACTIVATED",
+  INVALID_USER_OR_PASSWORD_NEEDS_CAPTCHA = "INVALID_USER_OR_PASSWORD_NEEDS_CAPTCHA",
+  INVALID_CAPTCHA = "INVALID_CAPTCHA"
+}
+
 // verbose error message and related errored field
 export const getLoginError = (username: string) => ({
-  UNKNOWN_USER: {
-    message: "Aucun utilisateur trouvé avec cet email",
-    errorField: "email",
+  INVALID_USER_OR_PASSWORD: {
+    code: LoginErrorCode.INVALID_USER_OR_PASSWORD,
+    message: "Email ou mot de passe incorrect",
+    username: username
+  },
+  INVALID_USER_OR_PASSWORD_NEEDS_CAPTCHA: {
+    code: LoginErrorCode.INVALID_USER_OR_PASSWORD_NEEDS_CAPTCHA,
+    message: "Email ou mot de passe incorrect",
+    username: username
+  },
+  INVALID_CAPTCHA: {
+    code: LoginErrorCode.INVALID_CAPTCHA,
+    message: "Le test anti robots est incorrect",
     username: username
   },
   NOT_ACTIVATED: {
+    code: LoginErrorCode.NOT_ACTIVATED,
     message:
       "Ce compte n'a pas encore été activé. Vérifiez vos emails ou contactez le support",
-    errorField: "",
-    username: username
-  },
-  INVALID_PASSWORD: {
-    message: "Mot de passe incorrect",
-    errorField: "password",
     username: username
   }
 });
 
+// apart from logging the user in, we perform captcha verifications:
+// - if user as performed less than FAILED_ATTEMPTS_BEFORE_CAPTCHA in the last FAILED_LOGIN_EXPIRATION seconds, perform as usual
+// - if user as performed more failed attemps, check if captcha is correct
+// - if captcha is missing or incorrect, return appropriate error message
 passport.use(
   new LocalStrategy(
     { usernameField: "email", passReqToCallback: true },
     async (req, username, password, done) => {
+      const needsCaptcha = await doesUserLoginNeedsCaptcha(
+        sanitizeEmail(username)
+      );
+
+      if (needsCaptcha) {
+        if (!req.body?.captchaInput) {
+          await setUserLoginFailed(username);
+          return done(null, false, {
+            ...getLoginError(username).INVALID_USER_OR_PASSWORD_NEEDS_CAPTCHA
+          });
+        }
+
+        const captchaIsValid = await checkCaptcha(
+          req.body?.captchaInput,
+          req.body?.captchaToken
+        );
+
+        if (!captchaIsValid) {
+          await setUserLoginFailed(username);
+          return done(null, false, {
+            ...getLoginError(username).INVALID_CAPTCHA
+          });
+        }
+      }
+
       const user = await prisma.user.findUnique({
         where: { email: sanitizeEmail(username) }
       });
 
       if (!user) {
         return done(null, false, {
-          ...getLoginError(username).UNKNOWN_USER
+          ...getLoginError(username).INVALID_USER_OR_PASSWORD
         });
       }
+
       if (!user.isActive) {
         return done(null, false, {
           ...getLoginError(username).NOT_ACTIVATED
         });
       }
+
       const passwordValid = await compare(password, user.password);
-      if (!passwordValid && !req.user?.isAdmin) {
-        return done(null, false, {
-          ...getLoginError(username).INVALID_PASSWORD
-        });
+      if (passwordValid) {
+        await clearUserLoginNeedsCaptcha(user.email);
+        return done(null, { ...user, auth: AuthType.Session });
       }
-      return done(null, user);
+
+      // if password is not valid and user is not admin, set a redis count to require captcha after several failed login attemps
+      await setUserLoginFailed(username);
+
+      // adds INVALID_USER_OR_PASSWORD_NEEDS_CAPTCHA if needsCaptcha to trigger captcha field display on the front
+      return done(null, false, {
+        ...getLoginError(username).INVALID_USER_OR_PASSWORD,
+        ...(needsCaptcha
+          ? getLoginError(username).INVALID_USER_OR_PASSWORD_NEEDS_CAPTCHA
+          : {})
+      });
     }
   )
 );
@@ -97,54 +154,19 @@ passport.serializeUser((user: User, done) => {
 
 passport.deserializeUser((id: string, done) => {
   prisma.user
-    .findUnique({ where: { id } })
+    .findUniqueOrThrow({ where: { id } })
     .then(user => done(null, { ...user, auth: AuthType.Session }))
     .catch(err => done(err));
 });
-
-const jwtOpts = {
-  passReqToCallback: true,
-  secretOrKey: JWT_SECRET,
-  jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken()
-};
-
-passport.use(
-  new JwtStrategy(
-    jwtOpts,
-    async (req: express.Request, jwtPayload: { userId: string }, done) => {
-      try {
-        const user = await prisma.user.findUnique({
-          where: { id: jwtPayload.userId }
-        });
-        if (user) {
-          const token = jwtOpts.jwtFromRequest(req);
-          // verify that the token has not been
-          // converted to OAuth and revoked
-          const accessToken = await prisma.accessToken.findUnique({
-            where: {
-              token: hashToken(token)
-            }
-          });
-          if (accessToken && accessToken.isRevoked) {
-            return done(null, false);
-          }
-          return done(null, { ...user, auth: AuthType.JWT }, { token });
-        } else {
-          return done(null, false);
-        }
-      } catch (err) {
-        return done(err, false);
-      }
-    }
-  )
-);
 
 /**
  * Update field lastUsed on AccessToken if it was never set
  * or if it was set more than one day ago
  * @param accessToken
  */
-export function updateAccessTokenLastUsed(accessToken: AccessToken) {
+export function updateAccessTokenLastUsed(
+  accessToken: Pick<AccessToken, "lastUsed" | "token">
+) {
   // use new Date(Date.now()) instead of new Date()
   // in order to mock Date.now in unit test auth.test.ts
   const now = new Date(Date.now());
@@ -168,7 +190,12 @@ passport.use(
         where: {
           token: hashToken(token)
         },
-        include: { user: true }
+        select: {
+          isRevoked: true,
+          lastUsed: true,
+          token: true,
+          user: true
+        }
       });
       if (accessToken && !accessToken.isRevoked) {
         const user = accessToken.user;
@@ -226,7 +253,7 @@ async function passportCallback(
   callback?: () => Promise<any>
 ) {
   if (user) {
-    req.logIn(user, { session: false }, null);
+    req.logIn(user, { session: false }, () => undefined);
     if (callback) {
       await callback();
     }
@@ -271,42 +298,6 @@ export const passportBearerMiddleware = (
 };
 
 /**
- * Middleware used to authenticate request using JWT token
- * It is used for retro-compatibility with not expiring jwt
- * tokens that were emitted before using OAuth tokens saved in db.
- * Upon successful verification, this token is converted to a
- * normal OAuth token
- */
-export const passportJwtMiddleware = (
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction
-) => {
-  iffNotAuthenticated(
-    req,
-    res,
-    next,
-    passport.authenticate("jwt", { session: false }, (err, user, opts) => {
-      opts = opts ? opts : {};
-      passportCallback(err, req, next, user, () => {
-        if (user && opts.token) {
-          const token: string = opts.token;
-          // save this token to the OAuth access token table
-          return prisma.accessToken.create({
-            data: {
-              token,
-              user: { connect: { id: user.id } },
-              lastUsed: new Date()
-            }
-          });
-        }
-        return Promise.resolve();
-      });
-    })
-  );
-};
-
-/**
  * Passport will use all possible strategies to authenticate user on the GraphQL endpoint
  * Nevertheless we may want to apply only specific strategies on a particular GraphQL query.
  * For example the mutation used to renew a user password may only be accessible from a user
@@ -317,8 +308,16 @@ export function applyAuthStrategies(
   context: GraphQLContext,
   strategies: AuthType[]
 ) {
-  if (context.user && !strategies.includes(context.user.auth)) {
+  if (context.user && !strategies.includes(context.user.auth!)) {
     context.user = null;
   }
   return context;
+}
+
+/**
+ * Check if request is made by a logged-in Trackdechets UI user
+ *
+ */
+export function isSessionUser(context: GraphQLContext): boolean {
+  return !!context.user && context.user.auth === AuthType.Session;
 }

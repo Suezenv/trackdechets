@@ -1,0 +1,93 @@
+# https://www.legifrance.gouv.fr/jorf/id/JORFTEXT000043884563
+
+type Query {
+  "Renvoie un lien permettant de téléverser un registre au format CSV ou Excel"
+  registryUploadSignedUrl(fileName: String!): SignedUrlResponse!
+
+  "Renvoie un lien permettant de témécharger un fichier du registre"
+  registryDownloadSignedUrl(
+    importId: String!
+    target: RegistryDownloadTarget!
+  ): SignedUrlResponse!
+
+  "Liste des imports de registre"
+  registryImports(
+    """
+    (Optionnel) PAGINATION
+    Nombre d'éléments à ne pas récupérer en début de liste (pagination par "offset")
+    """
+    skip: Int
+
+    """
+    (Optionnel) PAGINATION
+    Permet de spécifier le nombre d'éléments à récupérer
+    """
+    first: Int
+
+    "SIRET de l'établissement dont je veux visualiser les imports"
+    siret: String
+
+    "Permet de limiter aux imports que j'ai réalisés"
+    ownImportsOnly: Boolean
+  ): RegistryImportConnection!
+
+  """
+  Permet de consulter uniquement les imports que l'on a réalisé
+  """
+  registryImport(id: ID!): RegistryImport!
+  "Renvoie un lien permettant de télécharger un export de registre précédemment généré"
+  registryV2ExportDownloadSignedUrl(exportId: String!): SignedUrlResponse!
+
+  "Liste des exports de registre demandés"
+  registryV2Exports(
+    """
+    (Optionnel) PAGINATION
+    Nombre d'éléments à ne pas récupérer en début de liste (pagination par "offset")
+    """
+    skip: Int
+
+    """
+    (Optionnel) PAGINATION
+    Permet de spécifier le nombre d'éléments à récupérer
+    """
+    first: Int
+  ): RegistryV2ExportConnection!
+
+  """
+  Permet de récupérer un export en particulier
+  """
+  registryV2Export(id: ID!): RegistryV2Export!
+
+  "Récupère les informations sur une déclaration de registre"
+  registryLookup(
+    "SIRET pour lequel la déclaration a été faite"
+    siret: String!
+    "Identifiant unique de la déclaration"
+    publicId: ID!
+    "Type de registre auquel appartient la déclaration"
+    type: RegistryImportType!
+  ): RegistryLookup!
+
+  "Récupère les déclarations de registre récentes"
+  registryLookups(
+    "SIRET pour lequel les déclarations ont été faites"
+    siret: String!
+    "Type de registre auquel appartient la déclaration"
+    type: RegistryImportType
+    "Identifiant unique de la déclaration, supporte un match partiel"
+    publicId: String
+    """
+    (Optionnel) PAGINATION
+    Cursor de la page à récupérer (endCursor de la page précédente)
+    """
+    after: String
+
+    before: String
+    """
+    (Optionnel) PAGINATION
+    Nombre d'éléments à récupérer
+    """
+    first: Int
+    last: Int
+  ): RegistryLookupConnection!
+}

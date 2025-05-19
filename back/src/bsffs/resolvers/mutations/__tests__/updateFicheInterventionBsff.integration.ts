@@ -1,14 +1,21 @@
-import { Company, User, UserRole } from "@prisma/client";
+import { Company, Prisma, User, UserRole } from "@prisma/client";
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import {
+import type {
   Mutation,
   MutationUpdateFicheInterventionBsffArgs
-} from "../../../../generated/graphql/types";
-import prisma from "../../../../prisma";
-import { userWithCompanyFactory } from "../../../../__tests__/factories";
+} from "@td/codegen-back";
+import { prisma } from "@td/prisma";
+import {
+  siretify,
+  userWithCompanyFactory
+} from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
 import { flattenFicheInterventionBsffInput } from "../../../converter";
 
+import {
+  createBsff,
+  createFicheIntervention
+} from "../../../__tests__/factories";
 const UPDATE_FICHE_INTERVENTION = `
   mutation UpdateFicheIntervention($id: ID!, $input: BsffFicheInterventionInput!) {
     updateFicheInterventionBsff(id: $id, input: $input) {
@@ -24,7 +31,7 @@ const variables: Omit<MutationUpdateFicheInterventionBsffArgs, "id"> = {
     detenteur: {
       company: {
         name: "Acme",
-        siret: "1".repeat(14),
+        siret: siretify(3),
         address: "12 rue de la Tige, 69000",
         mail: "contact@gmail.com",
         phone: "06",
@@ -34,7 +41,7 @@ const variables: Omit<MutationUpdateFicheInterventionBsffArgs, "id"> = {
     operateur: {
       company: {
         name: "Clim'op",
-        siret: "2".repeat(14),
+        siret: siretify(2),
         address: "12 rue de la Tige, 69000",
         mail: "contact@climop.com",
         phone: "06",
@@ -54,15 +61,15 @@ describe("Mutation.updateFicheInterventionBsff", () => {
   beforeEach(async () => {
     emitter = await userWithCompanyFactory(UserRole.ADMIN, {
       siret: variables.input.operateur.company.siret,
-      name: variables.input.operateur.company.name
+      name: variables.input.operateur.company.name!
     });
 
     const ficheIntervention = await prisma.bsffFicheIntervention.create({
       data: {
-        ...flattenFicheInterventionBsffInput({
+        ...(flattenFicheInterventionBsffInput({
           ...variables.input,
           weight: variables.input.weight - 1
-        })
+        }) as Prisma.BsffFicheInterventionCreateInput)
       }
     });
     ficheInterventionId = ficheIntervention.id;
@@ -98,9 +105,9 @@ describe("Mutation.updateFicheInterventionBsff", () => {
 
     expect(errors).toEqual([
       expect.objectContaining({
-        extensions: {
+        extensions: expect.objectContaining({
           code: "UNAUTHENTICATED"
-        }
+        })
       })
     ]);
   });
@@ -120,7 +127,7 @@ describe("Mutation.updateFicheInterventionBsff", () => {
 
     expect(errors).toEqual([
       expect.objectContaining({
-        message: `Vous devez être membre de l'entreprise au SIRET ${variables.input.operateur.company.siret} pour pouvoir éditer une fiche d'intervention en son nom.`
+        message: "Seul l'opérateur peut modifier une fiche d'intervention."
       })
     ]);
   });
@@ -141,6 +148,75 @@ describe("Mutation.updateFicheInterventionBsff", () => {
       expect.objectContaining({
         message: `La fiche d'intervention n°abcdefgh n'existe pas.`
       })
+    ]);
+  });
+
+  it("should update detenteurCompanySirets when siret detenteur is updated", async () => {
+    const detenteurAndOperateur = await userWithCompanyFactory(UserRole.ADMIN);
+
+    const newDetenteur = await userWithCompanyFactory(UserRole.ADMIN);
+
+    const ficheIntervention1 = await createFicheIntervention({
+      operateur: detenteurAndOperateur,
+      detenteur: detenteurAndOperateur
+    });
+
+    const bsff = await createBsff(
+      { emitter: detenteurAndOperateur },
+      {
+        data: {
+          isDraft: true,
+          ficheInterventions: { connect: { id: ficheIntervention1.id } },
+          detenteurCompanySirets: [detenteurAndOperateur.company.siret!]
+        },
+        userId: emitter.user.id
+      }
+    );
+
+    const { mutate } = makeClient(detenteurAndOperateur.user);
+    const { data, errors } = await mutate<
+      Pick<Mutation, "updateFicheInterventionBsff">,
+      MutationUpdateFicheInterventionBsffArgs
+    >(UPDATE_FICHE_INTERVENTION, {
+      variables: {
+        id: ficheIntervention1.id,
+
+        input: {
+          numero: "ABCDEFGHIJK",
+          weight: 2,
+          detenteur: {
+            company: {
+              name: "Nouveau détenteur",
+              siret: newDetenteur.company.siret,
+              address: "12 rue de la Tige, 69000",
+              mail: "contact@gmail.com",
+              phone: "06",
+              contact: "Jeanne Michelin"
+            }
+          },
+          operateur: {
+            company: {
+              name: "Clim'op",
+              siret: detenteurAndOperateur.company.siret,
+              address: "12 rue de la Tige, 69000",
+              mail: "contact@climop.com",
+              phone: "06",
+              contact: "Dupont Jean"
+            }
+          },
+          postalCode: "69000"
+        }
+      }
+    });
+
+    expect(errors).toBeUndefined();
+    expect(data.updateFicheInterventionBsff.id).toBe(ficheIntervention1.id);
+
+    const updatedBsff = await prisma.bsff.findUniqueOrThrow({
+      where: { id: bsff.id }
+    });
+    expect(updatedBsff.detenteurCompanySirets).toEqual([
+      newDetenteur.company.siret
     ]);
   });
 });

@@ -1,39 +1,39 @@
-import { User, TraderReceipt, BrokerReceipt } from "@prisma/client";
-import prisma from "../prisma";
-import { getFullUser } from "../users/database";
-import { ForbiddenError } from "apollo-server-express";
-import { getUserRole } from "./database";
-import { VhuAgrement } from "../generated/graphql/types";
+import {
+  User,
+  TraderReceipt,
+  BrokerReceipt,
+  WorkerCertification,
+  TransporterReceipt
+} from "@prisma/client";
+import { prisma } from "@td/prisma";
+import type { VhuAgrement } from "@td/codegen-back";
+import { Permission, checkUserPermissions } from "../permissions";
 
 export async function checkCanReadUpdateDeleteTraderReceipt(
   user: User,
   receipt: TraderReceipt
 ) {
-  const fullUser = await getFullUser(user);
-
   // check associated company
-  const companies = await prisma.company.findMany({
-    where: { traderReceipt: { id: receipt.id } }
-  });
+  const companies = await prisma.traderReceipt
+    .findUnique({
+      where: { id: receipt.id }
+    })
+    .Company({ select: { orgId: true } });
 
-  const forbiddenError = new ForbiddenError(
+  const orgIds = (companies ?? []).map(c => c.orgId);
+
+  if (orgIds.length === 0) {
+    // Permet de supprimer un récépissé après l'avoir "déconnecter" d'un établissement
+    // via `updateCompany`
+    return true;
+  }
+
+  await checkUserPermissions(
+    user,
+    orgIds,
+    Permission.CompanyCanUpdate,
     `Vous n'avez pas le droit d'éditer ou supprimer ce récépissé négociant`
   );
-
-  if (companies.length <= 0) {
-    // No companies associated with the receipt
-    throw forbiddenError;
-  } else {
-    const sirets = companies.map(c => c.siret);
-    const found = fullUser.companies.find(c => sirets.includes(c.siret));
-    if (!found) {
-      throw forbiddenError;
-    }
-    const role = await getUserRole(user.id, found.siret);
-    if (role !== "ADMIN") {
-      throw forbiddenError;
-    }
-  }
 
   return true;
 }
@@ -42,64 +42,56 @@ export async function checkCanReadUpdateDeleteBrokerReceipt(
   user: User,
   receipt: BrokerReceipt
 ) {
-  const fullUser = await getFullUser(user);
-
   // check associated company
-  const companies = await prisma.company.findMany({
-    where: { brokerReceipt: { id: receipt.id } }
-  });
+  const companies = await prisma.brokerReceipt
+    .findUnique({
+      where: { id: receipt.id }
+    })
+    .Company({ select: { orgId: true } });
 
-  const forbiddenError = new ForbiddenError(
+  const orgIds = (companies ?? []).map(c => c.orgId);
+
+  if (orgIds.length === 0) {
+    // Permet de supprimer un récépissé après l'avoir "déconnecter" d'un établissement
+    // via `updateCompany`
+    return true;
+  }
+
+  await checkUserPermissions(
+    user,
+    orgIds,
+    Permission.CompanyCanUpdate,
     `Vous n'avez pas le droit d'éditer ou supprimer ce récépissé courtier`
   );
-
-  if (companies.length <= 0) {
-    // No companies associated with the receipt
-    throw forbiddenError;
-  } else {
-    const sirets = companies.map(c => c.siret);
-    const found = fullUser.companies.find(c => sirets.includes(c.siret));
-    if (!found) {
-      throw forbiddenError;
-    }
-    const role = await getUserRole(user.id, found.siret);
-    if (role !== "ADMIN") {
-      throw forbiddenError;
-    }
-  }
 
   return true;
 }
 
 export async function checkCanReadUpdateDeleteTransporterReceipt(
   user: User,
-  receipt: TraderReceipt
+  receipt: TransporterReceipt
 ) {
-  const fullUser = await getFullUser(user);
-
   // check associated company
-  const companies = await prisma.company.findMany({
-    where: { transporterReceipt: { id: receipt.id } }
-  });
+  const companies = await prisma.transporterReceipt
+    .findUnique({
+      where: { id: receipt.id }
+    })
+    .Company({ select: { orgId: true } });
 
-  const forbiddenError = new ForbiddenError(
+  const orgIds = (companies ?? []).map(c => c.orgId);
+
+  if (orgIds.length === 0) {
+    // Permet de supprimer un récépissé après l'avoir "déconnecter" d'un établissement
+    // via `updateCompany`
+    return true;
+  }
+
+  await checkUserPermissions(
+    user,
+    orgIds,
+    Permission.CompanyCanUpdate,
     `Vous n'avez pas le droit d'éditer ou supprimer ce récépissé transporteur`
   );
-
-  if (companies.length <= 0) {
-    // No companies associated with the receipt
-    throw forbiddenError;
-  } else {
-    const sirets = companies.map(c => c.siret);
-    const found = fullUser.companies.find(c => sirets.includes(c.siret));
-    if (!found) {
-      throw forbiddenError;
-    }
-    const role = await getUserRole(user.id, found.siret);
-    if (role !== "ADMIN") {
-      throw forbiddenError;
-    }
-  }
 
   return true;
 }
@@ -108,36 +100,59 @@ export async function checkCanReadUpdateDeleteVhuAgrement(
   user: User,
   agrement: VhuAgrement
 ) {
-  const fullUser = await getFullUser(user);
+  const { broyeurCompanies, demolisseurCompanies } =
+    await prisma.vhuAgrement.findUniqueOrThrow({
+      where: { id: agrement.id },
+      include: {
+        broyeurCompanies: { select: { orgId: true } },
+        demolisseurCompanies: { select: { orgId: true } }
+      }
+    });
 
-  // check associated company
-  const companies = await prisma.company.findMany({
-    where: {
-      OR: [
-        { vhuAgrementDemolisseur: { id: agrement.id } },
-        { vhuAgrementBroyeur: { id: agrement.id } }
-      ]
-    }
-  });
-
-  const forbiddenError = new ForbiddenError(
-    `Vous n'avez pas le droit d'éditer ou supprimer cet agrément VHU`
+  const orgIds = [...broyeurCompanies, ...demolisseurCompanies].map(
+    c => c.orgId
   );
 
-  if (companies.length <= 0) {
-    // No companies associated with the agrement
-    throw forbiddenError;
-  } else {
-    const sirets = companies.map(c => c.siret);
-    const found = fullUser.companies.find(c => sirets.includes(c.siret));
-    if (!found) {
-      throw forbiddenError;
-    }
-    const role = await getUserRole(user.id, found.siret);
-    if (role !== "ADMIN") {
-      throw forbiddenError;
-    }
+  if (orgIds.length === 0) {
+    // Permet de supprimer un agrément après l'avoir "déconnecter" d'un établissement
+    // via `updateCompany`
+    return true;
   }
+
+  await checkUserPermissions(
+    user,
+    orgIds,
+    Permission.CompanyCanUpdate,
+    `Vous n'avez pas le droit d'éditer ou supprimer cet agrément VHU`
+  );
+  return true;
+}
+
+export async function checkCanReadUpdateDeleteWorkerCertification(
+  user: User,
+  certification: WorkerCertification
+) {
+  // check associated company
+  const companies = await prisma.workerCertification
+    .findUnique({
+      where: { id: certification.id }
+    })
+    .Company({ select: { orgId: true } });
+
+  const orgIds = (companies ?? []).map(c => c.orgId);
+
+  if (orgIds.length === 0) {
+    // Permet de supprimer une certification après l'avoir "déconnecter" d'un établissement
+    // via `updateCompany`
+    return true;
+  }
+
+  await checkUserPermissions(
+    user,
+    orgIds,
+    Permission.CompanyCanUpdate,
+    `Vous n'avez pas le droit d'éditer ou supprimer cette certification`
+  );
 
   return true;
 }

@@ -1,18 +1,20 @@
 import { Prisma } from "@prisma/client";
-import { safeInput } from "../forms/form-converter";
-import { BsvhuWhere } from "../generated/graphql/types";
+import { safeInput } from "../common/converter";
+import type { BsvhuWhere } from "@td/codegen-back";
 import {
   toPrismaDateFilter,
   toPrismaStringFilter,
   toPrismaNestedWhereInput,
   toPrismaGenericWhereInput,
-  toPrismaEnumFilter
+  toPrismaEnumFilter,
+  toPrismaStringNullableListFilter
 } from "../common/where";
 
 function toPrismaBsvhuWhereInput(where: BsvhuWhere): Prisma.BsvhuWhereInput {
   return safeInput<Prisma.BsvhuWhereInput>({
     ...toPrismaGenericWhereInput(where),
     status: toPrismaEnumFilter(where.status),
+    customId: toPrismaStringFilter(where.customId),
     emitterCompanySiret: toPrismaStringFilter(where.emitter?.company?.siret),
     emitterEmissionSignatureDate: toPrismaDateFilter(
       where.emitter?.emission?.signature?.date
@@ -22,6 +24,9 @@ function toPrismaBsvhuWhereInput(where: BsvhuWhere): Prisma.BsvhuWhereInput {
     ),
     transporterTransportSignatureDate: toPrismaDateFilter(
       where.transporter?.transport?.signature?.date
+    ),
+    transporterTransportPlates: toPrismaStringNullableListFilter(
+      where.transporter?.transport?.plates
     ),
     destinationCompanySiret: toPrismaStringFilter(
       where.destination?.company?.siret
@@ -34,7 +39,9 @@ function toPrismaBsvhuWhereInput(where: BsvhuWhere): Prisma.BsvhuWhereInput {
     ),
     destinationOperationSignatureDate: toPrismaDateFilter(
       where.destination?.operation?.signature?.date
-    )
+    ),
+    brokerCompanySiret: toPrismaStringFilter(where.broker?.company?.siret),
+    traderCompanySiret: toPrismaStringFilter(where.trader?.company?.siret)
   });
 }
 

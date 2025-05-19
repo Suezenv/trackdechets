@@ -1,5 +1,5 @@
-import {  resetDatabase } from "../../../../integration-tests/helper";
-import prisma from "../../../prisma";
+import { resetDatabase } from "../../../../integration-tests/helper";
+import { prisma } from "@td/prisma";
 import {
   formFactory,
   statusLogFactory,
@@ -9,7 +9,6 @@ import {
 } from "../../../__tests__/factories";
 import mergeUsers from "../mergeUsers";
 import { hashToken } from "../../../utils";
-
 
 describe("mergeUsers", () => {
   afterEach(() => resetDatabase());
@@ -26,7 +25,7 @@ describe("mergeUsers", () => {
 
     await mergeUsers(user, heir);
 
-    const updatedForm = await prisma.form.findUnique({
+    const updatedForm = await prisma.form.findUniqueOrThrow({
       where: { id: form.id },
       include: { owner: { select: { id: true } } }
     });
@@ -45,7 +44,7 @@ describe("mergeUsers", () => {
 
     await mergeUsers(user, heir);
 
-    const updatedStatusLog = await prisma.statusLog.findUnique({
+    const updatedStatusLog = await prisma.statusLog.findUniqueOrThrow({
       where: { id: statusLog.id },
       include: { user: { select: { id: true } } }
     });
@@ -97,7 +96,7 @@ describe("mergeUsers", () => {
 
     await mergeUsers(user, heir);
 
-    const updatedAccessToken = await prisma.accessToken.findUnique({
+    const updatedAccessToken = await prisma.accessToken.findUniqueOrThrow({
       where: { token: hashToken(accessToken) },
       include: { user: { select: { id: true } } }
     });
@@ -111,26 +110,18 @@ describe("mergeUsers", () => {
       data: {
         name: "",
         clientSecret: "",
-        admins: {
-          connect: [
-            {
-              id: user.id
-            }
-          ]
-        }
+        adminId: user.id
       }
     });
 
     await mergeUsers(user, heir);
 
-    const updatedApplication = await prisma.application.findUnique({
+    const updatedApplication = await prisma.application.findUniqueOrThrow({
       where: {
         id: application.id
       },
-      include: { admins: { select: { id: true } } }
+      include: { admin: { select: { id: true } } }
     });
-    expect(
-      updatedApplication.admins.find(admin => admin.id === heir.id)
-    ).not.toBe(null);
+    expect(updatedApplication.admin!.id).toEqual(heir.id);
   });
 });

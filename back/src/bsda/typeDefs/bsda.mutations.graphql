@@ -1,43 +1,172 @@
 type Mutation {
   """
-  EXPERIMENTAL - Ne pas utiliser dans un contexte de production
   Crée un Bsda
   """
-  createBsda(input: BsdaInput!): Bsda
+  createBsda(input: BsdaInput!): Bsda!
 
   """
-  EXPERIMENTAL - Ne pas utiliser dans un contexte de production
   Crée un Bsda en brouillon
   """
-  createDraftBsda(input: BsdaInput!): Bsda
+  createDraftBsda(input: BsdaInput!): Bsda!
 
   """
-  EXPERIMENTAL - Ne pas utiliser dans un contexte de production
   Met à jour un Bsda
   """
-  updateBsda(id: ID!, input: BsdaInput!): Bsda
+  updateBsda(id: ID!, input: BsdaInput!): Bsda!
 
   """
-  EXPERIMENTAL - Ne pas utiliser dans un contexte de production
   Permet de publier un brouillon pour le marquer comme prêt à être envoyé
   """
-  publishBsda(id: ID!): Bsda
+  publishBsda(id: ID!): Bsda!
 
   """
-  EXPERIMENTAL - Ne pas utiliser dans un contexte de production
-  Signe un Bsda
+  Signe un Bsda.
+
+  **Champs requis pour `EMISSION` :**
+
+  ```
+  emitter {
+    isPrivateIndividual
+    company {
+      siret
+      name
+      address
+      contact
+      mail
+      phone
+    }
+  }
+  waste {
+    code
+    name
+  }
+  destination {
+    company {
+      siret
+      name
+      address
+      contact
+      mail
+      phone
+    }
+    cap
+    plannedOperationCode
+  }
+  worker {
+    company {
+      siret
+      name
+      address
+      contact
+      mail
+      phone
+    }
+  }
+  ```
+
+  **Champs requis pour `WORK` :**
+
+  ```
+  waste {
+    consistence
+  }
+  weight {
+    value
+    isEstimate
+  }
+  ```
+
+  **Champs requis pour `TRANSPORT` :**
+
+  ```
+  transporter {
+    company {
+      siret
+      name
+      address
+      contact
+      mail
+      phone
+    }
+    recepisse {
+      number
+      department
+      validityLimit
+    }
+  }
+  ```
+
+  **Champs requis pour `OPERATION` :**
+
+  ```
+  destination {
+    reception {
+      date
+      weight
+      acceptationStatus
+    }
+    operation {
+      code
+      mode
+      date
+    }
+  }
+  ```
   """
-  signBsda(id: ID!, input: BsdaSignatureInput!): Bsda
+  signBsda(id: ID!, input: BsdaSignatureInput!): Bsda!
 
   """
-  EXPERIMENTAL - Ne pas utiliser dans un contexte de production
   Duplique un Bsda
   """
-  duplicateBsda("ID d'un BSDA" id: ID!): Bsda
+  duplicateBsda("ID d'un BSDA" id: ID!): Bsda!
 
   """
-  EXPERIMENTAL - Ne pas utiliser dans un contexte de production
   Supprime un Bsda
   """
-  deleteBsda("ID d'un BSDA" id: ID!): Bsda
+  deleteBsda("ID d'un BSDA" id: ID!): Bsda!
+
+  """
+  Crée une demande de révision sur un Bsda existant
+  """
+  createBsdaRevisionRequest(
+    input: CreateBsdaRevisionRequestInput!
+  ): BsdaRevisionRequest!
+
+  """
+  Annule une demande de révision de Bsda.
+  Peut être fait uniquement par l'auteur de la révision, si celle-ci n'a pas encore été acceptée
+  """
+  cancelBsdaRevisionRequest(
+    "Identifiant de la demande de révision"
+    id: ID!
+  ): Boolean!
+
+  """
+  Répond à une demande d'approbation d'une révision.
+  En cas de refus, la révision associée est automatiquement refusée et les autres validations supprimées.
+  En cas d'acceptation, si c'était la dernière approbation attendue, la révision associée est automatiquement approuvée et appliquée sur le Bsda.
+  """
+  submitBsdaRevisionRequestApproval(
+    "Identifiant de la validation"
+    id: ID!
+    "Indique si la révision est acceptée ou non"
+    isApproved: Boolean!
+    "Commentaire facultatif"
+    comment: String
+  ): BsdaRevisionRequest!
+
+  """
+  Crée un transporteur BSDA
+  """
+  createBsdaTransporter(input: BsdaTransporterInput!): BsdaTransporter
+
+  """
+  Modifie un transporteur BSDA
+  """
+  updateBsdaTransporter(id: ID!, input: BsdaTransporterInput!): BsdaTransporter
+
+  """
+  Supprime un transporteur BSDA
+  """
+  deleteBsdaTransporter("Identifiant du transporteur" id: ID!): ID!
 }

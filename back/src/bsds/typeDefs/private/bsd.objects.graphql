@@ -9,4 +9,8 @@ type BsdEdge {
   node: Bsd!
 }
 
-union Bsd = Form | Bsdasri | Bsvhu | Bsda | Bsff
+union Bsd = Form | Bsdasri | Bsvhu | Bsda | Bsff | Bspaoh
+
+type CloneId {
+  id: ID!
+}

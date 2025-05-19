@@ -22,6 +22,12 @@ type Form {
   customId: String
 
   """
+  Identifiant lisible du bordereau à partir duquel ce celui-ci a été dupliqué.
+  Est égal à `null` si le bordereau n'est pas issue d'une duplication.
+  """
+  isDuplicateOf: String
+
+  """
   Permet de savoir si les données du BSD ont été importées depuis un
   bordereau signé papier via la mutation `importPaperForm`
   """
@@ -33,8 +39,21 @@ type Form {
   "Installation de destination ou d’entreposage ou de reconditionnement prévue (case 2)"
   recipient: Recipient
 
-  "Transporteur du déchet (case 8)"
+  "Premier transporteur du déchet (case 8)"
   transporter: Transporter
+
+  """
+  Le déchet est acheminé directement par pipeline ou convoyeur.
+  Lorsque `isDirectSupply` est `true`, aucun transporteur
+  ni conditionnement (`wasteDetails.packagingInfos`) ne doivent être spécifiés.
+  """
+  isDirectSupply: Boolean!
+
+  """
+  Liste des transporteurs du déchet. Contient 1 seul transporteur en cas d'achemniment direct.
+  Peut contenir un maximum de 5 transporteurs différents en cas de transport multi-modal
+  """
+  transporters: [Transporter!]!
 
   "Détails du déchet (case 3)"
   wasteDetails: WasteDetails
@@ -54,20 +73,42 @@ type Form {
   "Statut du BSD (brouillon, envoyé, reçu, traité, etc)"
   status: FormStatus!
 
+  "Date à laquelle l'émetteur a signé l'enlèvement initial."
+  emittedAt: DateTime
+
+  "Nom de la personne qui a signé l'enlèvement initial pour l'émetteur."
+  emittedBy: String
+
+  "Indique si l'enlèvement a été signé par l'éco-organisme en charge du déchet ou pas."
+  emittedByEcoOrganisme: Boolean
+
+  "Date à laquelle le transporteur a signé l'enlèvement initial."
+  takenOverAt: DateTime
+
+  "Nom de la personne qui a signé l'enlèvement initial pour le transporteur."
+  takenOverBy: String
+
   "Si oui ou non le BSD a été signé par un transporteur"
   signedByTransporter: Boolean
+    @deprecated(reason: "Ce champ est redondant avec status et takenOverAt")
 
-  "Date de l'envoi du déchet par l'émetteur (case 9)"
-  sentAt: DateTime
+  "Date de l'envoi du déchet par l'émetteur et de prise en charge du déchet par le transporteur"
+  sentAt: DateTime @deprecated(reason: "Remplacé par takenOverAt")
 
   "Nom de la personne responsable de l'envoi du déchet (case 9)"
-  sentBy: String
+  sentBy: String @deprecated(reason: "Remplacé par emittedBy")
 
   "Statut d'acceptation du déchet (case 10)"
-  wasteAcceptationStatus: String
+  wasteAcceptationStatus: WasteAcceptationStatus
 
   "Raison du refus (case 10)"
   wasteRefusalReason: String
+
+  "Charte citerne - Est-ce que la citerne a été rincée ou non?"
+  hasCiterneBeenWashedOut: Boolean
+
+  "Charte citerne - Raison pour laquelle la citerne n'a pas été rincée"
+  citerneNotWashedOutReason: CiterneNotWashedOutReason
 
   "Nom de la personne en charge de la réception du déchet (case 10)"
   receivedBy: String
@@ -78,11 +119,23 @@ type Form {
   "Date à laquelle le déchet a été accepté ou refusé (case 10)"
   signedAt: DateTime
 
-  "Quantité réelle présentée (case 10)"
+  "Quantité réelle présentée en tonnes (case 10)"
   quantityReceived: Float
+
+  "Quantité réelle ou estimée"
+  quantityReceivedType: QuantityType
+
+  "Quantité acceptée nette"
+  quantityAccepted: Float
+
+  "Quantité refusée nette"
+  quantityRefused: Float
 
   "Traitement réalisé (code D/R)"
   processingOperationDone: String
+
+  "Mode de traitement"
+  destinationOperationMode: OperationMode
 
   "Description de l'opération d’élimination / valorisation (case 11)"
   processingOperationDescription: String
@@ -99,8 +152,17 @@ type Form {
   "Destination ultérieure prévue (case 12)"
   nextDestination: NextDestination
 
-  "Annexe 2"
-  appendix2Forms: [Appendix2Form!]
+  "Bordereaux que celui-ci regroupe (Annexe 2)"
+  appendix2Forms: [InitialForm!] @deprecated(reason: "Utiliser `grouping`")
+
+  "Bordereaux que celui-ci regroupe (Annexe 2)"
+  grouping: [InitialFormFraction!]
+
+  "Quantité déjà regroupé dans un ou plusieurs bordereaux de regroupement"
+  quantityGrouped: Float
+
+  "Bordereaux dans lequel celui-ci est regroupé (Annexe 2)"
+  groupedIn: [FormFraction!]
 
   ecoOrganisme: FormEcoOrganisme
 
@@ -111,20 +173,43 @@ type Form {
   stateSummary: StateSummary
 
   transportSegments: [TransportSegment!]
+    @deprecated(
+      reason: "Utiliser `Form.transporters` qui permet de lister le premier transporteur et les suivants"
+    )
 
   currentTransporterSiret: String
   nextTransporterSiret: String
+
+  """
+  Entreprises intermédiaires. Un intermédiaire est une entreprise qui prend part à la gestion du déchet,
+  mais pas à la responsabilité de la traçabilité (entreprise de travaux, bureau d'étude, maitre d'oeuvre,
+  collectivité, etc.) Il pourra lire ce bordereau, sans étape de signature.
+  """
+  intermediaries: [FormCompany!]!
+
+  "Metadonnées associées au bordereau"
+  metadata: FormMetadata!
+
+  "Retour à vide ADR"
+  emptyReturnADR: EmptyReturnADR
+}
+
+type FormMetadata {
+  "EXPERIMENTAL, ne pas utiliser - Dernière révision du bordereau"
+  latestRevision: FormRevisionRequest
 }
 
 """
 Information sur le bordereau initial lors d'une réexpédition après transformation ou traitement aboutissant
-à des déchets dont la provenance reste identifiable (annexe 2)
+à des déchets dont la provenance reste identifiable (annexe 2 ou 1)
 """
-type Appendix2Form {
+type InitialForm {
   "Identifiant unique du bordereau initial"
   id: ID!
   "Identifiant lisible du bordereau initial"
   readableId: String!
+  "Statut du bordereau initial"
+  status: FormStatus
   "Détails du déchet du bordereau initial (case 3)"
   wasteDetails: WasteDetails
   """
@@ -139,20 +224,60 @@ type Appendix2Form {
   """
   emitterPostalCode: String
   """
+  Destinataire du bordereau initial
+  """
+  recipient: Recipient
+  """
+  Transporteur du bordereau initial
+  """
+  transporter: Transporter
+  "Date à laquelle le transporteur a signé l'enlèvement initial."
+  takenOverAt: DateTime
+  """
   Date d’acceptation du lot initial par l’installation réalisant une transformation ou un traitement aboutissant à des déchets
   dont la provenance reste identifiable. C'est la date qui figure au cadre 10 du bordereau initial.
   """
   signedAt: DateTime
   """
   Quantité reçue par l’installation réalisant une transformation ou un traitement aboutissant à des déchets
-  dont la provenance reste identifiable
+  dont la provenance reste identifiable (en tonnes)
   """
   quantityReceived: Float
+
+  "Quantité acceptée nette"
+  quantityAccepted: Float
+
+  "Quantité refusée nette"
+  quantityRefused: Float
+
   """
   Opération de transformation ou un traitement aboutissant à des déchets dont la provenance reste identifiable effectuée
   par l'installation de regroupement
   """
   processingOperationDone: String
+
+  "Quantité déjà regroupé dans un ou plusieurs bordereaux de regroupement"
+  quantityGrouped: Float
+}
+
+"""
+Fraction d'un bordereau ajouté en annexe 2 d'un bordereau de regroupement
+"""
+type InitialFormFraction {
+  "Bordereau initial"
+  form: InitialForm!
+  "Quantité du bordereau initial affectée au bordereau de regroupement"
+  quantity: Float!
+}
+
+"""
+Fraction d'un bordereau initial affectée à un bordereau de regroupement
+"""
+type FormFraction {
+  "Bordereau de regroupement"
+  form: Form!
+  "Quantité du bordereau initial affectée au bordereau de regroupement"
+  quantity: Float!
 }
 
 """
@@ -165,8 +290,11 @@ En fonction du statut du bordereau, différentes informations sont à lire pour 
 Cet objet `StateSummary` vise à simplifier ces questions. Il renverra toujours la valeur pour un instant T donné.
 """
 type StateSummary {
-  "Quantité la plus à jour"
+  "Quantité la plus à jour (en tonnes)"
   quantity: Float
+
+  "Si la quantité est estimée ou pas"
+  quantityType: QuantityType
 
   "DEPRECATED Packaging le plus à jour"
   packagings: [Packagings!]! @deprecated(reason: "Utiliser packagingInfos")
@@ -174,8 +302,14 @@ type StateSummary {
   "Packaging le plus à jour"
   packagingInfos: [PackagingInfo!]!
 
-  "Code ONU le plus à jour"
+  "Si le BSD est soumis à l'ADR ou non"
+  isSubjectToADR: Boolean
+
+  "Mention au titre du règlement ADR la plus à jour"
   onuCode: String
+
+  "Mention au titre des règlements RID, ADNR, IMDG (optionnel)"
+  nonRoadRegulationMention: String
 
   "Prochaine entreprise à transporter le déchet (entreprise en case 8 ou 18)"
   transporter: FormCompany
@@ -213,22 +347,42 @@ type TemporaryStorageDetail {
   "Transporteur du déchet (case 18)"
   transporter: Transporter
 
+  "Date à laquelle l'entreposage provisoire a signé l'enlèvement."
+  emittedAt: DateTime
+
+  "Nom de la personne qui a signé l'enlèvement pour l'entreposage provisoire."
+  emittedBy: String
+
+  "Date à laquelle le transporteur a signé l'enlèvement."
+  takenOverAt: DateTime
+
+  "Nom de la personne qui a signé l'enlèvement pour le transporteur."
+  takenOverBy: String
+
   "Nom du signataire du BSD suite  (case 19)"
-  signedBy: String
+  signedBy: String @deprecated(reason: "Remplacé par emittedBy")
+
   "Date de signature du BSD suite (case 19)"
-  signedAt: DateTime
+  signedAt: DateTime @deprecated(reason: "Remplacé par takenOverAt")
 }
 
 type TemporaryStorer {
   quantityType: QuantityType
+  "Quantité reçue en tonnes"
   quantityReceived: Float
-  wasteAcceptationStatus: String
+  "Quantité refusée nette en tonnes"
+  quantityRefused: Float
+  "Quantité acceptée nette en tonnes"
+  quantityAccepted: Float
+  wasteAcceptationStatus: WasteAcceptationStatus
   wasteRefusalReason: String
-
   receivedAt: DateTime
   receivedBy: String
+  "Date à laquelle le déchet a été accepté ou refusé (case 13)"
+  signedAt: DateTime
 }
 
+"Destination finale après entreposage provisoire ou reconditionement"
 type Destination {
   "N° de CAP (le cas échéant)"
   cap: String
@@ -239,7 +393,10 @@ type Destination {
   "Établissement de destination"
   company: FormCompany
 
-  "Indique si l'information a été saisie par l'émetteur du bordereau ou l'installation d'entreposage"
+  """
+  DEPRECATED (renvoie toujours `false`) - Indique si l'information a été saisie par
+  l'émetteur du bordereau ou l'installation d'entreposage
+  """
   isFilledByEmitter: Boolean
 }
 
@@ -263,6 +420,12 @@ type Emitter {
 
   "Établissement émetteur"
   company: FormCompany
+
+  "Indique si le détenteur est un particulier ou une entreprise"
+  isPrivateIndividual: Boolean
+
+  "Indique si le détenteur est un navire étranger"
+  isForeignShip: Boolean
 }
 
 """
@@ -285,6 +448,9 @@ type Recipient {
 
 "Collecteur - transporteur (case 8)"
 type Transporter {
+  "Identifiant du transporteur"
+  id: ID!
+
   "Établissement collecteur - transporteur"
   company: FormCompany
 
@@ -305,12 +471,28 @@ type Transporter {
 
   "Information libre, destinée aux transporteurs"
   customInfo: String
+
+  "Mode de transport"
+  mode: TransportMode
+
+  "Date de prise en charge"
+  takenOverAt: DateTime
+
+  "Reponsable de la prise en charge"
+  takenOverBy: String
 }
 
 "Destination ultérieure prévue (case 12)"
 type NextDestination {
   "Traitement prévue (code D/R)"
   processingOperation: String
+
+  """
+  N° du document prévu à l'annexe I-B du règlement n°1013/2006
+  ou le numéro de notification et numéro de saisie du document
+  prévue à l'annexe I-B du règlement N°1013/2006 (si connu).
+  """
+  notificationNumber: String
 
   "Établissement ultérieure"
   company: FormCompany
@@ -345,6 +527,12 @@ type PackagingInfo {
 
   "Nombre de colis associés à ce conditionnement"
   quantity: Int!
+
+  "Volume du conditionnement en litre"
+  volume: Float
+
+  "Numéros des contenants"
+  identificationNumbers: [String!]!
 }
 
 "Détails du déchet (case 3, 4, 5, 6)"
@@ -355,8 +543,14 @@ type WasteDetails {
   "Dénomination usuelle"
   name: String
 
-  "Code ONU"
+  "Si le BSD est soumis à l'ADR ou non"
+  isSubjectToADR: Boolean
+
+  "Mention au titre du règlement ADR"
   onuCode: String
+
+  "Mention au titre des règlements RID, ADNR, IMDG (optionnel)"
+  nonRoadRegulationMention: String
 
   "Conditionnements"
   packagingInfos: [PackagingInfo!]
@@ -381,6 +575,46 @@ type WasteDetails {
 
   "Contient des Polluants Organiques Persistants (POP) oui / non"
   pop: Boolean
+
+  "Caractère dangereux du déchet au sens de l’article R541-8 du code de l’environnement"
+  isDangerous: Boolean
+
+  """
+  Identifiants des parcelles cadastrales concernées, ou,
+  en cas de domaine non cadastré, l'identification précise des lieux géographiques de production
+  """
+  parcelNumbers: [ParcelNumber!]
+
+  "Numéros de référence(s) d'analyse(s)"
+  analysisReferences: [String!]
+
+  "Identifiant(s) du ou des terrains lorsque les terres ont été extraites d'un terrain placé en secteur d'information sur les sols au titre de l'article L. 125-6"
+  landIdentifiers: [String!]
+
+  "Numéro d'échantillon pour les huiles noires. Ne concerne que les bordereaux parmi les codes suivants: 13 02 04*, 13 02 05*, 13 02 06*, 13 02 07*, 13 02 08*"
+  sampleNumber: String
+}
+
+"""
+Identification des parcelles cadastrales
+"""
+type ParcelNumber {
+  "Ville"
+  city: String!
+  "Code postal"
+  postalCode: String
+  "Code commune Insee"
+  inseeCode: String
+  "Prefixe cadastral"
+  prefix: String
+  "Numéro de section cadastrale"
+  section: String
+  "Numéro de parcelle cadastrale"
+  number: String
+  "Coordonnée X au format WGS 84, en cas de domaine non cadastré"
+  x: Float
+  "Coordonnée Y au format WGS 84, en cas de domaine non cadastré"
+  y: Float
 }
 
 "Négociant (case 7)"
@@ -476,7 +710,7 @@ type formsLifeCycleData {
 type TransportSegment {
   id: ID!
 
-  "Siret du transporteur précédent"
+  "Siret ou numéro de TVA intra-communautaire du transporteur précédent"
   previousTransporterCompanySiret: String
 
   "Transporteur du segment"
@@ -512,9 +746,151 @@ type Stat {
   "Code déchet"
   wasteCode: String!
 
-  "Quantité entrante"
+  "Quantité entrante en tonnes"
   incoming: Float!
 
   "Qantité sortante"
   outgoing: Float!
+}
+
+"Demande de révision BSDD"
+type FormRevisionRequest {
+  "Identifiant de la demande de révison"
+  id: ID!
+
+  "Aperçu du bordereau concerné au moment de la création de la demande de révision. Il ne reflète pas le bordereau actuel."
+  form: Form!
+
+  "Date de création de la demande"
+  createdAt: DateTime!
+
+  "Entreprise à l'origine de la demande de révision"
+  authoringCompany: FormCompany!
+
+  "Liste des approbations apposées sur la révision"
+  approvals: [FormRevisionRequestApproval!]!
+
+  "Contenu de la révision"
+  content: FormRevisionRequestContent!
+
+  "Commentaire explicatif, saisi par l'auteur de la demande de révision"
+  comment: String!
+
+  "Statut d'acceptation de la révision"
+  status: RevisionRequestStatus!
+}
+
+"Approbation d'une demande de révision"
+type FormRevisionRequestApproval {
+  "Siret de l'entreprise responsable de cette approbation"
+  approverSiret: String!
+
+  "Commentaire explicatif, saisi par l'approbateur"
+  comment: String
+
+  "Statut d'acceptation de l'approbation"
+  status: RevisionRequestApprovalStatus!
+}
+
+"Payload de révision d'un bordereau. Disponible sur une liste restreinte de champs."
+type FormRevisionRequestContent {
+  "Détails du déchet (édition partielle uniquement)"
+  wasteDetails: FormRevisionRequestWasteDetails
+
+  "Négociant"
+  trader: Trader
+
+  "Courtier"
+  broker: Broker
+
+  "Informations sur l'installation de destination ou d’entreposage ou de reconditionnement prévue (édition partielle uniquement)"
+  recipient: FormRevisionRequestRecipient
+
+  "Quantité reçue sur l'installation de destination, en tonnes"
+  quantityReceived: Float
+
+  "Quantité refusée par l'installation de destination, en tonnes"
+  quantityRefused: Float
+
+  "Traitement réalisé (code D/R)"
+  processingOperationDone: String
+
+  "Mode de traitement"
+  destinationOperationMode: OperationMode
+
+  "Description de l'opération d’élimination / valorisation réalisée"
+  processingOperationDescription: String
+
+  "Entreposage provisoire (édition partielle uniquement)"
+  temporaryStorageDetail: FormRevisionRequestTemporaryStorageDetail
+
+  "Demande d'annulation du bordereau"
+  isCanceled: Boolean
+}
+
+type FormRevisionRequestWasteDetails {
+  "Code CED"
+  code: String
+
+  "Description du déchet"
+  name: String
+
+  "Contient des Polluants Organiques Persistants (POP) oui / non"
+  pop: Boolean
+
+  "Conditionnements"
+  packagingInfos: [PackagingInfo!]
+
+  """
+  Numéro d'échantillon
+  Uniquement révisable sur les annexes 1 pour les codes déchets concernés.
+  """
+  sampleNumber: String
+
+  """
+  Poids en tonnes
+  Uniquement révisable sur les annexes 1.
+
+  Doit être inférieur à 40T en cas de transport routier et inférieur à 50 000 T tout type de transport confondu.
+  """
+  quantity: Float
+}
+
+type FormRevisionRequestRecipient {
+  "CAP de l'installation de destination ou d'entreposage ou de reconditionnement prévue"
+  cap: String
+}
+
+type FormRevisionRequestTemporaryStorageDetail {
+  "Révision des informations sur l'entreposage provisoire"
+  temporaryStorer: FormRevisionRequestTemporaryStorer
+  "Révision des informations du destinataire finale"
+  destination: FormRevisionRequestDestination
+}
+
+type FormRevisionRequestDestination {
+  "N° de CAP de l'installation de destination"
+  cap: String
+
+  "Opération d'élimination / valorisation prévue (code D/R)"
+  processingOperation: String
+}
+
+type FormRevisionRequestTemporaryStorer {
+  "Quantité reçue sur l'installation d'entreposage provisoire ou de reconditionnement (en tonnes)"
+  quantityReceived: Float
+
+  "Quantité refusée par l'installation d'entreposage provisoire ou de reconditionnement (en tonnes)"
+  quantityRefused: Float
+}
+
+type FormRevisionRequestConnection {
+  totalCount: Int!
+  pageInfo: PageInfo!
+  edges: [FormRevisionRequestEdge!]!
+}
+
+type FormRevisionRequestEdge {
+  cursor: String!
+  node: FormRevisionRequest!
 }

@@ -1,326 +1,623 @@
 import { useLazyQuery, useQuery } from "@apollo/client";
-import { Field, useField, useFormikContext } from "formik";
-import React, { useEffect, useCallback, useMemo, useState } from "react";
-import { IconSearch } from "common/components/Icons";
+import {
+  NotificationError,
+  SimpleNotificationError
+} from "../../../../Apps/common/Components/Error/Error";
+import {
+  IconLoading,
+  IconSearch
+} from "../../../../Apps/common/Components/Icons/Icons";
+import RedErrorMessage from "../../../../common/components/RedErrorMessage";
 import { constantCase } from "constant-case";
-import { InlineError } from "common/components/Error";
-import RedErrorMessage from "common/components/RedErrorMessage";
+import { Field, useField, useFormikContext } from "formik";
+import { isFRVat, isVat, isForeignVat } from "@td/constants";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
+
+import { debounce } from "../../../../common/helper";
+import {
+  BsdasriTransporterInput,
+  BsdaTransporterInput,
+  BsvhuTransporterInput,
+  CompanySearchResult,
+  CompanySearchPrivate,
+  FavoriteType,
+  FormCompany,
+  Maybe,
+  Query,
+  QueryCompanyPrivateInfosArgs,
+  QueryFavoritesArgs,
+  QuerySearchCompaniesArgs,
+  TransporterInput,
+  BsffTransporterInput,
+  TransportMode
+} from "@td/codegen-ui";
+import { useParams } from "react-router-dom";
+import { v4 as uuidv4 } from "uuid";
 import CompanyResults from "./CompanyResults";
 import styles from "./CompanySelector.module.scss";
-import { FAVORITES, SEARCH_COMPANIES } from "./query";
 import {
-  Query,
-  QuerySearchCompaniesArgs,
-  FormCompany,
-  QueryFavoritesArgs,
-  FavoriteType,
-  CompanyFavorite,
-} from "generated/graphql/types";
-import CountrySelector from "./CountrySelector";
-import { v4 as uuidv4 } from "uuid";
-import { useParams } from "react-router-dom";
+  COMPANY_SELECTOR_PRIVATE_INFOS,
+  FAVORITES,
+  SEARCH_COMPANIES
+} from "../../../../Apps/common/queries/company/query";
+import TransporterRecepisseWrapper from "./TransporterRecepisseWrapper";
+import { getInitialCompany } from "../../../../Apps/common/data/initialState";
+
+const DEBOUNCE_DELAY = 500;
 
 interface CompanySelectorProps {
   name: string;
-  onCompanySelected?: (company: CompanyFavorite) => void;
+  // Callback for the host component
+  // Called with empty parameter to un-select a company
+  onCompanySelected?: (
+    company?: CompanySearchResult | CompanySearchPrivate
+  ) => void;
+  onCompanyPrivateInfos?: (company?: CompanySearchPrivate) => void;
   allowForeignCompanies?: boolean;
+  registeredOnlyCompanies?: boolean;
   heading?: string;
   disabled?: boolean;
   optionalMail?: boolean;
+  skipFavorite?: boolean;
+  isBsdaTransporter?: boolean;
+  // whether the company is optional
+  optional?: boolean;
+  initialAutoSelectFirstCompany?: boolean;
 }
 
 export default function CompanySelector({
   name,
   onCompanySelected,
-  allowForeignCompanies,
+  allowForeignCompanies = false,
+  registeredOnlyCompanies = false,
   heading,
   disabled,
   optionalMail = false,
+  skipFavorite = false,
+  isBsdaTransporter = false,
+  optional = false,
+  initialAutoSelectFirstCompany = true,
+  onCompanyPrivateInfos = undefined
 }: CompanySelectorProps) {
+  // siret is the current active company
   const { siret } = useParams<{ siret: string }>();
   const [uniqId] = useState(() => uuidv4());
   const [field] = useField<FormCompany>({ name });
-  const { setFieldValue, setFieldTouched } = useFormikContext();
-  const [clue, setClue] = useState("");
-  const [department, setDepartement] = useState<null | string>(null);
-  const [
-    searchCompaniesQuery,
-    { loading: isLoadingSearch, data: searchData },
-  ] = useLazyQuery<Pick<Query, "searchCompanies">, QuerySearchCompaniesArgs>(
-    SEARCH_COMPANIES
+
+  const [hasAutoselected, setHasAutoselected] = useState(false);
+  const [selectedCompanyDetails, setSelectedCompanyDetails] = useState({
+    name: field.value?.name,
+    address: field.value?.address
+  });
+  const { setFieldError, setFieldValue, setFieldTouched, values } =
+    useFormikContext<{
+      transporter:
+        | Maybe<TransporterInput>
+        | Maybe<BsdaTransporterInput>
+        | Maybe<BsdasriTransporterInput>
+        | Maybe<BsvhuTransporterInput>
+        | Maybe<BsffTransporterInput>;
+    }>();
+
+  const isRoadTransport =
+    (values.transporter as TransporterInput)?.mode === TransportMode.Road ||
+    (
+      values.transporter as
+        | BsdaTransporterInput
+        | BsdasriTransporterInput
+        | BsffTransporterInput
+    )?.transport?.mode === TransportMode.Road;
+
+  // determine if the current Form company is foreign
+  const [isForeignCompany, setIsForeignCompany] = useState(
+    (field.value?.country && field.value?.country !== "FR") ||
+      isForeignVat(field.value?.vatNumber!)
   );
-  // The favorite type is inferred from the name's prefix
+  // this 2 input ref are to cross-link the value of the input in both search input and department input
+  const departmentInputRef = useRef<HTMLInputElement>(null);
+  const clueInputRef = useRef<HTMLInputElement>(null);
+  const [mustBeRegistered, setMustBeRegistered] = useState<boolean>(false);
+  const [searchResults, setSearchResults] = useState<CompanySearchResult[]>([]);
+  const [
+    displayForeignCompanyWithUnknownInfos,
+    setDisplayForeignCompanyWithUnknownInfos
+  ] = useState<boolean>(false);
+
+  // Memoize for changes in field.value.siret and field.value.orgId
+  // To support both FormCompany and Intermediary (which doesn't have orgId)
+  const orgId = useMemo(
+    () => field.value?.orgId ?? field.value?.siret ?? null,
+    [field.value?.siret, field.value?.orgId]
+  );
+  // Favorite type is deduced from the field prefix (transporter, emitter, etc)
   const favoriteType = constantCase(field.name.split(".")[0]) as FavoriteType;
   const {
     loading: isLoadingFavorites,
     data: favoritesData,
-    error: favoritesError,
-  } = useQuery<Pick<Query, "favorites">, QueryFavoritesArgs>(FAVORITES, {
-    variables: {
-      siret,
-      type: favoriteType,
-    },
-    // Skip this query if the name's prefix is not a known favorite
-    skip: !Object.values(FavoriteType).includes(favoriteType),
-  });
-  const selectCompany = useCallback(
-    (company: CompanyFavorite) => {
-      if (disabled) return;
-      setFieldValue(`${field.name}.siret`, company.siret);
-
-      const fields = {
-        name: company.name,
-        address: company.address,
-        contact: company.contact,
-        phone: company.phone,
-        mail: company.mail,
-      };
-      Object.keys(fields)
-        .filter(key => fields[key])
-        .forEach(key => {
-          setFieldValue(`${field.name}.${key}`, fields[key]);
-        });
-
-      if (onCompanySelected) {
-        onCompanySelected(company);
-      }
-    },
-    [field.name, setFieldValue, onCompanySelected, disabled]
-  );
-
-  const searchResults: CompanyFavorite[] = useMemo(
-    () =>
-      searchData?.searchCompanies.map(
-        ({
-          siret,
-          name,
-          address,
-          transporterReceipt,
-          traderReceipt,
-          brokerReceipt,
-          vhuAgrementDemolisseur,
-          vhuAgrementBroyeur,
-        }) => ({
-          // convert CompanySearchResult to CompanyFavorite
-          siret,
-          name,
-          address,
-          transporterReceipt,
-          traderReceipt,
-          brokerReceipt,
-          vhuAgrementDemolisseur,
-          vhuAgrementBroyeur,
-
-          __typename: "CompanyFavorite",
-          contact: "",
-          phone: "",
-          mail: "",
-        })
-      ) ??
-      favoritesData?.favorites ??
-      [],
-    [searchData, favoritesData]
-  );
-
-  useEffect(() => {
-    if (searchResults.length === 1 && field.value.siret === "") {
-      selectCompany(searchResults[0]);
+    error: favoritesError
+  } = useQuery<Pick<Query, "favorites">, QueryFavoritesArgs>(
+    FAVORITES(favoriteType),
+    {
+      variables: {
+        orgId: siret!,
+        type: Object.values(FavoriteType).includes(favoriteType)
+          ? favoriteType
+          : FavoriteType.Emitter,
+        allowForeignCompanies
+      },
+      skip: skipFavorite || !siret
     }
-  }, [searchResults, field.value.siret, selectCompany]);
+  );
 
+  /**
+   * SearchCompanies can search by name, vat or siret.
+   */
+  const [
+    searchCompaniesQuery,
+    { loading: isLoadingSearch, data: searchData, error }
+  ] = useLazyQuery<Pick<Query, "searchCompanies">, QuerySearchCompaniesArgs>(
+    SEARCH_COMPANIES
+  );
+
+  /**
+   * Merge searchCompanies et favoritesData
+   */
   useEffect(() => {
-    const timeoutID = setTimeout(() => {
-      if (clue.length < 3) {
+    if (disabled) return;
+
+    const searchCompanies = searchData?.searchCompanies ?? [];
+    const favorites = favoritesData?.favorites ?? [];
+
+    const reshapedFavorites = favorites.filter(
+      fav =>
+        !skipFavorite &&
+        !searchCompanies.some(company => company.orgId === fav.orgId)
+    );
+
+    const reshapedSearchResults =
+      searchCompanies.map(company => ({
+        ...company,
+        codePaysEtrangerEtablissement:
+          company.codePaysEtrangerEtablissement || "FR"
+      })) ?? [];
+
+    const results = [...reshapedSearchResults, ...reshapedFavorites];
+    setSearchResults(results);
+  }, [favoritesData, searchData, disabled, skipFavorite]);
+
+  /**
+   * CompanyPrivateInfos pour completer les informations
+   * de la Company courante enregistrée dans le BSD à son ouverture
+   */
+  const { data: companyPrivateData, loading: isLoadingCompanyPrivateData } =
+    useQuery<Pick<Query, "companyPrivateInfos">, QueryCompanyPrivateInfosArgs>(
+      COMPANY_SELECTOR_PRIVATE_INFOS,
+      {
+        variables: {
+          // Compatibility with intermediaries that don't have orgId
+          clue: orgId!
+        },
+        skip: !orgId
+      }
+    );
+
+  /**
+   * Memoize companyPrivateData to avoid too many effects and renders
+   */
+  const savedCompanyInfos = useMemo(
+    () => companyPrivateData?.companyPrivateInfos,
+    [companyPrivateData]
+  );
+
+  /**
+   * Fonctions du changement de companyPrivateData
+   */
+  useEffect(() => {
+    if (savedCompanyInfos) {
+      // propagate to parent components
+      onCompanyPrivateInfos?.(savedCompanyInfos);
+      // hack to auto-complete the country
+      if (savedCompanyInfos?.codePaysEtrangerEtablissement) {
+        setFieldValue(
+          `${field.name}.country`,
+          savedCompanyInfos.codePaysEtrangerEtablissement
+        );
+      }
+    }
+  }, [savedCompanyInfos, field.name, onCompanyPrivateInfos, setFieldValue]);
+
+  /**
+   * Selection d'un établissement dans le formulaire
+   */
+
+  const selectCompany = useCallback(
+    (company?: CompanySearchResult) => {
+      function isUnknownCompanyName(companyName?: string): boolean {
+        return companyName === "---" || companyName === "";
+      }
+
+      if (disabled) return;
+      // empty the fields
+      if (!company) {
+        setFieldValue(field.name, getInitialCompany());
+        setFieldTouched(`${field.name}`, true, true);
+        onCompanySelected?.();
         return;
       }
 
-      searchCompaniesQuery({
+      // Side effects
+      const notVoidCompany = Object.keys(company).length !== 0; // unselect returns emtpy object {}
+      setMustBeRegistered(
+        notVoidCompany && !company.isRegistered && registeredOnlyCompanies
+      );
+
+      // Assure la mise à jour des variables d'etat d'affichage des sous-parties du Form
+      setDisplayForeignCompanyWithUnknownInfos(
+        isForeignVat(company.vatNumber!) && isUnknownCompanyName(company.name!)
+      );
+
+      setIsForeignCompany(isForeignVat(company.vatNumber!));
+      // Prépare la mise à jour du Form
+      const fields: FormCompany = {
+        orgId: company.orgId,
+        siret: company.siret,
+        vatNumber: company.vatNumber,
+        name:
+          company.name && !isUnknownCompanyName(company.name)
+            ? company.name
+            : "",
+        address: company.address ?? "",
+        contact: company.contact ?? "",
+        phone: company.contactPhone ?? "",
+        mail: company.contactEmail ?? "",
+        country: company.codePaysEtrangerEtablissement
+      };
+
+      Object.keys(fields).forEach(key => {
+        setFieldValue(`${field.name}.${key}`, fields[key]);
+      });
+      setFieldTouched(`${field.name}`, true, true);
+      onCompanySelected?.(company);
+
+      setSelectedCompanyDetails({
+        name: company.name,
+        address: company.address
+      });
+    },
+    [
+      setSelectedCompanyDetails,
+      onCompanySelected,
+      setFieldTouched,
+      setFieldValue,
+      setIsForeignCompany,
+      setDisplayForeignCompanyWithUnknownInfos,
+      setMustBeRegistered,
+      disabled,
+      field.name,
+      registeredOnlyCompanies
+    ]
+  );
+
+  useEffect(() => {
+    // If the form is empty, we auto-select the first result.
+    if (
+      initialAutoSelectFirstCompany &&
+      !optional &&
+      searchResults.length >= 1 &&
+      !orgId &&
+      !hasAutoselected
+    ) {
+      setHasAutoselected(true);
+      selectCompany(searchResults[0]);
+    }
+  }, [
+    searchResults,
+    initialAutoSelectFirstCompany,
+    optional,
+    orgId,
+    selectCompany,
+    hasAutoselected
+  ]);
+
+  const onSearch = useMemo(() => {
+    async function triggerSearch(
+      clue: string | undefined,
+      department: string | undefined
+    ) {
+      if (!clue || clue.length < 3) return;
+
+      const isValidVat = isVat(clue);
+
+      if (isValidVat) {
+        if (isFRVat(clue)) {
+          setFieldTouched(`${field.name}.siret`);
+          return setFieldError(
+            `${field.name}.siret`,
+            "Vous devez identifier un établissement français par son numéro de SIRET (14 chiffres) et pas par son numéro de TVA"
+          );
+        }
+        if (!allowForeignCompanies) {
+          setFieldTouched(`${field.name}.siret`);
+          return setFieldError(
+            `${field.name}.siret`,
+            "Vous ne pouvez pas chercher un établissement par son numéro de TVA, mais seulement par nom ou numéro de SIRET"
+          );
+        }
+      }
+      await searchCompaniesQuery({
         variables: {
           clue,
-          department: department,
-        },
+          ...(department && department.length >= 2 && { department })
+        }
       });
-    }, 300);
+    }
 
-    return () => {
-      clearTimeout(timeoutID);
-    };
-  }, [clue, department, searchCompaniesQuery]);
+    return debounce(triggerSearch, DEBOUNCE_DELAY);
+  }, [
+    setFieldError,
+    setFieldTouched,
+    searchCompaniesQuery,
+    field.name,
+    allowForeignCompanies
+  ]);
 
-  if (isLoadingFavorites) {
-    return <p>Chargement...</p>;
-  }
+  // Disable the name field for foreign companies whose name is filled
+  const disableNameField =
+    disabled ||
+    (!!selectedCompanyDetails.name && !displayForeignCompanyWithUnknownInfos);
 
-  if (favoritesError) {
-    return <InlineError apolloError={favoritesError} />;
-  }
+  // Disable the address field for foreign companies whose address is filled
+  const disableAddressField =
+    disabled ||
+    (!!selectedCompanyDetails.address &&
+      !displayForeignCompanyWithUnknownInfos);
 
   return (
-    <div className="tw-my-6">
-      {!!heading && <h4 className="form__section-heading">{heading}</h4>}
-      {field.value.siret != null && (
-        <>
-          <div className={styles.companySelectorSearchFields}>
-            <div className={styles.companySelectorSearchGroup}>
-              <label htmlFor={`siret-${uniqId}`}>
-                Numéro de SIRET ou nom de l'entreprise
-              </label>
-              <div className={styles.companySelectorSearchField}>
-                <input
-                  id={`siret-${uniqId}`}
-                  type="text"
-                  className={`td-input ${styles.companySelectorSearchSiret}`}
-                  onChange={event => setClue(event.target.value)}
-                  onBlur={() => setFieldTouched(`${field.name}.siret`, true)}
-                  disabled={disabled}
-                />
-                <i className={styles.searchIcon} aria-label="Recherche">
-                  <IconSearch size="12px" />
-                </i>
-              </div>
-            </div>
-
-            <div className={styles.companySelectorSearchGroup}>
-              <label htmlFor={`geo-${uniqId}`}>
-                Département ou code postal
-              </label>
-
+    <>
+      {favoritesError && (
+        <NotificationError
+          apolloError={favoritesError}
+          message={error => error.message}
+        />
+      )}
+      {error && (
+        <NotificationError
+          apolloError={error}
+          message={error => {
+            if (
+              error.graphQLErrors.length &&
+              error.graphQLErrors[0].extensions?.code === "FORBIDDEN"
+            ) {
+              return (
+                `Nous n'avons pas pu récupérer les informations.` +
+                `Veuillez nous contacter via ` +
+                (
+                  <a
+                    className="fr-link force-external-link-content force-underline-link"
+                    href="https://faq.trackdechets.fr/pour-aller-plus-loin/assistance"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    la FAQ
+                  </a>
+                ) +
+                ` pour pouvoir procéder à la création de l'établissement`
+              );
+            }
+            return error.message;
+          }}
+        />
+      )}
+      <div className="tw-my-6">
+        {!!heading && <h4 className="form__section-heading">{heading}</h4>}
+        <div className="tw-flex tw-justify-between">
+          <div className="tw-w-3/4 tw-flex tw-flex-col tw-justify-between">
+            <label htmlFor={`siret-${uniqId}`}>
+              Nom ou numéro de SIRET de l'établissement
+              {allowForeignCompanies ? (
+                <small className="tw-block">
+                  ou numéro de TVA intracommunautaire pour les entreprises
+                  étrangères
+                </small>
+              ) : (
+                ""
+              )}
+            </label>
+            <div className="tw-flex tw-items-center tw-mr-4">
               <input
-                id={`geo-${uniqId}`}
+                id={`siret-${uniqId}`}
                 type="text"
-                className={`td-input ${styles.companySelectorSearchGeo}`}
-                onChange={event => setDepartement(event.target.value)}
+                className="td-input tw-w-2/3"
+                ref={clueInputRef}
+                onChange={event => {
+                  onSearch(
+                    event.target.value,
+                    departmentInputRef.current?.value
+                  );
+                }}
                 disabled={disabled}
               />
+              <i className={styles.searchIcon} aria-label="Recherche">
+                {isLoadingSearch || isLoadingFavorites ? (
+                  <IconLoading size="18px" />
+                ) : (
+                  <IconSearch size="16px" />
+                )}
+              </i>
             </div>
           </div>
 
-          {isLoadingSearch && <span>Chargement...</span>}
+          <div className="tw-w-1/4 tw-flex tw-flex-col tw-justify-between">
+            <label htmlFor={`geo-${uniqId}`}>
+              Département ou code postal
+              <small className="tw-block">si l'entreprise est française</small>
+            </label>
 
-          <CompanyResults
-            onSelect={company => selectCompany(company)}
-            results={searchResults}
-            selectedItem={{
-              ...field.value,
-
-              // Convert FormCompany to CompanyFavorite
-              __typename: "CompanyFavorite",
-              transporterReceipt: null,
-              traderReceipt: null,
-              brokerReceipt: null,
-              vhuAgrementBroyeur: null,
-              vhuAgrementDemolisseur: null,
-            }}
+            <input
+              id={`geo-${uniqId}`}
+              type="text"
+              className="td-input"
+              ref={departmentInputRef}
+              onChange={event => {
+                onSearch(clueInputRef.current?.value, event.target.value);
+              }}
+              disabled={disabled}
+            />
+          </div>
+        </div>
+        {displayForeignCompanyWithUnknownInfos && (
+          <SimpleNotificationError
+            message={
+              <span>
+                Cet établissement existe mais nous ne pouvons pas remplir
+                automatiquement le formulaire car les informations sont cachées
+                par le service de recherche administratif externe à
+                Trackdéchets.{" "}
+                <b>Merci de compléter les informations dans le formulaire.</b>
+              </span>
+            }
           />
-        </>
-      )}
-
-      <RedErrorMessage name={`${field.name}.siret`} />
-
-      {allowForeignCompanies && (
-        <label>
-          <input
-            type="checkbox"
-            className="td-checkbox"
-            onChange={event => {
-              setFieldValue(
-                `${field.name}.siret`,
-                event.target.checked ? null : ""
-              );
-            }}
-            checked={field.value.siret == null}
-            disabled={disabled}
-          />
-          L'entreprise est à l'étranger
-        </label>
-      )}
-
-      <div className="form__row">
-        {field.value.siret == null && (
-          <>
-            <label>
-              Nom de l'entreprise
-              <Field
-                type="text"
-                className="td-input"
-                name={`${field.name}.name`}
-                placeholder="Nom"
-                disabled={disabled}
-              />
-            </label>
-
-            <RedErrorMessage name={`${field.name}.address`} />
-
-            <label>
-              Adresse de l'entreprise
-              <Field
-                type="text"
-                className="td-input"
-                name={`${field.name}.address`}
-                placeholder="Adresse"
-                disabled={disabled}
-              />
-            </label>
-
-            <RedErrorMessage name={`${field.name}.address`} />
-
-            <label>
-              Pays de l'entreprise
-              <Field name={`${field.name}.country`} disabled={disabled}>
-                {({ field, form }) => (
-                  <CountrySelector
-                    {...field}
-                    onChange={code => form.setFieldValue(field.name, code)}
-                    value={field.value}
-                    placeholder="Pays"
-                  />
-                )}
-              </Field>
-            </label>
-
-            <RedErrorMessage name={`${field.name}.country`} />
-          </>
         )}
-        <label>
-          Personne à contacter
-          <Field
-            type="text"
-            name={`${field.name}.contact`}
-            placeholder="NOM Prénom"
-            className="td-input"
-            disabled={disabled}
+        {!isLoadingFavorites && !isLoadingSearch && !orgId && !optional && (
+          <SimpleNotificationError
+            message={
+              <span>
+                {isBsdaTransporter
+                  ? "La sélection d'un transporteur sera obligatoire avant la signature de l'entreprise de travaux"
+                  : "La sélection d'un établissement est obligatoire"}
+              </span>
+            }
           />
-        </label>
-
-        <RedErrorMessage name={`${field.name}.contact`} />
-      </div>
-      <div className="form__row">
-        <label>
-          Téléphone ou Fax
-          <Field
-            type="text"
-            name={`${field.name}.phone`}
-            placeholder="Numéro"
-            className={`td-input ${styles.companySelectorSearchPhone}`}
-            disabled={disabled}
+        )}
+        {mustBeRegistered && (
+          <SimpleNotificationError
+            message={
+              <span>
+                Cet établissement n'est pas inscrit sur Trackdéchets, nous ne
+                pouvons pas l'ajouter dans ce formulaire
+              </span>
+            }
           />
-        </label>
-
-        <RedErrorMessage name={`${field.name}.phone`} />
-      </div>
-      <div className="form__row">
-        <label>
-          Mail {optionalMail ? "(optionnel)" : null}
-          <Field
-            type="email"
-            name={`${field.name}.mail`}
-            className={`td-input ${styles.companySelectorSearchEmail}`}
-            disabled={disabled}
+        )}
+        {searchData?.searchCompanies.length === 0 && !isLoadingSearch && (
+          <span>Aucun établissement ne correspond à cette recherche...</span>
+        )}
+        <RedErrorMessage name={`${field.name}.siret`} />
+        {!isLoadingCompanyPrivateData && (
+          <CompanyResults<CompanySearchResult>
+            onSelect={company => selectCompany(company)}
+            onUnselect={() => selectCompany()}
+            results={searchResults}
+            selectedItem={
+              {
+                orgId,
+                siret: field.value?.siret,
+                vatNumber: field.value?.vatNumber,
+                name: field.value?.name,
+                address: field.value?.address,
+                codePaysEtrangerEtablissement: field.value?.country,
+                // complete with companyPrivateInfos data
+                ...(savedCompanyInfos && {
+                  ...savedCompanyInfos
+                })
+              } as CompanySearchResult
+            }
           />
-        </label>
+        )}
+        <div className="form__row">
+          {allowForeignCompanies && isForeignCompany && (
+            <>
+              <label>
+                Nom de l'entreprise
+                <Field
+                  type="text"
+                  className="td-input"
+                  name={`${field.name}.name`}
+                  placeholder="Nom"
+                  disabled={disableNameField}
+                />
+              </label>
 
-        <RedErrorMessage name={`${field.name}.mail`} />
+              <RedErrorMessage name={`${field.name}.name`} />
+
+              <label>
+                Adresse de l'entreprise
+                <Field
+                  type="text"
+                  className="td-input"
+                  name={`${field.name}.address`}
+                  placeholder="Adresse"
+                  disabled={disableAddressField}
+                />
+              </label>
+
+              <RedErrorMessage name={`${field.name}.address`} />
+              <label>
+                Pays de l'entreprise
+                <Field
+                  type="text"
+                  className="td-input"
+                  name={`${field.name}.country`}
+                  disabled={true}
+                />
+              </label>
+
+              <RedErrorMessage name={`${field.name}.country`} />
+            </>
+          )}
+          <label>
+            Personne à contacter
+            <Field
+              type="text"
+              name={`${field.name}.contact`}
+              placeholder="NOM Prénom"
+              className="td-input"
+              disabled={disabled}
+            />
+          </label>
+          <RedErrorMessage name={`${field.name}.contact`} />
+        </div>
+        <div className="form__row">
+          <label>
+            Téléphone ou Fax
+            <Field
+              type="text"
+              name={`${field.name}.phone`}
+              placeholder="Numéro"
+              className={`td-input ${styles.companySelectorSearchPhone}`}
+              disabled={disabled}
+            />
+          </label>
+
+          <RedErrorMessage name={`${field.name}.phone`} />
+        </div>
+        <div className="form__row">
+          <label>
+            Mail {optionalMail ? "(optionnel)" : null}
+            <Field
+              type="email"
+              name={`${field.name}.mail`}
+              className={`td-input ${styles.companySelectorSearchEmail}`}
+              disabled={disabled}
+            />
+          </label>
+
+          <RedErrorMessage name={`${field.name}.mail`} />
+        </div>
+
+        {values.transporter &&
+          !!orgId &&
+          name === "transporter.company" &&
+          isRoadTransport && (
+            <TransporterRecepisseWrapper transporter={values.transporter!} />
+          )}
       </div>
-    </div>
+    </>
   );
 }

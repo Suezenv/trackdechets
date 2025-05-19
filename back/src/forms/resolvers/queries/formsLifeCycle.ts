@@ -1,9 +1,10 @@
-import { ForbiddenError, UserInputError } from "apollo-server-express";
-import prisma from "../../../prisma";
+import { prisma } from "@td/prisma";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { QueryResolvers } from "../../../generated/graphql/types";
+import type { QueryResolvers } from "@td/codegen-back";
 import { getFormsRightFilter } from "../../database";
-import { getConnectionsArgs } from "../../pagination";
+import { getConnection } from "../../../common/pagination";
+import { getUserRoles } from "../../../permissions";
+import { ForbiddenError, UserInputError } from "../../../common/errors";
 
 const PAGINATE_BY = 100;
 
@@ -14,23 +15,17 @@ const formsLifeCycleResolver: QueryResolvers["formsLifeCycle"] = async (
 ) => {
   const user = checkIsAuthenticated(context);
 
-  const userCompanies = await prisma.companyAssociation
-    .findMany({
-      where: { user: { id: user.id } },
-      include: {
-        company: { select: { id: true, siret: true } }
-      }
-    })
-    .then(associations => associations.map(a => a.company));
+  const userRoles = await getUserRoles(user.id);
+  const userCompaniesSiretOrVat = Object.keys(userRoles);
 
   // User must be associated with a company
-  if (!userCompanies.length) {
+  if (!userCompaniesSiretOrVat.length) {
     throw new ForbiddenError(
       "Vous n'êtes pas autorisé à consulter le cycle de vie des bordereaux."
     );
   }
   // If user is associated with several companies, siret is mandatory
-  if (userCompanies.length > 1 && !siret) {
+  if (userCompaniesSiretOrVat.length > 1 && !siret) {
     throw new UserInputError(
       "Vous devez préciser pour quel siret vous souhaitez consulter",
       {
@@ -39,22 +34,21 @@ const formsLifeCycleResolver: QueryResolvers["formsLifeCycle"] = async (
     );
   }
   // If requested siret does not belong to user, raise an error
-  if (!!siret && !userCompanies.map(c => c.siret).includes(siret)) {
+  if (!!siret && !userCompaniesSiretOrVat.includes(siret)) {
     throw new ForbiddenError(
       "Vous n'avez pas le droit d'accéder au siret précisé"
     );
   }
-  // Select user company matching siret or get the first
-  const selectedCompany =
-    userCompanies.find(uc => uc.siret === siret) || userCompanies.shift();
+  // Select user company siret matching siret or get the first
+  const selectedSiret = siret || userCompaniesSiretOrVat.shift();
 
-  const formsFilter = getFormsRightFilter(selectedCompany.siret);
+  const formsFilter = getFormsRightFilter(selectedSiret!);
 
-  const connectionArgs = getConnectionsArgs({
-    cursorAfter,
-    cursorBefore,
+  const gqlPaginationArgs = {
+    after: cursorAfter,
+    before: cursorBefore,
     defaultPaginateBy: PAGINATE_BY
-  });
+  };
 
   const where = {
     loggedAt: {
@@ -62,39 +56,38 @@ const formsLifeCycleResolver: QueryResolvers["formsLifeCycle"] = async (
       ...(loggedAfter && { gte: new Date(loggedAfter) }),
       ...(loggedBefore && { lte: new Date(loggedBefore) })
     },
-    form: { ...formsFilter, isDeleted: false, id: formId }
+    form: {
+      ...formsFilter,
+      isDeleted: false,
+      id: formId !== null ? formId : undefined
+    }
   };
 
-  const count = await prisma.statusLog.count({ where });
-  const statusLogs = await prisma.statusLog.findMany({
-    orderBy: { loggedAt: "desc" },
-    ...connectionArgs,
-    take: parseInt(`${cursorBefore ? "-" : "+"}${PAGINATE_BY}`, 10),
-    ...(cursorAfter && { cursor: { id: cursorAfter } }),
-    ...(cursorBefore && { cursor: { id: cursorBefore } }),
-    where,
-    include: {
-      form: { select: { id: true, readableId: true } },
-      user: { select: { id: true, email: true } }
-    }
+  const totalCount = await prisma.statusLog.count({ where });
+
+  const { pageInfo, edges } = await getConnection({
+    totalCount,
+    findMany: prismaPaginationArgs =>
+      prisma.statusLog.findMany({
+        where,
+        ...prismaPaginationArgs,
+        orderBy: { loggedAt: "desc" },
+        include: {
+          form: { select: { id: true, readableId: true } },
+          user: { select: { id: true, email: true } }
+        }
+      }),
+    formatNode: statusLog => statusLog,
+    ...gqlPaginationArgs
   });
 
-  const startCursor = statusLogs.length > 0 ? statusLogs[0].id : undefined;
-  const endCursor =
-    statusLogs.length > 0 ? statusLogs[statusLogs.length - 1].id : undefined;
-
-  const hasNextPage = true; // TODO-PRISMA
-  const hasPreviousPage = true; // TODO-PRISMA
-
   return {
-    statusLogs,
-    pageInfo: {
-      startCursor,
-      endCursor,
-      hasNextPage,
-      hasPreviousPage
-    },
-    count
+    statusLogs: edges.map(({ node }) => node),
+    count: totalCount,
+    hasNextPage: pageInfo.hasNextPage,
+    hasPreviousPage: pageInfo.hasPreviousPage,
+    startCursor: pageInfo.startCursor,
+    endCursor: pageInfo.endCursor
   };
 };
 

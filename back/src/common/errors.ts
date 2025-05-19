@@ -1,9 +1,4 @@
-import {
-  ApolloError,
-  AuthenticationError,
-  UserInputError,
-  ForbiddenError
-} from "apollo-server-express";
+import { GraphQLError } from "graphql";
 
 /**
  * Apollo built-in error code
@@ -17,13 +12,49 @@ export enum ErrorCode {
   FORBIDDEN = "FORBIDDEN",
   BAD_USER_INPUT = "BAD_USER_INPUT",
   TOO_MANY_REQUESTS = "TOO_MANY_REQUESTS",
-  INTERNAL_SERVER_ERROR = "INTERNAL_SERVER_ERROR"
+  INTERNAL_SERVER_ERROR = "INTERNAL_SERVER_ERROR",
+  EXTERNAL_SERVICE_ERROR = "EXTERNAL_SERVICE_ERROR",
+  GRAPHQL_MAX_OPERATIONS_ERROR = "GRAPHQL_MAX_OPERATIONS_ERROR"
 }
 
-export class TooManyRequestsError extends ApolloError {
-  constructor(message: string, properties?: Record<string, any>) {
-    super(message, "TOO_MANY_REQUESTS", properties);
-    Object.defineProperty(this, "name", { value: "TooManyRequestsError" });
+export class ForbiddenError extends GraphQLError {
+  constructor(message: string) {
+    super(message, {
+      extensions: {
+        code: ErrorCode.FORBIDDEN
+      }
+    });
+  }
+}
+
+export class AuthenticationError extends GraphQLError {
+  constructor(message: string) {
+    super(message, {
+      extensions: {
+        code: ErrorCode.UNAUTHENTICATED
+      }
+    });
+  }
+}
+
+export class UserInputError extends GraphQLError {
+  constructor(message: string, extensions?: Record<string, any>) {
+    super(message, {
+      extensions: {
+        ...extensions,
+        code: ErrorCode.BAD_USER_INPUT
+      }
+    });
+  }
+}
+
+export class TooManyRequestsError extends GraphQLError {
+  constructor(message: string) {
+    super(message, {
+      extensions: {
+        code: ErrorCode.TOO_MANY_REQUESTS
+      }
+    });
   }
 }
 
@@ -51,11 +82,12 @@ export class MissingSirets extends UserInputError {
   }
 }
 
+export const NotCompanyAdminErrorMsg = (siret: string) =>
+  `Vous n'êtes pas administrateur de l'entreprise portant le siret "${siret}".`;
+
 export class NotCompanyAdmin extends ForbiddenError {
   constructor(siret: string) {
-    super(
-      `Vous n'êtes pas administrateur de l'entreprise portant le siret "${siret}".`
-    );
+    super(NotCompanyAdminErrorMsg(siret));
   }
 }
 
@@ -80,5 +112,21 @@ export class NotCompanyMember extends ForbiddenError {
 export class InvalidDateTime extends UserInputError {
   constructor(field: string) {
     super(`Le format de date du champ ${field} est invalide.`);
+  }
+}
+
+export class SealedFieldError extends ForbiddenError {
+  constructor(fields: string[]) {
+    super(
+      `Des champs ont été verrouillés via signature et ne peuvent plus être modifiés : ${fields.join(
+        ", "
+      )}`
+    );
+  }
+}
+
+export class InvaliSecurityCode extends ForbiddenError {
+  constructor() {
+    super("Le code de signature est invalide.");
   }
 }

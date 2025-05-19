@@ -1,19 +1,22 @@
-import { renewSecurityCodeFn as renewSecurityCode } from "../renewSecurityCode";
+import { renewSecurityCodeFn as renewSecurityCode } from "../renewSecurityCodeService";
 import { ErrorCode } from "../../../../common/errors";
-import { renderMail } from "../../../../mailer/templates/renderers";
-import { securityCodeRenewal } from "../../../../mailer/templates";
+import { renderMail, securityCodeRenewal } from "@td/mail";
 import * as utils from "../../../../utils";
+import * as notifications from "../../../../users/notifications";
+import { siretify } from "../../../../__tests__/factories";
 
 const companyMock = jest.fn();
 const updateCompanyMock = jest.fn();
-jest.mock("../../../../prisma", () => ({
-  company: {
-    findUnique: jest.fn((...args) => companyMock(...args)),
-    update: jest.fn((...args) => updateCompanyMock(...args))
+jest.mock("@td/prisma", () => ({
+  prisma: {
+    company: {
+      findUnique: jest.fn((...args) => companyMock(...args)),
+      update: jest.fn((...args) => updateCompanyMock(...args))
+    }
   }
 }));
 
-const randomNumberMock = jest.spyOn(utils, "randomNumber");
+jest.mock("../../../../utils");
 
 const sendMailMock = jest.fn();
 
@@ -21,20 +24,25 @@ jest.mock("../../../../mailer/mailing", () => ({
   sendMail: jest.fn((...args) => sendMailMock(...args))
 }));
 
-const getCompanyActiveUsersMock = jest.fn();
+jest.mock("../../../../users/notifications", () => {
+  return {
+    __esModule: true,
+    ...jest.requireActual("../../../../users/notifications")
+  };
+});
 
-jest.mock("../../../database", () => ({
-  getCompanyActiveUsers: jest.fn(() => getCompanyActiveUsersMock()),
-  convertUrls: v => v
-}));
+const getNotificationSubscribersMock = jest.spyOn(
+  notifications,
+  "getNotificationSubscribers"
+);
 
 describe("renewSecurityCode", () => {
   beforeEach(() => {
     companyMock.mockReset();
     updateCompanyMock.mockReset();
-    randomNumberMock.mockReset();
+    (utils.randomNumber as jest.Mock).mockReset();
     sendMailMock.mockReset();
-    getCompanyActiveUsersMock.mockReset();
+    getNotificationSubscribersMock.mockReset();
   });
 
   it("should throw BAD_USER_INPUT exception if siret is not 14 character long", async () => {
@@ -61,23 +69,26 @@ describe("renewSecurityCode", () => {
     });
 
     updateCompanyMock.mockReturnValueOnce({});
-    randomNumberMock.mockReturnValueOnce(1234).mockReturnValueOnce(2345);
+    (utils.randomNumber as jest.Mock)
+      .mockReturnValueOnce(1234)
+      .mockReturnValueOnce(2345);
 
-    getCompanyActiveUsersMock.mockReturnValueOnce([]);
+    getNotificationSubscribersMock.mockReturnValueOnce([]);
     await renewSecurityCode("85001946400013");
 
-    expect(randomNumberMock).toHaveBeenCalledTimes(2);
+    expect(utils.randomNumber as jest.Mock).toHaveBeenCalledTimes(2);
   });
-  it("should send a notification email to all users and return updated company", async () => {
+  it("should send a notification email to subscribers and return updated company", async () => {
+    const siret = siretify(2);
     companyMock.mockResolvedValueOnce({
       securityCode: 1234,
       name: "Code en stock",
-      siret: "85001946400013"
+      orgId: siret
     });
-    randomNumberMock.mockReturnValueOnce(4567);
+    (utils.randomNumber as jest.Mock).mockReturnValueOnce(4567);
 
     updateCompanyMock.mockReturnValueOnce({
-      siret: "85001946400013",
+      orgId: siret,
       name: "Code en stock",
       securityCode: 4567
     });
@@ -92,18 +103,18 @@ describe("renewSecurityCode", () => {
       variables: {
         company: {
           name: "Code en stock",
-          siret: "85001946400013"
+          orgId: siret
         }
       }
     });
-    getCompanyActiveUsersMock.mockReturnValueOnce(users);
+    getNotificationSubscribersMock.mockReturnValueOnce(users);
 
-    const updatedCompany = await renewSecurityCode("85001946400013");
+    const updatedCompany = await renewSecurityCode(siret);
 
     expect(sendMailMock).toHaveBeenCalledWith(mail);
 
-    expect(updatedCompany).toEqual({
-      siret: "85001946400013",
+    expect(updatedCompany).toMatchObject({
+      orgId: siret,
       name: "Code en stock",
       securityCode: 4567
     });

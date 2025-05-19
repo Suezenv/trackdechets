@@ -1,5 +1,5 @@
 import React from "react";
-import { RedErrorMessage } from "common/components";
+import { RedErrorMessage } from "../../../../../common/components";
 import {
   Mutation,
   Query,
@@ -7,43 +7,53 @@ import {
   QueryBsdasriArgs,
   BsdasriSignatureType,
   MutationUpdateBsdasriArgs,
-} from "generated/graphql/types";
-import { NotificationError, InlineError } from "common/components/Error";
+  Bsdasri,
+  TransportMode
+} from "@td/codegen-ui";
 import {
-  ExtraSignatureType,
-  SignatureType,
-} from "dashboard/components/BSDList/BSDasri/types";
-import Loader from "common/components/Loaders";
+  NotificationError,
+  InlineError
+} from "../../../../../Apps/common/Components/Error/Error";
+import { ExtraSignatureType, SignatureType } from "../types";
+import Loader from "../../../../../Apps/common/Components/Loader/Loaders";
 import { useQuery, useMutation } from "@apollo/client";
-import routes from "common/routes";
-import { useParams, useHistory, generatePath } from "react-router-dom";
-import { GET_DETAIL_DASRI_WITH_METADATA } from "common/queries";
+import { useParams, useNavigate, generatePath } from "react-router-dom";
+import { GET_DETAIL_DASRI_WITH_METADATA } from "../../../../../Apps/common/queries";
 
-import EmptyDetail from "dashboard/detail/common/EmptyDetailView";
+import EmptyDetail from "../../../../detail/common/EmptyDetailView";
 import { Formik, Field, Form } from "formik";
-import { SIGN_BSDASRI, UPDATE_BSDASRI } from "form/bsdasri/utils/queries";
+import {
+  SIGN_BSDASRI,
+  UPDATE_BSDASRI
+} from "../../../../../Apps/common/queries/bsdasri/queries";
 
-import { getComputedState } from "form/common/stepper/GenericStepList";
-import getInitialState from "form/bsdasri/utils/initial-state";
+import { getComputedState } from "../../../../../Apps/Dashboard/Creation/getComputedState";
+import getInitialState from "../../../../../form/bsdasri/utils/initial-state";
 import { signatureValidationSchema, prefillWasteDetails } from "./utils";
 import {
-  ProducerSignatureForm,
+  EmitterSignatureForm,
   TransportSignatureForm,
+  SynthesisTransportSignatureForm,
   ReceptionSignatureForm,
   OperationSignatureForm,
-  removeSections,
+  removeSections
 } from "./PartialForms";
+import routes from "../../../../../Apps/routes";
 
-import { BdasriSummary } from "dashboard/components/BSDList/BSDasri/Summary/BsdasriSummary";
+import { BdasriSummary } from "../Summary/BsdasriSummary";
+import DateInput from "../../../../../form/common/components/custom-inputs/DateInput";
+import { subMonths } from "date-fns";
 
 const forms = {
-  [BsdasriSignatureType.Emission]: ProducerSignatureForm,
+  [BsdasriSignatureType.Emission]: EmitterSignatureForm,
 
   [BsdasriSignatureType.Transport]: TransportSignatureForm,
   [ExtraSignatureType.DirectTakeover]: TransportSignatureForm,
 
+  [ExtraSignatureType.SynthesisTakeOver]: SynthesisTransportSignatureForm,
+
   [BsdasriSignatureType.Reception]: ReceptionSignatureForm,
-  [BsdasriSignatureType.Operation]: OperationSignatureForm,
+  [BsdasriSignatureType.Operation]: OperationSignatureForm
 };
 
 const UpdateForm = ({ signatureType }) => {
@@ -52,62 +62,84 @@ const UpdateForm = ({ signatureType }) => {
 
 const settings: {
   [id: string]: {
-    label: string;
+    getLabel: (dasri: Bsdasri, siret: string) => string;
     signatureType: BsdasriSignatureType;
     validationText: string;
   };
 } = {
   [BsdasriSignatureType.Emission]: {
-    label: "Signature producteur",
+    getLabel: (bsdasri, siret) =>
+      bsdasri.ecoOrganisme?.siret === siret
+        ? "Signature Éco-organisme"
+        : "Signature producteur",
     signatureType: BsdasriSignatureType.Emission,
     validationText:
-      "En signant, je confirme la remise du déchet au transporteur. La signature est horodatée.",
+      "En signant, je confirme la remise du déchet au transporteur."
+  },
+  [ExtraSignatureType.SynthesisTakeOver]: {
+    getLabel: () => "Signature bordereau de synthèse",
+    signatureType: BsdasriSignatureType.Transport,
+    validationText:
+      "En signant, je valide l'emport du bsd de synthèse et des bordereaux associés. Les bordereaux associés ne sont plus modifiables."
   },
 
   [BsdasriSignatureType.Transport]: {
-    label: "Signature transporteur",
+    getLabel: () => "Signature transporteur",
     signatureType: BsdasriSignatureType.Transport,
-    validationText:
-      "En signant, je confirme l'emport du déchet. La signature est horodatée.",
+    validationText: "En signant, je confirme l'emport du déchet."
   },
   [ExtraSignatureType.DirectTakeover]: {
-    label: "Emport direct transporteur",
+    getLabel: () => "Emport direct transporteur",
     signatureType: BsdasriSignatureType.Transport,
     validationText: `L'émetteur de bordereau a autorisé son emport direct, en tant que
     transporteur vous pouvez donc emporter le déchet concerné.
-    En signant, je confirme l'emport du déchet. La signature est horodatée.`,
+    En signant, je confirme l'emport du déchet. La signature est horodatée.`
   },
+
   [BsdasriSignatureType.Reception]: {
-    label: "Signature reception",
+    getLabel: () => "Signature réception",
     signatureType: BsdasriSignatureType.Reception,
     validationText:
-      "En signant, je confirme la réception des déchets pour la quantité indiquée dans ce bordereau. La signature est horodatée.",
+      "En signant, je confirme la réception des déchets pour la quantité indiquée dans ce bordereau."
   },
 
   [BsdasriSignatureType.Operation]: {
-    label: "Signature traitement",
+    getLabel: () => "Signature traitement",
     signatureType: BsdasriSignatureType.Operation,
     validationText:
-      "En signant, je confirme le traitement des déchets pour la quantité indiquée dans ce bordereau. La signature est horodatée.",
-  },
+      "En signant, je confirme le traitement des déchets pour la quantité indiquée dans ce bordereau."
+  }
 };
 
 export function RouteSignBsdasri({
-  UIsignatureType,
+  UIsignatureType
 }: {
   UIsignatureType: SignatureType;
 }) {
   const { id: formId, siret } = useParams<{ id: string; siret: string }>();
-  const history = useHistory();
+  const navigate = useNavigate();
+  const transporterTabRoute = routes.dashboard.transport.toCollect;
+  const transporterTab = {
+    pathname: generatePath(transporterTabRoute, {
+      siret
+    })
+  };
+
+  // in most cases, goBack works, but for combined signature (pred+transporter), it leads to an infinite loop
+  // so we explicitly redirect to transporter tab
+  const nextPage =
+    UIsignatureType === BsdasriSignatureType.Transport
+      ? () => navigate(transporterTab)
+      : () => navigate(-1);
+
   const { error, data, loading } = useQuery<
     Pick<Query, "bsdasri">,
     QueryBsdasriArgs
   >(GET_DETAIL_DASRI_WITH_METADATA, {
     variables: {
-      id: formId,
+      id: formId!
     },
-
-    fetchPolicy: "network-only",
+    fetchPolicy: "no-cache"
   });
   const [updateBsdasri, { error: updateError }] = useMutation<
     Pick<Mutation, "updateBsdasri">,
@@ -130,54 +162,73 @@ export function RouteSignBsdasri({
 
   const config = settings[UIsignatureType];
 
-  const actionTab = {
-    pathname: generatePath(routes.dashboard.bsds.act, {
-      siret,
-    }),
-  };
-
   const formState = prefillWasteDetails(
     getComputedState(getInitialState(), bsdasri)
   );
 
+  // DASRI can be created via API with a null transport mode.
+  // getComputedState() will not fix it because it doesn't override null values,
+  // so fix it here manually
+  if (!formState.transporter.transport.mode) {
+    formState.transporter.transport.mode = TransportMode.Road;
+  }
+
+  const TODAY = new Date();
+
   return (
     <div>
-      <h2 className="td-modal-title">{config.label}</h2>
+      <h2 className="td-modal-title">{config.getLabel(bsdasri, siret!)}</h2>
       <BdasriSummary bsdasri={bsdasri} />
       <Formik
         initialValues={{
           ...formState,
-          signature: { author: "" },
+          signature: { author: "", date: TODAY.toISOString() }
         }}
-        validationSchema={() => signatureValidationSchema(bsdasri)}
+        validationSchema={() => signatureValidationSchema}
         onSubmit={async values => {
           const { id, signature, ...rest } = values;
+
           await updateBsdasri({
             variables: {
               id: id,
               input: {
-                ...removeSections(rest, UIsignatureType),
-              },
-            },
+                ...removeSections(rest, UIsignatureType)
+              }
+            }
           });
 
           await signBsdasri({
             variables: {
               id: bsdasri.id,
-              input: { ...signature, type: config.signatureType },
-            },
+              input: { ...signature, type: config.signatureType }
+            }
           });
-          history.push(actionTab);
+          nextPage();
         }}
       >
-        {({ isSubmitting, handleReset, errors }) => {
+        {({ isSubmitting, handleReset }) => {
           return (
             <Form>
               <div className="notification success">
                 {config.validationText}
               </div>
-
               <UpdateForm signatureType={UIsignatureType} />
+              <div className="form__row">
+                <label>
+                  Date
+                  <div className="td-date-wrapper">
+                    <Field
+                      name="signature.date"
+                      component={DateInput}
+                      minDate={subMonths(TODAY, 2)}
+                      maxDate={TODAY}
+                      required
+                      className="td-input"
+                    />
+                  </div>
+                </label>
+                <RedErrorMessage name="signature.date" />
+              </div>
               <div className="form__row">
                 <label>
                   Nom du signataire
@@ -190,14 +241,13 @@ export function RouteSignBsdasri({
                 </label>
                 <RedErrorMessage name="signature.author" />
               </div>
-
               <div className="form__actions">
                 <button
                   type="button"
                   className="btn btn--outline-primary"
                   onClick={() => {
                     handleReset();
-                    history.push(actionTab);
+                    nextPage();
                   }}
                 >
                   Annuler

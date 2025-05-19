@@ -1,4 +1,4 @@
-import {
+import type {
   Bsdasri as GqlBsdasri,
   BsdasriEmitter,
   BsdasriTransporter,
@@ -27,24 +27,46 @@ import {
   BsdasriWasteInput,
   BsdasriWaste,
   BsdasriEcoOrganisme,
-  BsdasriEcoOrganismeInput
-} from "../generated/graphql/types";
-import { chain, nullIfNoValues, safeInput } from "../forms/form-converter";
-import { Prisma, Bsdasri, BsdasriStatus } from "@prisma/client";
+  BsdasriEcoOrganismeInput,
+  BsdasriIdentification,
+  BsdasriIdentificationInput,
+  BsdasriStatus,
+  BsdasriRevisionRequestContentInput,
+  BsdasriRevisionRequestContent,
+  BsdasriRevisionRequestEmitter,
+  BsdasriRevisionRequestWaste,
+  BsdasriRevisionRequestDestination,
+  BsdasriRevisionRequestOperation,
+  BsdasriRevisionRequestReception
+} from "@td/codegen-back";
+import {
+  nullIfNoValues,
+  safeInput,
+  processDate,
+  chain,
+  undefinedOrDefault,
+  processDecimal
+} from "../common/converter";
+import { Bsdasri, Prisma, BsdasriRevisionRequest } from "@prisma/client";
+import { Decimal } from "decimal.js";
+import { getTransporterCompanyOrgId } from "@td/constants";
+import { BsdasriForElastic } from "./elastic";
 
-export function unflattenBsdasri(bsdasri: Bsdasri): GqlBsdasri {
+export function expandBsdasriFromDB(bsdasri: Bsdasri): GqlBsdasri {
   return {
     id: bsdasri.id,
-    isDraft: bsdasri.isDraft,
+    isDraft: Boolean(bsdasri.isDraft),
     type: bsdasri.type,
-
+    isDuplicateOf: bsdasri.isDuplicateOf,
     waste: nullIfNoValues<BsdasriWaste>({
       code: bsdasri.wasteCode,
       adr: bsdasri.wasteAdr
     }),
     ecoOrganisme: nullIfNoValues<BsdasriEcoOrganisme>({
       name: bsdasri.ecoOrganismeName,
-      siret: bsdasri.ecoOrganismeSiret
+      siret: bsdasri.ecoOrganismeSiret,
+      // do not return false because mandatory siret/name might be null and break query
+      emittedByEcoOrganisme: !!bsdasri.emittedByEcoOrganisme ? true : null
     }),
     emitter: nullIfNoValues<BsdasriEmitter>({
       company: nullIfNoValues<FormCompany>({
@@ -70,8 +92,14 @@ export function unflattenBsdasri(bsdasri: Bsdasri): GqlBsdasri {
         }),
 
         weight: nullIfNoValues<BsdasriWeight>({
-          value: bsdasri.emitterWasteWeightValue,
-          isEstimate: bsdasri.emitterWasteWeightIsEstimate
+          value: bsdasri.emitterWasteWeightValue
+            ? processDecimal(bsdasri.emitterWasteWeightValue).toNumber()
+            : null,
+          // due to a previous validation bug we might have null weigh value and not null isEstimate, thus breaking gql required return type
+
+          isEstimate: !!bsdasri.emitterWasteWeightValue
+            ? bsdasri.emitterWasteWeightIsEstimate
+            : null
         }),
 
         volume: bsdasri.emitterWasteVolume,
@@ -85,7 +113,9 @@ export function unflattenBsdasri(bsdasri: Bsdasri): GqlBsdasri {
     transporter: nullIfNoValues<BsdasriTransporter>({
       company: nullIfNoValues<FormCompany>({
         name: bsdasri.transporterCompanyName,
+        orgId: getTransporterCompanyOrgId(bsdasri),
         siret: bsdasri.transporterCompanySiret,
+        vatNumber: bsdasri.transporterCompanyVatNumber,
         address: bsdasri.transporterCompanyAddress,
         phone: bsdasri.transporterCompanyPhone,
         mail: bsdasri.transporterCompanyMail,
@@ -93,16 +123,23 @@ export function unflattenBsdasri(bsdasri: Bsdasri): GqlBsdasri {
       }),
       customInfo: bsdasri.transporterCustomInfo,
       recepisse: nullIfNoValues({
+        isExempted: bsdasri.transporterRecepisseIsExempted,
         department: bsdasri.transporterRecepisseDepartment,
         number: bsdasri.transporterRecepisseNumber,
-        validityLimit: bsdasri.transporterRecepisseValidityLimit
+        validityLimit: processDate(bsdasri.transporterRecepisseValidityLimit)
       }),
       transport: nullIfNoValues<BsdasriTransport>({
         mode: bsdasri.transporterTransportMode,
         plates: bsdasri.transporterTransportPlates,
+
         weight: nullIfNoValues<BsdasriWeight>({
-          value: bsdasri.transporterWasteWeightValue,
-          isEstimate: bsdasri.transporterWasteWeightIsEstimate
+          value: bsdasri.transporterWasteWeightValue
+            ? processDecimal(bsdasri.transporterWasteWeightValue).toNumber()
+            : null,
+          // due to a previous validation bug we might have null weigh value and not null isEstimate, thus breaking gql required return type
+          isEstimate: !!bsdasri.transporterWasteWeightValue
+            ? bsdasri.transporterWasteWeightIsEstimate
+            : null
         }),
 
         volume: bsdasri.transporterWasteVolume,
@@ -112,8 +149,12 @@ export function unflattenBsdasri(bsdasri: Bsdasri): GqlBsdasri {
           status: bsdasri.transporterAcceptationStatus,
           refusalReason: bsdasri.transporterWasteRefusalReason,
           refusedWeight: bsdasri.transporterWasteRefusedWeightValue
+            ? processDecimal(
+                bsdasri.transporterWasteRefusedWeightValue
+              ).toNumber()
+            : null
         }),
-        takenOverAt: bsdasri.transporterTakenOverAt,
+        takenOverAt: processDate(bsdasri.transporterTakenOverAt),
         handedOverAt: bsdasri.handedOverToRecipientAt,
         signature: nullIfNoValues<BsdasriSignature>({
           author: bsdasri.transporterTransportSignatureAuthor,
@@ -140,8 +181,12 @@ export function unflattenBsdasri(bsdasri: Bsdasri): GqlBsdasri {
           status: bsdasri.destinationReceptionAcceptationStatus,
           refusalReason: bsdasri.destinationReceptionWasteRefusalReason,
           refusedWeight: bsdasri.destinationReceptionWasteRefusedWeightValue
+            ? processDecimal(
+                bsdasri.destinationReceptionWasteRefusedWeightValue
+              ).toNumber()
+            : null
         }),
-        date: bsdasri.destinationReceptionDate,
+        date: processDate(bsdasri.destinationReceptionDate),
         signature: nullIfNoValues<BsdasriSignature>({
           author: bsdasri.destinationReceptionSignatureAuthor,
           date: bsdasri.destinationReceptionSignatureDate
@@ -150,22 +195,68 @@ export function unflattenBsdasri(bsdasri: Bsdasri): GqlBsdasri {
       operation: nullIfNoValues<BsdasriOperation>({
         weight: nullIfNoValues<BsdasriOperationWeight>({
           value: bsdasri.destinationReceptionWasteWeightValue
+            ? processDecimal(
+                bsdasri.destinationReceptionWasteWeightValue
+              ).toNumber()
+            : null
         }),
         code: bsdasri.destinationOperationCode,
-        date: bsdasri.destinationOperationDate,
+        mode: bsdasri.destinationOperationMode,
+        date: processDate(bsdasri.destinationOperationDate),
         signature: nullIfNoValues<BsdasriSignature>({
           author: bsdasri.destinationOperationSignatureAuthor,
-          date: bsdasri.destinationOperationSignatureDate
+          date: processDate(bsdasri.destinationOperationSignatureDate)
         })
       })
     }),
-
-    createdAt: bsdasri.createdAt,
-    updatedAt: bsdasri.updatedAt,
+    identification: nullIfNoValues<BsdasriIdentification>({
+      numbers: bsdasri.identificationNumbers
+    }),
+    createdAt: processDate(bsdasri.createdAt),
+    updatedAt: processDate(bsdasri.updatedAt),
     status: bsdasri.status as BsdasriStatus,
-    metadata: null,
+    metadata: null as any,
     allowDirectTakeOver: null
   };
+}
+
+export function expandBsdasriFromElastic(
+  bsdasri: BsdasriForElastic
+): GqlBsdasri {
+  const expanded = expandBsdasriFromDB(bsdasri);
+
+  // pass down related field to sub-resolvers
+  return {
+    ...expanded,
+    // Dans le cas de la requête `bsds`, et pour des raisons de perfs,
+    // on souhaite utiliser directement les champs `grouping` et `synthesizing`
+    // du BsdasriForElastic (Cf resolver Bsdasri).
+    grouping: bsdasri.grouping,
+    synthesizing: bsdasri.synthesizing,
+    metadata: {
+      latestRevision: computeLatestRevision(
+        bsdasri.bsdasriRevisionRequests
+      ) as any
+    }
+  };
+}
+
+export function computeLatestRevision(
+  revisionRequests: BsdasriRevisionRequest[] | null
+) {
+  if (!revisionRequests || revisionRequests.length === 0) {
+    return null;
+  }
+
+  return revisionRequests.reduce((latestRevision, currentRevision) => {
+    if (
+      !latestRevision ||
+      currentRevision.createdAt > latestRevision.createdAt
+    ) {
+      return currentRevision;
+    }
+    return latestRevision;
+  });
 }
 
 const extractPostalCode = address => {
@@ -184,14 +275,32 @@ const countWasteQuantity = packagingsInfo => {
   return packagingsInfo.map(p => p.quantity).reduce((acc, p) => p + acc, 0);
 };
 
-export const unflattenGroupingDasri = (dasri: Bsdasri): InitialBsdasri => ({
+export const expandGroupingDasri = (dasri: Bsdasri): InitialBsdasri => ({
   id: dasri.id,
 
   quantity: countWasteQuantity(dasri.destinationWastePackagings),
 
   volume: dasri.destinationReceptionWasteVolume,
 
-  weight: dasri.destinationReceptionWasteWeightValue,
+  weight: dasri.destinationReceptionWasteWeightValue
+    ? processDecimal(dasri.destinationReceptionWasteWeightValue).toNumber()
+    : null,
+
+  takenOverAt: processDate(dasri.transporterTakenOverAt),
+
+  postalCode:
+    dasri?.emitterPickupSitePostalCode ??
+    extractPostalCode(dasri?.emitterCompanyAddress)
+});
+
+export const expandSynthesizingDasri = (dasri: Bsdasri): InitialBsdasri => ({
+  id: dasri.id,
+
+  quantity: countWasteQuantity(dasri.emitterWastePackagings),
+
+  volume: dasri.emitterWasteVolume ?? 0,
+
+  weight: processDecimal(dasri?.emitterWasteWeightValue)?.toNumber() ?? 0,
 
   takenOverAt: dasri.transporterTakenOverAt,
 
@@ -199,35 +308,36 @@ export const unflattenGroupingDasri = (dasri: Bsdasri): InitialBsdasri => ({
     dasri?.emitterPickupSitePostalCode ??
     extractPostalCode(dasri?.emitterCompanyAddress)
 });
-type computeTotalVolumeFn = (packagings: BsdasriPackagingsInput[]) => number;
+
+type ComputeTotalVolumeFn = (
+  packagings: BsdasriPackagingsInput[] | null | undefined
+) => number | undefined;
 /**
  * Compute total volume according to packaging infos details
  */
-const computeTotalVolume: computeTotalVolumeFn = packagings => {
+export const computeTotalVolume: ComputeTotalVolumeFn = packagings => {
   if (!packagings) {
     return undefined;
   }
-  return packagings.reduce(
-    (acc, packaging) =>
-      acc + (packaging.volume || 0) * (packaging.quantity || 0),
-    0
-  );
+  return packagings
+    .reduce(
+      (acc, packaging) =>
+        acc.plus((packaging.volume || 0) * (packaging.quantity || 0)),
+      new Decimal(0)
+    )
+    .toNumber();
 };
 
 function flattenEcoOrganismeInput(input: {
-  ecoOrganisme?: BsdasriEcoOrganismeInput;
+  ecoOrganisme?: BsdasriEcoOrganismeInput | null;
 }) {
-  if (!input?.ecoOrganisme) {
-    return null;
-  }
-
   return {
     ecoOrganismeName: chain(input.ecoOrganisme, e => e.name),
     ecoOrganismeSiret: chain(input.ecoOrganisme, e => e.siret)
   };
 }
 
-function flattenEmitterInput(input: { emitter?: BsdasriEmitterInput }) {
+function flattenEmitterInput(input: { emitter?: BsdasriEmitterInput | null }) {
   return {
     emitterCompanyName: chain(input.emitter, e =>
       chain(e.company, c => c.name)
@@ -267,16 +377,21 @@ function flattenEmitterInput(input: { emitter?: BsdasriEmitterInput }) {
   };
 }
 
-function flattenWasteInput(input: { waste?: BsdasriWasteInput }) {
+function flattenWasteInput(input: { waste?: BsdasriWasteInput | null }) {
   if (!input?.waste) {
     return null;
   }
   return {
-    wasteCode: chain(input.waste, w => w.code),
+    wasteCode: chain(input.waste, w =>
+      // we used to accept wrong "18 01 02*" code. Still accept it but convert it to "18 02 02*"
+      w.code === "18 01 02*" ? "18 02 02*" : w.code
+    ),
     wasteAdr: chain(input.waste, w => w.adr)
   };
 }
-function flattenEmissionInput(input: { emission?: BsdasriEmissionInput }) {
+function flattenEmissionInput(
+  input?: { emission?: BsdasriEmissionInput | null } | null
+) {
   if (!input?.emission) {
     return null;
   }
@@ -290,11 +405,11 @@ function flattenEmissionInput(input: { emission?: BsdasriEmissionInput }) {
       chain(e.weight, q => q.isEstimate)
     ),
     emitterWasteVolume: computeTotalVolume(emitterWastePackagings),
-    emitterWastePackagings
+    emitterWastePackagings: undefinedOrDefault(emitterWastePackagings, [])
   };
 }
 function flattenTransporterInput(input: {
-  transporter?: BsdasriTransporterInput;
+  transporter?: BsdasriTransporterInput | null;
 }) {
   return safeInput({
     transporterCompanyName: chain(input.transporter, t =>
@@ -315,7 +430,12 @@ function flattenTransporterInput(input: {
     transporterCompanyMail: chain(input.transporter, t =>
       chain(t.company, c => c.mail)
     ),
-
+    transporterCompanyVatNumber: chain(input.transporter, t =>
+      chain(t.company, c => c.vatNumber)
+    ),
+    transporterRecepisseIsExempted: chain(input.transporter, t =>
+      chain(t.recepisse, recep => recep.isExempted)
+    ),
     transporterRecepisseNumber: chain(input.transporter, t =>
       chain(t.recepisse, recep => recep.number)
     ),
@@ -331,13 +451,18 @@ function flattenTransporterInput(input: {
     ),
 
     transporterCustomInfo: chain(input.transporter, e => e.customInfo),
-    transporterTransportPlates: chain(input.transporter, t =>
-      chain(t.transport, e => e.plates)
+    transporterTransportPlates: undefinedOrDefault(
+      chain(input.transporter, t => chain(t.transport, e => e.plates)),
+      []
     ),
     ...flattenTransportInput(input.transporter)
   });
 }
-function flattenTransportInput(input: { transport?: BsdasriTransportInput }) {
+function flattenTransportInput(
+  input?: {
+    transport?: BsdasriTransportInput | null;
+  } | null
+) {
   if (!input?.transport) {
     return null;
   }
@@ -367,12 +492,15 @@ function flattenTransportInput(input: { transport?: BsdasriTransportInput }) {
       chain(t.acceptation, w => w.refusalReason)
     ),
     transporterWasteVolume: computeTotalVolume(transporterWastePackagings),
-    transporterWastePackagings
+    transporterWastePackagings: undefinedOrDefault(
+      transporterWastePackagings,
+      []
+    )
   };
 }
 
 function flattenDestinationInput(input: {
-  destination?: BsdasriDestinationInput;
+  destination?: BsdasriDestinationInput | null;
 }) {
   return {
     destinationCompanyName: chain(input.destination, r =>
@@ -399,7 +527,11 @@ function flattenDestinationInput(input: {
   };
 }
 
-function flattenReceptiontInput(input: { reception?: BsdasriReceptionInput }) {
+function flattenReceptiontInput(
+  input?: {
+    reception?: BsdasriReceptionInput | null;
+  } | null
+) {
   if (!input?.reception) {
     return null;
   }
@@ -421,16 +553,24 @@ function flattenReceptiontInput(input: { reception?: BsdasriReceptionInput }) {
     destinationReceptionWasteRefusalReason: chain(input.reception, t =>
       chain(t.acceptation, w => w.refusalReason)
     ),
-    destinationWastePackagings
+    destinationWastePackagings: undefinedOrDefault(
+      destinationWastePackagings,
+      []
+    )
   };
 }
 
-function flattenOperationInput(input: { operation?: BsdasriOperationInput }) {
+function flattenOperationInput(
+  input?: {
+    operation?: BsdasriOperationInput | null;
+  } | null
+) {
   if (!input?.operation) {
     return null;
   }
   return {
     destinationOperationCode: chain(input.operation, o => o.code),
+    destinationOperationMode: chain(input.operation, o => o.mode),
     destinationReceptionWasteWeightValue: chain(input.operation, o =>
       chain(o.weight, q => q.value)
     ),
@@ -440,12 +580,31 @@ function flattenOperationInput(input: { operation?: BsdasriOperationInput }) {
     )
   };
 }
+
+function flattenContainersInput(input: {
+  identification?: BsdasriIdentificationInput | null;
+}) {
+  if (!input?.identification?.numbers) {
+    return null;
+  }
+  return {
+    identificationNumbers: input.identification.numbers
+  };
+}
+
 export function flattenBsdasriInput(
   formInput: Pick<
     BsdasriInput,
-    "waste" | "emitter" | "ecoOrganisme" | "transporter" | "destination"
+    | "waste"
+    | "emitter"
+    | "ecoOrganisme"
+    | "transporter"
+    | "destination"
+    | "identification"
+    | "grouping"
+    | "synthesizing"
   >
-): Partial<Prisma.BsdasriCreateInput> {
+) {
   return safeInput({
     ...flattenWasteInput(formInput),
 
@@ -455,6 +614,92 @@ export function flattenBsdasriInput(
 
     ...flattenTransporterInput(formInput),
 
-    ...flattenDestinationInput(formInput)
+    ...flattenDestinationInput(formInput),
+
+    ...flattenContainersInput(formInput)
   });
+}
+
+// Revisions
+
+export function flattenBsdasriRevisionRequestInput(
+  reviewContent: BsdasriRevisionRequestContentInput
+): Partial<Prisma.BsdasriRevisionRequestCreateInput> {
+  return safeInput(<Prisma.BsdasriRevisionRequestCreateInput>{
+    emitterPickupSiteName: chain(reviewContent, c =>
+      chain(c.emitter, e => chain(e.pickupSite, w => w.name))
+    ),
+    emitterPickupSiteAddress: chain(reviewContent, c =>
+      chain(c.emitter, e => chain(e.pickupSite, w => w.address))
+    ),
+    emitterPickupSiteCity: chain(reviewContent, c =>
+      chain(c.emitter, e => chain(e.pickupSite, w => w.city))
+    ),
+    emitterPickupSitePostalCode: chain(reviewContent, c =>
+      chain(c.emitter, e => chain(e.pickupSite, w => w.postalCode))
+    ),
+    emitterPickupSiteInfos: chain(reviewContent, c =>
+      chain(c.emitter, e => chain(e.pickupSite, w => w.infos))
+    ),
+    wasteCode: chain(reviewContent, r => chain(r.waste, w => w.code)),
+
+    destinationWastePackagings: undefinedOrDefault(
+      chain(reviewContent, r =>
+        chain(r.destination, d => chain(d.reception, rec => rec.packagings))
+      ),
+      []
+    ),
+    destinationOperationCode: chain(reviewContent, r =>
+      chain(r.destination, d => chain(d.operation, o => o.code))
+    ),
+    destinationOperationMode: chain(reviewContent, r =>
+      chain(r.destination, d => chain(d.operation, o => o.mode))
+    ),
+    destinationReceptionWasteWeightValue: chain(reviewContent, r =>
+      chain(r.destination, d => chain(d.operation, o => o.weight))
+    ),
+
+    isCanceled: undefinedOrDefault(
+      chain(reviewContent, c => chain(c, r => r.isCanceled)),
+      false
+    )
+  });
+}
+
+export function expandBsdasriRevisionRequestContent(
+  bsdasriRevisionRequest: BsdasriRevisionRequest
+): BsdasriRevisionRequestContent {
+  return {
+    emitter: nullIfNoValues<BsdasriRevisionRequestEmitter>({
+      pickupSite: nullIfNoValues<PickupSite>({
+        address: bsdasriRevisionRequest.emitterPickupSiteAddress,
+        city: bsdasriRevisionRequest.emitterPickupSiteCity,
+        infos: bsdasriRevisionRequest.emitterPickupSiteInfos,
+        name: bsdasriRevisionRequest.emitterPickupSiteName,
+        postalCode: bsdasriRevisionRequest.emitterPickupSitePostalCode
+      })
+    }),
+
+    waste: nullIfNoValues<BsdasriRevisionRequestWaste>({
+      code: bsdasriRevisionRequest.wasteCode
+    }),
+
+    destination: nullIfNoValues<BsdasriRevisionRequestDestination>({
+      reception: nullIfNoValues<BsdasriRevisionRequestReception>({
+        packagings:
+          bsdasriRevisionRequest.destinationWastePackagings as BsdasriPackaging[]
+      }),
+      operation: nullIfNoValues<BsdasriRevisionRequestOperation>({
+        code: bsdasriRevisionRequest.destinationOperationCode,
+        mode: bsdasriRevisionRequest.destinationOperationMode,
+        weight: bsdasriRevisionRequest.destinationReceptionWasteWeightValue
+          ? new Decimal(
+              bsdasriRevisionRequest.destinationReceptionWasteWeightValue
+            ).toNumber()
+          : bsdasriRevisionRequest.destinationReceptionWasteWeightValue
+      })
+    }),
+
+    isCanceled: bsdasriRevisionRequest.isCanceled
+  };
 }

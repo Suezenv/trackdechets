@@ -4,9 +4,10 @@ import CompanyMember from "./CompanyMember";
 import Installation from "./Installation";
 import CompanyPublic from "./CompanyPublic";
 import CompanyPrivate from "./CompanyPrivate";
-import CompanyFavorite from "./CompanyFavorite";
 import CompanySearchResult from "./CompanySearchResult";
 import CompanyForVerification from "./CompanyForVerification";
+import CompanySearchPrivate from "./CompanySearchPrivate";
+import AdministrativeTransfer from "./AdministrativeTransfer";
 
 export default {
   Query,
@@ -15,7 +16,8 @@ export default {
   Installation,
   CompanyPublic,
   CompanyPrivate,
-  CompanyFavorite,
   CompanySearchResult,
-  CompanyForVerification
+  CompanyForVerification,
+  CompanySearchPrivate,
+  AdministrativeTransfer
 };

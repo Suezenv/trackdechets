@@ -8,9 +8,11 @@ import { GraphQLContext } from "../types";
 import { sameDayMidnight } from "../utils";
 
 const updateAccessTokenMock = jest.fn();
-jest.mock("../prisma", () => ({
-  accessToken: {
-    update: jest.fn((...args) => updateAccessTokenMock(...args))
+jest.mock("@td/prisma", () => ({
+  prisma: {
+    accessToken: {
+      update: jest.fn((...args) => updateAccessTokenMock(...args))
+    }
   }
 }));
 
@@ -34,6 +36,7 @@ describe("updateAccessTokenLastUsed", () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       token: "token",
+      description: null,
       lastUsed: null,
       isRevoked: false,
       applicationId: null,
@@ -54,6 +57,7 @@ describe("updateAccessTokenLastUsed", () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       token: "token",
+      description: null,
       lastUsed: new Date("2019-10-04T00:00:00.000Z"),
       isRevoked: false,
       applicationId: null,
@@ -69,6 +73,7 @@ describe("updateAccessTokenLastUsed", () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       token: "token",
+      description: null,
       lastUsed: new Date("2019-10-02T00:00:00.000Z"),
       isRevoked: false,
       applicationId: null,
@@ -93,8 +98,9 @@ describe("applyAuthStrategies", () => {
     };
     const context: GraphQLContext = {
       user: { ...(user as User), auth: AuthType.Session },
-      req: null,
-      res: null
+      req: null as any,
+      res: null as any,
+      dataloaders: null as any
     };
     applyAuthStrategies(context, [AuthType.Session]);
     expect(context.user).not.toBeNull();
@@ -110,8 +116,9 @@ describe("applyAuthStrategies", () => {
     };
     const context: GraphQLContext = {
       user: { ...(user as User), auth: AuthType.Bearer },
-      req: null,
-      res: null
+      req: null as any,
+      res: null as any,
+      dataloaders: null as any
     };
     applyAuthStrategies(context, [AuthType.Session]);
     expect(context.user).toBeNull();

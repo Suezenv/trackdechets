@@ -1,11 +1,7 @@
 import { gql, MutationHookOptions, useMutation } from "@apollo/client";
-import cogoToast from "cogo-toast";
-import {
-  Mutation,
-  MutationDuplicateBsdasriArgs,
-} from "generated/graphql/types";
-import { dasriFragment } from "common/fragments";
-import { GET_BSDS } from "common/queries";
+import toast from "react-hot-toast";
+import { Mutation, MutationDuplicateBsdasriArgs } from "@td/codegen-ui";
+import { fullDasriFragment } from "../../../../../Apps/common/queries/fragments";
 
 const DUPLICATE_BSDASRI = gql`
   mutation DuplicateBsdasri($id: ID!) {
@@ -13,7 +9,7 @@ const DUPLICATE_BSDASRI = gql`
       ...DasriFragment
     }
   }
-  ${dasriFragment}
+  ${fullDasriFragment}
 `;
 
 export function useBsdasriDuplicate(
@@ -27,16 +23,14 @@ export function useBsdasriDuplicate(
     MutationDuplicateBsdasriArgs
   >(DUPLICATE_BSDASRI, {
     ...options,
-    refetchQueries: [GET_BSDS],
-    awaitRefetchQueries: true,
     onCompleted: (...args) => {
-      cogoToast.success(
+      toast.success(
         `Le bordereau a été dupliqué, il est disponible dans l'onglet "Brouillons"`
       );
 
       if (options.onCompleted) {
         options.onCompleted(...args);
       }
-    },
+    }
   });
 }

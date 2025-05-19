@@ -1,5 +1,5 @@
-@import "src/scss/Constants.scss";
-@import "src/scss/Breakpoints.scss";
+@import "../../../scss/Constants.scss";
+@import "../../../scss/Breakpoints.scss";
 .detail {
   &Title {
     font-weight: bold;
@@ -35,18 +35,15 @@
     @include desktop {
       flex-direction: row;
     }
-    > div {
-      width: 100%; // equal width child grid divs
-    }
   }
   &Grid {
     display: inline-grid;
-    grid-template-columns: auto minmax(auto, 0.75fr);
+    grid-template-columns: minmax(auto, 0.75fr) minmax(auto, 0.75fr);
     grid-auto-rows: minmax(1.5rem, max-content);
     grid-gap: 1rem;
 
     &:not(:last-child) {
-      margin-right: 1rem;
+      margin-right: 0.8rem;
     }
     dt {
       text-align: right;
@@ -56,14 +53,24 @@
     }
     dd {
       overflow-wrap: break-word;
+      padding-inline-start: 0;
     }
     .spanWidth {
       grid-column-start: 1;
       grid-column-end: 3;
     }
+
+    .downloadLink {
+      color: $blue;
+      text-decoration: underline;
+    }
   }
   &Summary {
-    padding: 2.5rem 1rem 1rem 1rem;
+    padding-bottom: 0.8rem;
+  }
+  &SummaryDsfr {
+    //
+    padding: 0.5rem 1rem 1rem 1rem;
   }
   &QRCode {
     display: flex;
@@ -132,15 +139,16 @@
   &TabCaption {
     color: $blue;
     font-size: 0.75rem;
+    line-height: initial;
   }
   &TabPanels {
     border-top: 2px solid $blue;
-    padding: 1rem;
-    display: flex;
+    padding: 1rem 0;
     width: 100%;
   }
   &TabPanel {
     display: flex;
+
     flex-direction: column;
     @include desktop {
       flex-direction: row;
@@ -161,5 +169,16 @@
   }
   tr:nth-child(even) {
     background-color: $grey-lightest;
+  }
+}
+
+.BsdasriIdentificationNumbersRow {
+  padding: 1rem;
+  border-top: 1px solid $grey;
+  display: flex;
+  dt {
+    color: $grey-dark;
+    font-weight: bold;
+    margin-right: 1rem;
   }
 }

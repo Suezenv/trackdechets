@@ -2,8 +2,12 @@ import {
   InMemoryCache,
   ApolloClient,
   ApolloLink,
-  createHttpLink,
+  createHttpLink
 } from "@apollo/client";
+import { onError } from "@apollo/client/link/error";
+import { relayStylePagination } from "@apollo/client/utilities";
+import { removeOrgId } from "./common/helper";
+import { localAuthService } from "./login/auth.service";
 
 /**
  * Automatically erase `__typename` from variables
@@ -22,29 +26,81 @@ const cleanTypeNameLink = new ApolloLink((operation, forward) => {
   return forward(operation);
 });
 
-const httpLink = createHttpLink({
-  uri: process.env.REACT_APP_API_ENDPOINT,
-  credentials: "include",
+/**
+ * Automatically erase `company.orgId` from variables
+ * This enable devs to use FormCompany object (that has orgId) from the server
+ * and not worry about `orgId` breaking CompanyInput (that misses orgId)
+ */
+const cleanOrgIdLink = new ApolloLink((operation, forward) => {
+  if (operation.variables) {
+    operation.variables = removeOrgId(operation.variables);
+  }
+  return forward(operation);
 });
 
-export default new ApolloClient({
+/**
+ * Handles any GraphQL errors or network error that occurred
+ */
+const errorLink = onError(({ response, graphQLErrors }) => {
+  if (graphQLErrors) {
+    for (const err of graphQLErrors) {
+      if (err.extensions?.code === "UNAUTHENTICATED") {
+        // when AuthenticationError thrown
+        // modify the response context to ignore the error
+        // cf. https://www.apollographql.com/docs/react/data/error-handling/#ignoring-errors
+        response!.errors = undefined;
+
+        // If we catch an UNAUTHENTICATED exception at this point,
+        // the user session has probably expired. Redirect to login
+        // page with a hint in the URL to display a message
+        localAuthService.locallySignOut();
+        window.location.href =
+          "/login?session=expired&returnTo=" +
+          encodeURIComponent(window.location.pathname + window.location.search);
+      }
+    }
+  }
+});
+
+const httpLink = createHttpLink({
+  uri: import.meta.env.VITE_API_ENDPOINT as string,
+  credentials: "include"
+});
+
+const apolloClient = new ApolloClient({
   cache: new InMemoryCache({
     typePolicies: {
+      Query: {
+        fields: {
+          // https://www.apollographql.com/docs/react/pagination/cursor-based/#relay-style-cursor-pagination
+          myCompanies: relayStylePagination()
+        }
+      },
       Form: {
         fields: {
           transporter: {
-            merge: true,
+            merge: true
           },
           stateSummary: {
-            merge: true,
+            merge: true
           },
           wasteDetails: {
-            merge: true,
-          },
-        },
+            merge: true
+          }
+        }
       },
-    },
+      CompanyMember: {
+        keyFields: ["id", "orgId"]
+      }
+    }
   }),
-  link: ApolloLink.from([cleanTypeNameLink, httpLink]),
-  name: "trackdechets-front",
+  link: ApolloLink.from([
+    errorLink,
+    cleanOrgIdLink,
+    cleanTypeNameLink,
+    httpLink
+  ]),
+  name: "trackdechets-front"
 });
+
+export default apolloClient;

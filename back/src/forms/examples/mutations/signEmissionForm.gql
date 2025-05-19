@@ -1,0 +1,6 @@
+mutation SignEmissionForm($id: ID!, $input: SignEmissionFormInput!) {
+  signEmissionForm(id: $id, input: $input) {
+    id
+    status
+  }
+}

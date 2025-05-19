@@ -1,5 +1,5 @@
 import { BsdasriStatus } from "@prisma/client";
-import { BsdasriWhere } from "../../generated/graphql/types";
+import type { BsdasriWhere } from "@td/codegen-back";
 import { toPrismaWhereInput } from "../where";
 
 describe("Bsdasri where conversion", () => {
@@ -80,9 +80,11 @@ describe("Bsdasri where conversion", () => {
 
     const prismaWhere = toPrismaWhereInput(where);
     expect(prismaWhere).toEqual({
-      grouping: { none: {} },
-      type: "SIMPLE",
-      groupedInId: null
+      groupingEmitterSirets: { isEmpty: true },
+      groupedInId: null,
+      synthesisEmitterSirets: { isEmpty: true },
+      synthesizedInId: null,
+      type: "SIMPLE"
     });
   });
 
@@ -95,8 +97,10 @@ describe("Bsdasri where conversion", () => {
 
     expect(prismaWhere).toEqual({
       OR: [
-        { grouping: { some: {} } },
+        { groupingEmitterSirets: { isEmpty: false } },
         { groupedInId: { not: null } },
+        { synthesisEmitterSirets: { isEmpty: false } },
+        { synthesizedInId: { not: null } },
         { type: { not: "SIMPLE" } }
       ]
     });

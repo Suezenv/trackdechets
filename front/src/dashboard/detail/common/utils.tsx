@@ -1,8 +1,10 @@
+import React from "react";
+import EstimatedQuantityTooltip from "../../../common/components/EstimatedQuantityTooltip";
 import {
   Consistence,
-  WasteAcceptationStatusInput as WasteAcceptationStatus,
-  QuantityType,
-} from "generated/graphql/types";
+  WasteAcceptationStatus,
+  QuantityType
+} from "@td/codegen-ui";
 
 export const getVerboseConsistence = (
   consistence: Consistence | null | undefined | ""
@@ -14,7 +16,7 @@ export const getVerboseConsistence = (
     SOLID: "Solide",
     LIQUID: "Liquide",
     GASEOUS: "Gazeux",
-    DOUGHY: "Pâteux",
+    DOUGHY: "Pâteux"
   };
   return verbose[consistence];
 };
@@ -28,7 +30,7 @@ export const getVerboseAcceptationStatus = (
   const verbose = {
     ACCEPTED: "Accepté",
     REFUSED: "Refusé",
-    "PARTIALLY REFUSED": "Accepté partiellement",
+    "PARTIALLY REFUSED": "Accepté partiellement"
   };
 
   return verbose[acceptationStatus];
@@ -36,23 +38,45 @@ export const getVerboseAcceptationStatus = (
 
 export const getVerboseQuantityType = (
   quantityType: QuantityType | null | undefined | ""
-): string => {
+): string | JSX.Element => {
   if (!quantityType) {
     return "";
   }
 
-  return quantityType === "REAL" ? "Réelle" : "Estimée";
+  return quantityType === "REAL" ? (
+    "Réelle"
+  ) : (
+    <>
+      Estimée <EstimatedQuantityTooltip />
+    </>
+  );
 };
 
 export const getVerboseWeightType = (
   isEstimate: Boolean | null | undefined | ""
-): string => {
+): string | JSX.Element => {
   if (isEstimate === true) {
-    return "Estimé";
+    return (
+      <>
+        Estimé <EstimatedQuantityTooltip />
+      </>
+    );
   }
   if (isEstimate === false) {
-    return "Réél";
+    return "Réel";
   }
 
   return "";
+};
+
+/**
+ * Enables to read the deep value of an object, passing the path as a string.
+ * For instance, deepValue(obj, "foo.bar.baz") to access obj.foo.bar.baz.
+ */
+export const deepValue = (obj, path) => {
+  const pathParts = path.split(".");
+  for (let i = 0, len = pathParts.length; i < len; i++) {
+    obj = obj[pathParts[i]];
+  }
+  return obj;
 };

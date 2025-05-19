@@ -12,20 +12,36 @@ export default function TagsInput(props) {
   ) {
     e.stopPropagation();
 
-    const val = (e.target as HTMLInputElement).value;
-    if (e.key === "Enter" && val) {
+    const value = (e.target as HTMLInputElement).value;
+    if (["Enter", "Tab"].includes(e.key)) {
       e.preventDefault();
-      if (field.value?.find(tag => tag.toLowerCase() === val.toLowerCase())) {
-        return;
-      }
-      arrayHelpers.push(val);
-
-      if (inputContainer.current) {
-        inputContainer.current.value = "";
-      }
+      addTag(value, arrayHelpers);
     }
-    if (e.key === "Backspace" && !val && field.value) {
+    if (e.key === "Backspace" && !value && field.value) {
       arrayHelpers.remove(field.value.length - 1);
+    }
+  }
+
+  function onBlur(
+    e: React.FocusEvent<HTMLInputElement>,
+    arrayHelpers: FieldArrayRenderProps
+  ) {
+    const value = (e.target as HTMLInputElement).value;
+    addTag(value, arrayHelpers);
+  }
+
+  function addTag(value: string, arrayHelpers: FieldArrayRenderProps) {
+    if (
+      !value ||
+      field.value?.find(tag => tag.toLowerCase() === value.toLowerCase()) ||
+      (props.limit && field.value?.length >= props.limit)
+    ) {
+      return;
+    }
+    arrayHelpers.push(value);
+
+    if (inputContainer.current) {
+      inputContainer.current.value = "";
     }
   }
 
@@ -40,16 +56,20 @@ export default function TagsInput(props) {
                 {tag}
                 <button
                   type="button"
-                  onClick={() => !props.disabled && arrayHelpers.remove(index)}
+                  onClick={e => {
+                    e.preventDefault();
+                    !props.disabled && arrayHelpers.remove(index);
+                  }}
                 >
                   +
                 </button>
               </li>
             ))}
-            <li className="input-tag__tags__input">
+            <li className="input-tag__tags__input" id={field.name}>
               <input
                 type="text"
                 onKeyDown={e => onInputKeyDown(e, arrayHelpers)}
+                onBlur={e => onBlur(e, arrayHelpers)}
                 ref={inputContainer}
                 disabled={props.disabled}
               />

@@ -1,33 +1,39 @@
 import { User } from "@prisma/client";
-import { UserInputError } from "apollo-server-express";
 import { hash } from "bcrypt";
-import prisma from "../../../prisma";
+import { prisma } from "@td/prisma";
 import * as yup from "yup";
 import { sendMail } from "../../../mailer/mailing";
-import {
-  MutationResolvers,
-  MutationSignupArgs
-} from "../../../generated/graphql/types";
+import type { MutationResolvers, MutationSignupArgs } from "@td/codegen-back";
 import { sanitizeEmail } from "../../../utils";
-import { acceptNewUserCompanyInvitations, userExists } from "../../database";
-import { hashPassword } from "../../utils";
-import { onSignup } from "../../../mailer/templates";
-import { renderMail } from "../../../mailer/templates/renderers";
-
-export const signupSchema = yup.object({
-  userInfos: yup.object({
-    email: yup
-      .string()
-      .email("L'email saisi n'est pas conforme.")
-      .required("Vous devez saisir un email."),
-    password: yup
-      .string()
-      .required("Vous devez saisir un mot de passe.")
-      .min(8, "Le mot de passe doit faire au moins 8 caractères")
-  })
-});
+import {
+  acceptNewUserCompanyInvitations,
+  userExists,
+  createUser
+} from "../../database";
+import { hashPassword, checkPasswordCriteria } from "../../utils";
+import { onSignup, renderMail } from "@td/mail";
+import { UserInputError } from "../../../common/errors";
 
 function validateArgs(args: MutationSignupArgs) {
+  const signupSchema = yup.object({
+    userInfos: yup.object({
+      name: yup
+        .string()
+        .isSafeSSTI()
+        .required("Vous devez saisir nom et prénom."),
+      email: yup
+        .string()
+        .email("L'email saisi n'est pas conforme.")
+        .required("Vous devez saisir un email."),
+      password: yup
+        .string()
+        .required("Vous devez saisir un mot de passe.")
+        .test("new-user-password-meets-criteria", "", (password: string) => {
+          checkPasswordCriteria(password);
+          return true;
+        })
+    })
+  });
   signupSchema.validateSync(args);
   return args;
 }
@@ -44,7 +50,7 @@ export async function signupFn({
 
   const hashedPassword = await hashPassword(password);
 
-  const user = await prisma.user.create({
+  const user = await createUser({
     data: {
       name,
       email: sanitizeEmail(unsafeEmail),
@@ -66,7 +72,8 @@ export async function signupFn({
   return {
     ...user,
     // companies are resolved through a separate resolver (User.companies)
-    companies: []
+    companies: [],
+    featureFlags: []
   };
 }
 

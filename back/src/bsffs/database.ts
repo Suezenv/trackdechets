@@ -1,44 +1,87 @@
-import type { SetRequired } from "type-fest";
 import {
-  Bsff,
   BsffFicheIntervention as PrismaBsffFicheIntervention,
+  BsffPackaging,
+  BsffPackagingType,
   BsffType,
-  Prisma
+  Prisma,
+  BsffTransporter,
+  Bsff
 } from "@prisma/client";
-import { UserInputError } from "apollo-server-express";
-import prisma from "../prisma";
-import { BsffFicheIntervention, BsffInput } from "../generated/graphql/types";
-import getReadableId, { ReadableIdPrefix } from "../forms/readableId";
+import type {
+  BsffFicheIntervention,
+  BsffInput,
+  BsffPackagingInput
+} from "@td/codegen-back";
 import {
-  flattenBsffInput,
-  unflattenBsff,
-  unflattenFicheInterventionBsff
+  expandBsffFromDB,
+  expandFicheInterventionBsffFromDB
 } from "./converter";
-import { isBsffContributor } from "./permissions";
-import { validateBsff } from "./validation";
-import { indexBsff } from "./elastic";
 import { GraphQLContext } from "../types";
+import { checkCanCreate, checkCanUpdateFicheIntervention } from "./permissions";
+import {
+  getBsffRepository,
+  getReadonlyBsffFicheInterventionRepository,
+  getReadonlyBsffPackagingRepository,
+  getReadonlyBsffRepository
+} from "./repository";
+import { Permission, can, getUserRoles } from "../permissions";
+import { ForbiddenError, UserInputError } from "../common/errors";
+import { prisma } from "@td/prisma";
+import {
+  BsffWithFicheInterventionInclude,
+  BsffWithFicheInterventions,
+  BsffWithTransporters,
+  BsffWithTransportersInclude
+} from "./types";
+import { graphQlInputToZodBsff } from "./validation/bsff/helpers";
+import { parseBsffAsync } from "./validation/bsff";
+import { PrismaTransaction } from "../common/repository/types";
 
-export async function getBsffOrNotFound(
-  where: SetRequired<Prisma.BsffWhereInput, "id">
-): Promise<Bsff> {
-  const bsff = await prisma.bsff.findFirst({
-    where: { ...where, isDeleted: false }
+export async function getBsffOrNotFound(where: Prisma.BsffWhereUniqueInput) {
+  const { findUnique } = getReadonlyBsffRepository();
+  const bsff = await findUnique({
+    where,
+    include: {
+      ...BsffWithTransportersInclude,
+      ...BsffWithFicheInterventionInclude,
+      packagings: {
+        include: { previousPackagings: true },
+        orderBy: { numero: "asc" }
+      }
+    }
   });
 
   if (bsff == null) {
-    throw new UserInputError(
-      `Le bordereau de fluides frigorigènes n°${where.id} n'existe pas.`
-    );
+    throw new UserInputError(`Le BSFF n°${where.id} n'existe pas.`);
   }
 
   return bsff;
 }
 
+export async function getBsffPackagingOrNotFound(
+  where: Prisma.BsffPackagingWhereUniqueInput
+) {
+  const { findUnique } = getReadonlyBsffPackagingRepository();
+
+  const bsffpackaging = await findUnique({
+    where,
+    include: { bsff: { include: BsffWithTransportersInclude } }
+  });
+
+  if (bsffpackaging == null) {
+    throw new UserInputError(
+      `Le contenant de fluide dont l'identifiant Trackdéchets est ${where.id} n'existe pas.`
+    );
+  }
+
+  return bsffpackaging;
+}
+
 export async function getFicheInterventionBsffOrNotFound(
-  where: SetRequired<Prisma.BsffFicheInterventionWhereInput, "id">
+  where: Prisma.BsffFicheInterventionWhereUniqueInput
 ): Promise<PrismaBsffFicheIntervention> {
-  const ficheIntervention = await prisma.bsffFicheIntervention.findFirst({
+  const { findUnique } = getReadonlyBsffFicheInterventionRepository();
+  const ficheIntervention = await findUnique({
     where
   });
   if (ficheIntervention == null) {
@@ -49,6 +92,26 @@ export async function getFicheInterventionBsffOrNotFound(
   return ficheIntervention;
 }
 
+export async function getBsffTransporterOrNotFound({ id }: { id: string }) {
+  if (!id) {
+    throw new UserInputError(
+      "Vous devez préciser un identifiant de transporteur"
+    );
+  }
+
+  const transporter = await prisma.bsffTransporter.findUnique({
+    where: { id }
+  });
+
+  if (transporter === null) {
+    throw new UserInputError(
+      `Le transporteur BSFF avec l'identifiant "${id}" n'existe pas.`
+    );
+  }
+
+  return transporter;
+}
+
 /**
  * Return the "ficheInterventions" of a bsff, hiding some fields depending
  * on the user reading it
@@ -56,187 +119,293 @@ export async function getFicheInterventionBsffOrNotFound(
  */
 export async function getFicheInterventions({
   bsff,
-  context
+  context: { user }
 }: {
-  bsff: Bsff;
+  bsff: BsffWithTransporters;
   context: GraphQLContext;
 }): Promise<BsffFicheIntervention[]> {
-  const ficheInterventions = await prisma.bsffFicheIntervention.findMany({
-    where: {
-      bsffId: bsff.id
-    }
-  });
+  if (!user) {
+    throw new Error("The user should have been set to enter this path.");
+  }
+  const { findUniqueGetFicheInterventions } = getReadonlyBsffRepository();
 
-  const unflattenedFicheInterventions = ficheInterventions.map(
-    unflattenFicheInterventionBsff
+  const ficheInterventions =
+    (await findUniqueGetFicheInterventions({
+      where: { id: bsff.id }
+    })) ?? [];
+
+  const userRoles = await getUserRoles(user.id);
+
+  const isBsffReader = [
+    bsff.emitterCompanySiret,
+    ...bsff.transporters.flatMap(t => [
+      t.transporterCompanySiret,
+      t.transporterCompanyVatNumber
+    ]),
+    bsff.destinationCompanySiret
+  ]
+    .filter(Boolean)
+    .some(
+      orgId =>
+        orgId &&
+        userRoles[orgId] &&
+        can(userRoles[orgId], Permission.BsdCanRead)
+    );
+
+  const isDetenteur = bsff.detenteurCompanySirets.some(
+    siret => userRoles[siret] && can(userRoles[siret], Permission.BsdCanRead)
   );
 
-  // the user trying to read ficheInterventions might not be a contributor of the bsff
-  // for example they could be reading the ficheInterventions of a bsff that was forwarded:
-  // bsffs { forwarding { ficheInterventions } }
-  // in this case, they are still allowed to read ficheInterventions but not all fields
-  try {
-    await isBsffContributor(context.user, bsff);
-  } catch (err) {
-    unflattenedFicheInterventions.forEach(ficheIntervention => {
-      delete ficheIntervention.detenteur;
-      delete ficheIntervention.operateur;
+  const expandedFicheInterventions = ficheInterventions.map(
+    expandFicheInterventionBsffFromDB
+  );
+
+  if (isBsffReader || user.isAdmin) {
+    return expandedFicheInterventions;
+  }
+
+  if (isDetenteur) {
+    // only return detenteur's fiche d'intervention
+    return expandedFicheInterventions.filter(fi => {
+      const detenteurCompanySiret = fi.detenteur?.company?.siret;
+      if (!detenteurCompanySiret) return false;
+      return (
+        userRoles[detenteurCompanySiret] &&
+        can(userRoles[detenteurCompanySiret], Permission.BsdCanRead)
+      );
     });
   }
 
-  return unflattenedFicheInterventions;
+  throw new ForbiddenError(
+    "Vous n'êtes pas autorisé à consulter les fiches d'interventions de ce BSFF"
+  );
 }
 
-function getBsffType(input: BsffInput): BsffType {
-  if (input.grouping?.length > 0) {
-    return BsffType.GROUPEMENT;
-  }
+/**
+ * Permet de mettre à jour le champ dénormalisé `transportersOrgIds`
+ */
+export async function updateTransporterOrgIds(
+  bsff: BsffWithTransporters,
+  transaction: PrismaTransaction
+) {
+  const transporters = getTransportersSync(bsff);
+  await transaction.bsff.update({
+    where: { id: bsff.id },
+    data: {
+      transportersOrgIds: transporters
+        .flatMap(t => [
+          t.transporterCompanySiret,
+          t.transporterCompanyVatNumber
+        ])
+        .filter(Boolean)
+    }
+  });
+}
 
-  if (input.repackaging?.length > 0) {
-    return BsffType.RECONDITIONNEMENT;
-  }
-
-  if (input.forwarding) {
-    return BsffType.REEXPEDITION;
-  }
-
-  if (input.ficheInterventions?.length === 1) {
-    return BsffType.TRACER_FLUIDE;
-  }
-
-  return BsffType.COLLECTE_PETITES_QUANTITES;
+/**
+ * Permet de mettre à jour le champ dénormalisé `detenteurCompanySirets`
+ */
+export async function updateDetenteurCompanySirets(
+  bsff: BsffWithFicheInterventions,
+  transaction: PrismaTransaction
+) {
+  await transaction.bsff.update({
+    where: { id: bsff.id },
+    data: {
+      detenteurCompanySirets: bsff.ficheInterventions
+        .map(fi => fi.detenteurCompanySiret)
+        .filter(Boolean)
+    }
+  });
 }
 
 export async function createBsff(
   user: Express.User,
   input: BsffInput,
-  additionalData: Partial<Bsff> = {}
+  { isDraft } = { isDraft: false }
 ) {
-  const flatInput = {
-    id: getReadableId(ReadableIdPrefix.FF),
-    type: getBsffType(input),
+  await checkCanCreate(user, input);
 
-    ...flattenBsffInput(input),
-    ...additionalData
-  };
-
-  await isBsffContributor(user, flatInput);
-
-  const isForwarding = !!input.forwarding;
-  const isRepackaging = input.repackaging?.length > 0;
-  const isGrouping = input.grouping?.length > 0;
-
-  if ([isForwarding, isRepackaging, isGrouping].filter(b => b).length > 1) {
-    throw new UserInputError(
-      "Les opérations d'entreposage provisoire, reconditionnement et groupement ne sont pas compatibles entre elles"
-    );
-  }
-
-  // bordereau qui est réexpédié par celui-ci
-  const forwardedBsff = isForwarding
-    ? await getBsffOrNotFound({ id: input.forwarding })
-    : null;
-
-  // bordereaux qui sont reconditionnés dans celui-ci
-  const repackagedBsffs = isRepackaging
-    ? await prisma.bsff.findMany({ where: { id: { in: input.repackaging } } })
-    : null;
-  // bordereaux qui sont groupés dans celui-ci
-
-  const groupedBsffs = isGrouping
-    ? await prisma.bsff.findMany({ where: { id: { in: input.grouping } } })
-    : null;
-
-  const previousBsffs = [
-    ...(isForwarding ? [forwardedBsff] : []),
-    ...(isGrouping ? groupedBsffs : []),
-    ...(isRepackaging ? repackagedBsffs : [])
-  ];
+  const { findMany: findManyFicheInterventions } =
+    getReadonlyBsffFicheInterventionRepository();
 
   const ficheInterventions =
-    input.ficheInterventions?.length > 0
-      ? await prisma.bsffFicheIntervention.findMany({
+    input.ficheInterventions && input.ficheInterventions.length > 0
+      ? await findManyFicheInterventions({
           where: { id: { in: input.ficheInterventions } }
         })
       : [];
 
-  await validateBsff(flatInput, previousBsffs, ficheInterventions);
-
-  const data: Prisma.BsffCreateInput = flatInput;
-
-  if (isForwarding) {
-    data.forwarding = { connect: { id: input.forwarding } };
+  for (const ficheIntervention of ficheInterventions) {
+    await checkCanUpdateFicheIntervention(user, ficheIntervention);
   }
 
-  if (isGrouping) {
-    data.grouping = {
-      connect: input.grouping.map(id => ({
-        id
-      }))
-    };
+  if (!input.type) {
+    // Même si une valeur par défaut est fournie dans le schéma Zod pour
+    // réconcilier le schéma GraphQL (qui permet de ne pas saisir de `type` ou un type null)
+    // et le schéma prisma (dans lequel `type` est un champ requis), on lève ici
+    // une erreur pour forcer l'utilisateur à saisir le type de bordereau de façon explicite.
+    throw new UserInputError("Vous devez renseigner le type de bordereau");
   }
 
-  if (isRepackaging) {
-    data.repackaging = {
-      connect: input.repackaging.map(id => ({
-        id
-      }))
-    };
-  }
+  const zodBsff = await graphQlInputToZodBsff(input);
 
-  if (ficheInterventions.length > 0) {
-    data.ficheInterventions = {
-      connect: ficheInterventions.map(({ id }) => ({ id }))
-    };
-  }
-
-  const bsff = await prisma.bsff.create({ data });
-
-  await indexBsff(bsff, { user } as GraphQLContext);
-
-  return unflattenBsff(bsff);
-}
-
-/**
- * Returns direct parents of a BSFF
- */
-export async function getPreviousBsffs(bsff: Bsff) {
-  const forwardedBsff = bsff.forwardingId
-    ? await prisma.bsff.findUnique({ where: { id: bsff.forwardingId } })
-    : null;
-
-  const repackagedBsffs = await prisma.bsff
-    .findFirst({ where: { id: bsff.id } })
-    .repackaging();
-
-  const groupedBsffs = await prisma.bsff
-    .findFirst({ where: { id: bsff.id } })
-    .grouping();
-
-  const previousBsffs = [
-    ...(!!forwardedBsff ? [forwardedBsff] : []),
-    ...groupedBsffs,
-    ...repackagedBsffs
-  ];
-  return previousBsffs;
-}
-
-/**
- * Return all the BSFFs in the traceability history of this one
- */
-export async function getBsffHistory(bsff: Bsff): Promise<Bsff[]> {
-  async function inner(bsffs: Bsff[], history: Bsff[]) {
-    const previous = await Promise.all(
-      bsffs.map(bsff => getPreviousBsffs(bsff))
-    );
-    const previousFlattened = previous.reduce((ps, curr) => {
-      return [...ps, ...curr];
-    });
-    if (previousFlattened.length === 0) {
-      return history;
+  const { packagings, createdAt, ...parsedZodBsff } = await parseBsffAsync(
+    { ...zodBsff, isDraft, createdAt: new Date() },
+    {
+      user,
+      currentSignatureType: !isDraft ? "EMISSION" : undefined
     }
-    return inner(previousFlattened, [...previousFlattened, ...history]);
+  );
+
+  let transporters:
+    | Prisma.BsffTransporterCreateNestedManyWithoutBsffInput
+    | undefined = undefined;
+
+  if (input.transporter) {
+    transporters = {
+      createMany: {
+        // un seul transporteur dans le tableau normalement
+        data: parsedZodBsff.transporters!.map((t, idx) => {
+          const { id, bsffId, ...data } = t;
+          return { ...data, number: idx + 1 };
+        })
+      }
+    };
+  } else if (input.transporters && input.transporters.length > 0) {
+    transporters = {
+      connect: parsedZodBsff.transporters?.map(t => ({ id: t.id! }))
+    };
   }
 
-  return inner([bsff], []);
+  const data: Prisma.BsffCreateInput = {
+    ...parsedZodBsff,
+    ...(packagings
+      ? {
+          packagings: {
+            create: packagings.map(packaging => {
+              const { id, previousPackagings, ...packagingData } = packaging;
+              return {
+                ...packagingData,
+                previousPackagings: {
+                  connect: (previousPackagings ?? []).map(id => ({ id }))
+                }
+              };
+            })
+          }
+        }
+      : {}),
+    ficheInterventions: {
+      connect: ficheInterventions.map(fi => ({ id: fi.id }))
+    },
+    transporters
+  };
+
+  const bsffRepository = getBsffRepository(user);
+  const bsff = await bsffRepository.create({
+    data,
+    include: BsffWithTransportersInclude
+  });
+
+  return expandBsffFromDB(bsff);
+}
+
+export function getPackagingCreateInput(
+  bsff: Partial<Bsff | Omit<Prisma.BsffCreateInput, "transporters">> & {
+    packagings?: (BsffPackagingInput & { type: BsffPackagingType })[];
+  },
+  previousPackagings: BsffPackaging[]
+): Prisma.BsffPackagingCreateWithoutBsffInput[] {
+  return [BsffType.GROUPEMENT, BsffType.REEXPEDITION].includes(bsff.type as any)
+    ? // auto complete packagings based on inital packages in case of groupement or réexpédition,
+      // overwriting user provided data if necessary.
+      previousPackagings.map(p => ({
+        type: p.type,
+        other: p.other,
+        numero: p.numero,
+        emissionNumero: p.numero,
+        volume: p.volume,
+        weight: p.acceptationWeight ?? 0,
+        previousPackagings: { connect: { id: p.id } }
+      }))
+    : bsff.type === BsffType.RECONDITIONNEMENT &&
+      bsff.packagings &&
+      bsff.packagings.length > 0
+    ? [
+        {
+          type: bsff.packagings[0].type,
+          other: bsff.packagings[0].other,
+          volume: bsff.packagings[0].volume,
+          numero: bsff.packagings[0].numero,
+          emissionNumero: bsff.packagings[0].numero,
+          weight: bsff.packagings[0].weight,
+          previousPackagings: {
+            connect: previousPackagings.map(p => ({ id: p.id }))
+          }
+        }
+      ]
+    : bsff.packagings?.map(p => ({ ...p, emissionNumero: p.numero })) ?? [];
+}
+
+export async function getTransporters(
+  bsff: Pick<BsffWithTransporters, "id">
+): Promise<BsffTransporter[]> {
+  const transporters = await prisma.bsffTransporter.findMany({
+    orderBy: { number: "asc" },
+    where: { bsffId: bsff.id }
+  });
+  return transporters ?? [];
+}
+
+export function getTransportersSync<
+  T extends Pick<BsffTransporter, "number">
+>(bsff: { transporters: T[] | null }): T[] {
+  return (bsff.transporters ?? []).sort((t1, t2) => t1.number - t2.number);
+}
+
+export async function getFirstTransporter(
+  bsff: Pick<BsffWithTransporters, "id">
+): Promise<BsffTransporter | null> {
+  const transporters = await prisma.bsffTransporter.findMany({
+    where: { number: 1, bsffId: bsff.id }
+  });
+  if (transporters && transporters.length > 0) {
+    return transporters[0];
+  }
+  return null;
+}
+
+export function getFirstTransporterSync<
+  T extends Pick<BsffTransporter, "number">
+>(bsff: { transporters: T[] | null }): T | null {
+  const transporters = getTransportersSync(bsff);
+  const firstTransporter = transporters.find(t => t.number === 1);
+  return firstTransporter ?? null;
+}
+
+export function getLastTransporterSync(bsff: {
+  transporters: BsffTransporter[] | null;
+}): BsffTransporter | null {
+  const transporters = getTransportersSync(bsff);
+  const greatestNumber = Math.max(...transporters.map(t => t.number));
+  const lastTransporter = transporters.find(t => t.number === greatestNumber);
+  return lastTransporter ?? null;
+}
+
+export function getNthTransporterSync(
+  bsff: BsffWithTransporters,
+  n: number
+): BsffTransporter | null {
+  return (bsff.transporters ?? []).find(t => t.number === n) ?? null;
+}
+
+// Renvoie le premier transporteur qui n'a pas encore signé
+export function getNextTransporterSync(bsff: {
+  transporters: BsffTransporter[] | null;
+}): BsffTransporter | null {
+  const transporters = getTransportersSync(bsff);
+  const nextTransporter = transporters.find(
+    t => !t.transporterTransportSignatureDate
+  );
+  return nextTransporter ?? null;
 }

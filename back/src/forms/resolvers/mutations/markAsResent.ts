@@ -1,13 +1,18 @@
-import { MutationResolvers } from "../../../generated/graphql/types";
+import type { MutationResolvers } from "@td/codegen-back";
 import { checkIsAuthenticated } from "../../../common/permissions";
 import { getFormOrFormNotFound } from "../../database";
-import { expandFormFromDb, flattenResentFormInput } from "../../form-converter";
+import { getAndExpandFormFromDb, flattenFormInput } from "../../converter";
 import transitionForm from "../../workflow/transitionForm";
-import prisma from "../../../prisma";
 import { checkCanMarkAsResent } from "../../permissions";
-import { UserInputError } from "apollo-server-express";
-import { resealedFormSchema } from "../../validation";
+import {
+  validateForwardedInCompanies,
+  sealedFormSchema
+} from "../../validation";
 import { EventType } from "../../workflow/types";
+import { getFormRepository } from "../../repository";
+import { EmitterType, Prisma, Status } from "@prisma/client";
+import { UserInputError } from "../../../common/errors";
+import { FormWithForwardedInWithTransportersInclude } from "../../types";
 
 const markAsResentResolver: MutationResolvers["markAsResent"] = async (
   parent,
@@ -18,36 +23,84 @@ const markAsResentResolver: MutationResolvers["markAsResent"] = async (
 
   const { id, resentInfos } = args;
 
-  const form = await getFormOrFormNotFound({ id });
+  const form = await getFormOrFormNotFound(
+    { id },
+    FormWithForwardedInWithTransportersInclude
+  );
+
+  const formRepository = getFormRepository(user);
+
+  const { forwardedIn } =
+    (await formRepository.findFullFormById(form.id)) ?? {};
+
+  if (forwardedIn === null) {
+    throw new UserInputError(
+      "Ce bordereau ne correspond pas à un entreposage provisoire ou un reconditionnemnt"
+    );
+  }
 
   await checkCanMarkAsResent(user, form);
 
-  if (form.status === "TEMP_STORER_ACCEPTED") {
-    const temporaryStorageDetail = await prisma.form
-      .findUnique({ where: { id: form.id } })
-      .temporaryStorageDetail();
+  const { destination, wasteDetails } = resentInfos;
 
-    if (temporaryStorageDetail === null) {
-      throw new UserInputError(
-        "Ce bordereau ne correspond pas à un entreposage provisoire ou un reconditionnemnt"
-      );
-    }
-    await resealedFormSchema.validate({
-      ...temporaryStorageDetail,
-      ...flattenResentFormInput(resentInfos)
-    });
-  }
+  // copy basic info from initial BSD and overwrite it with resealedInfos
+  const updateInput = {
+    emitterType: EmitterType.PRODUCER,
+    emitterCompanySiret: form.recipientCompanySiret,
+    emitterCompanyName: form.recipientCompanyName,
+    emitterCompanyAddress: form.recipientCompanyAddress,
+    emitterCompanyContact: form.recipientCompanyContact,
+    emitterCompanyMail: form.recipientCompanyMail,
+    emitterCompanyPhone: form.recipientCompanyPhone,
+    wasteDetailsCode: form.wasteDetailsCode,
+    wasteDetailsConsistence: form.wasteDetailsConsistence,
+    wasteDetailsIsDangerous: form.wasteDetailsIsDangerous,
+    wasteDetailsName: form.wasteDetailsName,
+    wasteDetailsOnuCode: form.wasteDetailsOnuCode,
+    wasteDetailsNonRoadRegulationMention:
+      form.wasteDetailsNonRoadRegulationMention,
+    wasteDetailsPop: form.wasteDetailsPop,
+    ...flattenFormInput({ wasteDetails, recipient: destination })
+  };
 
-  const formUpdateInput = {
-    temporaryStorageDetail: {
-      update: flattenResentFormInput(resentInfos)
+  const bsdSuiteForValidation = {
+    ...forwardedIn,
+    ...updateInput
+  };
+
+  // validate input
+  await sealedFormSchema.validate(bsdSuiteForValidation);
+
+  // La validation doit s'appliquer sur les données de validation
+  // (fusion de l'existant et de ce qui est contenu dans l'input)
+  await validateForwardedInCompanies({
+    destinationCompanySiret: bsdSuiteForValidation.recipientCompanySiret,
+    transporterCompanySiret: null,
+    transporterCompanyVatNumber: null
+  });
+
+  const forwardedInUpdateInput: Prisma.FormUpdateWithoutForwardingInput = {
+    ...updateInput,
+    status: Status.SEALED
+  };
+
+  const formUpdateInput: Prisma.FormUpdateInput = {
+    forwardedIn: {
+      update: forwardedInUpdateInput
     }
   };
-  const resentForm = await transitionForm(user, form, {
-    type: EventType.MarkAsResent,
-    formUpdateInput
-  });
-  return expandFormFromDb(resentForm);
+
+  const resentForm = await getFormRepository(user).update(
+    { id: form.id, status: form.status },
+    {
+      status: transitionForm(form, {
+        type: EventType.MarkAsResent,
+        formUpdateInput
+      }),
+      ...formUpdateInput
+    }
+  );
+  return getAndExpandFormFromDb(resentForm.id);
 };
 
 export default markAsResentResolver;

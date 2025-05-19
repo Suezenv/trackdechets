@@ -1,0 +1,117 @@
+.label-icon-editable {
+  background: none;
+  border: none;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  vertical-align: middle;
+  &:disabled {
+    color: initial;
+    pointer-events: none;
+  }
+
+  .edition-pencil-icon {
+    &:before {
+      display: inline-block;
+      content: "";
+      width: 24px;
+      height: 24px;
+      vertical-align: middle;
+      background-image: url("/icons/dashboard/pencil.svg");
+    }
+  }
+}
+.label-icon {
+  margin: 0;
+  padding: 0 0 0 5px;
+  display: flex;
+  align-items: center;
+
+  &__TempStorage {
+    &:before {
+      display: inline-block;
+      content: "";
+      background-image: url("/icons/dashboard/temp-storage.svg");
+      width: 24px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+  }
+  &__EcoOrganism {
+    &:before {
+      display: inline-block;
+      content: "";
+      background-image: url("/icons/dashboard/eco-organism.svg");
+      width: 16px;
+      height: 16px;
+      margin-right: 5px;
+      flex-shrink: 0;
+    }
+  }
+  &__LastModificationDate {
+    &:before {
+      display: inline-block;
+      content: "";
+      background-image: url("/icons/dashboard/last-modification-date.svg");
+      width: 15px;
+      height: 15px;
+      margin-right: 5px;
+      flex-shrink: 0;
+    }
+  }
+  &__CustomInfo,
+  &__TransporterNumberPlate {
+    &:before {
+      display: inline-block;
+      content: "";
+      width: 24px;
+      height: 25px;
+      vertical-align: middle;
+    }
+    max-width: 200px;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+    vertical-align: middle;
+  }
+  &__copy {
+    &:before {
+      content: "";
+      width: 17px;
+      height: 17px;
+    }
+  }
+  &__CustomInfo {
+    &:before {
+      background-image: url("/icons/dashboard/custom-info-icon.svg");
+    }
+  }
+  &__TransporterNumberPlate {
+    &:before {
+      background-image: url("/icons/dashboard/transporter-number-plate-icon.svg");
+    }
+  }
+  &__PickupSite {
+    text-transform: lowercase;
+    &:before {
+      display: inline-block;
+      content: "";
+      background-image: url("/icons/dashboard/icon-pickup-site.svg");
+      width: 19px;
+      height: 19px;
+      flex-shrink: 0;
+    }
+  }
+  &__CustomId,
+  &__Cap {
+    &:before {
+      display: inline-block;
+      content: "";
+      background-image: url("/icons/dashboard/icon-custom-id.svg");
+      width: 16px;
+      height: 16px;
+      margin-right: 5px;
+      flex-shrink: 0;
+    }
+  }
+}

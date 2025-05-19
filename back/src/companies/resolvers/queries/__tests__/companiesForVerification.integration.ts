@@ -3,12 +3,12 @@ import {
   CompanyVerificationStatus,
   UserRole
 } from "@prisma/client";
-import { gql } from "apollo-server-express";
+import { gql } from "graphql-tag";
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import {
+import type {
   Query,
   QueryCompaniesForVerificationArgs
-} from "../../../../generated/graphql/types";
+} from "@td/codegen-back";
 import {
   userFactory,
   userWithCompanyFactory

@@ -1,58 +1,68 @@
-import {
-  ApolloError,
-  ApolloServer,
-  AuthenticationError,
-  ForbiddenError,
-  gql,
-  UserInputError
-} from "apollo-server-express";
-import express from "express";
+import { ApolloServer } from "@apollo/server";
+import { expressMiddleware } from "@apollo/server/express4";
+import { gql } from "graphql-tag";
+import express, { json } from "express";
 import * as Sentry from "@sentry/node";
 import supertest from "supertest";
 import * as yup from "yup";
+import { z } from "zod";
 import sentryReporter from "../sentryReporter";
+import {
+  AuthenticationError,
+  ForbiddenError,
+  UserInputError
+} from "../../errors";
+import { GraphQLError } from "graphql";
+import cors from "cors";
 
 const captureExceptionSpy = jest.spyOn(Sentry, "captureException");
 const mockResolver = jest.fn();
 const mockFormatError = jest.fn();
 
 describe("graphqlErrorHandler", () => {
+  let request;
+
   afterEach(() => {
     jest.resetAllMocks();
   });
 
-  const app = express();
-  const typeDefs = gql`
-    type Query {
-      bim: String
-    }
-  `;
+  beforeAll(async () => {
+    const app = express();
+    const typeDefs = gql`
+      type Query {
+        bim: String
+      }
+    `;
 
-  const resolvers = {
-    Query: {
-      bim: mockResolver
-    }
-  };
+    const resolvers = {
+      Query: {
+        bim: mockResolver
+      }
+    };
 
-  const server = new ApolloServer({
-    typeDefs,
-    resolvers,
-    formatError: mockFormatError,
-    plugins: [sentryReporter]
+    const server = new ApolloServer({
+      typeDefs,
+      resolvers,
+      formatError: mockFormatError,
+      plugins: [sentryReporter]
+    });
+
+    await server.start();
+
+    app.use(
+      "/graphql",
+      cors({
+        methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
+        preflightContinue: false,
+        optionsSuccessStatus: 204,
+        credentials: true
+      }),
+      json(),
+      expressMiddleware(server)
+    );
+
+    request = supertest(app);
   });
-
-  server.applyMiddleware({
-    app,
-    cors: {
-      methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
-      preflightContinue: false,
-      optionsSuccessStatus: 204,
-      credentials: true
-    },
-    path: "/graphql"
-  });
-
-  const request = supertest(app);
 
   it("should report unknown errors to sentry and attach sentryId to error", async () => {
     const sentryId = "sentry_id_1";
@@ -68,7 +78,7 @@ describe("graphqlErrorHandler", () => {
     expect(captureExceptionSpy.mock.calls[0][0]).toEqual(error);
     // check sentryId has been set
     const finalError = mockFormatError.mock.calls[0][0];
-    expect(finalError.originalError.sentryId).toEqual(sentryId);
+    expect(finalError.extensions.sentryId).toEqual(sentryId);
   });
 
   it("should not report yup ValidationError", async () => {
@@ -81,9 +91,19 @@ describe("graphqlErrorHandler", () => {
     expect(captureExceptionSpy).not.toHaveBeenCalled();
   });
 
-  it("should not report generic ApolloError", async () => {
+  it("should not report zod ZodError", async () => {
     mockResolver.mockImplementation(() => {
-      throw new ApolloError("Bam Boom");
+      const zodSchema = z.object({ foo: z.number().min(0) });
+      // failing yup validation, foo should be positive
+      zodSchema.parse({ foo: -1 });
+    });
+    await request.post("/graphql").send({ query: "query { bim }" });
+    expect(captureExceptionSpy).not.toHaveBeenCalled();
+  });
+
+  it("should not report generic GraphQLError", async () => {
+    mockResolver.mockImplementation(() => {
+      throw new GraphQLError("Bam Boom");
     });
     await request.post("/graphql").send({ query: "query { bim }" });
     expect(captureExceptionSpy).not.toHaveBeenCalled();

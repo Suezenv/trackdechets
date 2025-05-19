@@ -1,0 +1,102 @@
+type Mutation {
+  "Importe un fichier dans le registre"
+  importFile(
+    "Type d'import"
+    importType: RegistryImportType!
+    "Clé du fichier à importer"
+    s3FileKey: String!
+  ): RegistryImport!
+
+  """
+  Ajoute, modifie, ou supprime des lignes au registre de sortie de statut de déchets
+  Il est possible de passer jusqu'à 1000 lignes par appel
+  """
+  addToSsdRegistry(
+    "Lignes à ajouter, modifier, ou supprimer"
+    lines: [SsdLineInput!]!
+  ): AddRegistryLinesResponse!
+
+  """
+  Ajoute, modifie, ou supprime des lignes au registre de déchets dangereux ou non dangereux entrants
+  Il est possible de passer jusqu'à 1000 lignes par appel
+  """
+  addToIncomingWasteRegistry(
+    "Lignes à ajouter, modifier, ou supprimer"
+    lines: [IncomingWasteLineInput!]!
+  ): AddRegistryLinesResponse!
+
+  """
+  Ajoute, modifie, ou supprime des lignes au registre de terres excavées et sédiments entrants
+  Il est possible de passer jusqu'à 1000 lignes par appel
+  """
+  addToIncomingTexsRegistry(
+    "Lignes à ajouter, modifier, ou supprimer"
+    lines: [IncomingTexsLineInput!]!
+  ): AddRegistryLinesResponse!
+
+  """
+  Ajoute, modifie, ou supprime des lignes au registre de terres excavées et sédiments sortants
+  Il est possible de passer jusqu'à 1000 lignes par appel
+  """
+  addToOutgoingTexsRegistry(
+    "Lignes à ajouter, modifier, ou supprimer"
+    lines: [OutgoingTexsLineInput!]!
+  ): AddRegistryLinesResponse!
+
+  """
+  Ajoute, modifie, ou supprime des lignes au registre de déchets dangereux ou non dangereux sortants
+  Il est possible de passer jusqu'à 1000 lignes par appel
+  """
+  addToOutgoingWasteRegistry(
+    "Lignes à ajouter, modifier, ou supprimer"
+    lines: [OutgoingWasteLineInput!]!
+  ): AddRegistryLinesResponse!
+
+  """
+  Ajoute, modifie, ou supprime des lignes au registre de déchets transportés
+  Il est possible de passer jusqu'à 1000 lignes par appel
+  """
+  addToTransportedRegistry(
+    "Lignes à ajouter, modifier, ou supprimer"
+    lines: [TransportedLineInput!]!
+  ): AddRegistryLinesResponse!
+
+  """
+  Ajoute, modifie, ou supprime des lignes au registre de déchets gérés
+  Il est possible de passer jusqu'à 1000 lignes par appel
+  """
+  addToManagedRegistry(
+    "Lignes à ajouter, modifier, ou supprimer"
+    lines: [ManagedLineInput!]!
+  ): AddRegistryLinesResponse!
+
+  "Renvoie un lien permettant de télécharger un registre au format CSV"
+  generateRegistryV2Export(
+    "Type de registre de déchets"
+    registryType: RegistryV2ExportType!
+    "Format d'export attendu"
+    format: FormsRegisterExportFormat!
+    "établissment pour lequel on veut faire un export de registre"
+    siret: String
+    "établissement délégataire via lequel on veut faire un export de registre. Le champ siret est obligatoire si l'export est demandé en tant que délégataire."
+    delegateSiret: String
+    "plage de dates à exporter, une date de début est obligatoire"
+    dateRange: DateFilter!
+    "Filtres additionnels sur les dates d'expédition / réception, le code déchet, l'opération de traitement, etc "
+    where: RegistryV2ExportWhere
+  ): RegistryV2Export!
+
+  """
+  Annule des déclarations au registre
+  """
+  cancelRegistryV2Lines(
+    "Identifiants uniques des déclarations"
+    publicIds: [String!]!
+    "SIRET de l'établissement pour lequel on veut supprimer la déclaration"
+    siret: String!
+    "SIRET de l'établissement délégataire via lequel on veut supprimer la déclaration"
+    delegateSiret: String
+    "Type de registre auquel appartient la déclaration"
+    type: RegistryImportType!
+  ): CancelRegistryV2LineResponse!
+}

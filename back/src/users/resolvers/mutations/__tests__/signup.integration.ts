@@ -1,17 +1,17 @@
-import { createTestClient } from "apollo-server-integration-testing";
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import prisma from "../../../../prisma";
+import { prisma } from "@td/prisma";
 import { ErrorCode } from "../../../../common/errors";
-import * as mailsHelper from "../../../../mailer/mailing";
-import { server } from "../../../../server";
+import { sendMail } from "../../../../mailer/mailing";
 import { companyFactory, userFactory } from "../../../../__tests__/factories";
-import { renderMail } from "../../../../mailer/templates/renderers";
-import { onSignup } from "../../../../mailer/templates";
-import { Mutation } from "../../../../generated/graphql/types";
+import { renderMail, onSignup } from "@td/mail";
+import type { Mutation } from "@td/codegen-back";
+import makeClient from "../../../../__tests__/testClient";
+
+const viablePassword = "trackdechets#";
 
 // No mails
-const sendMailSpy = jest.spyOn(mailsHelper, "sendMail");
-sendMailSpy.mockImplementation(() => Promise.resolve());
+jest.mock("../../../../mailer/mailing");
+(sendMail as jest.Mock).mockImplementation(() => Promise.resolve());
 
 const SIGNUP = `
   mutation SignUp($userInfos: SignupInput!) {
@@ -24,13 +24,15 @@ const SIGNUP = `
 `;
 
 describe("Mutation.signup", () => {
-  afterEach(async () => {
-    await resetDatabase();
-    sendMailSpy.mockClear();
+  let mutate: ReturnType<typeof makeClient>["mutate"];
+  beforeAll(() => {
+    const testClient = makeClient();
+    mutate = testClient.mutate;
   });
 
-  const { mutate } = createTestClient({
-    apolloServer: server
+  afterEach(async () => {
+    await resetDatabase();
+    (sendMail as jest.Mock).mockClear();
   });
 
   it("should create user, activation hash and send email", async () => {
@@ -44,15 +46,16 @@ describe("Mutation.signup", () => {
       variables: {
         userInfos: {
           email: user.email,
-          password: "newUserPassword",
+          password: viablePassword,
           name: user.name,
           phone: user.phone
         }
       }
     });
+
     expect(data.signup).toEqual(user);
 
-    const newUser = await prisma.user.findUnique({
+    const newUser = await prisma.user.findUniqueOrThrow({
       where: { email: user.email }
     });
     expect(newUser.email).toEqual(user.email);
@@ -62,7 +65,7 @@ describe("Mutation.signup", () => {
     });
     expect(activationHashes.length).toEqual(1);
 
-    expect(sendMailSpy).toHaveBeenCalledWith(
+    expect(sendMail as jest.Mock).toHaveBeenCalledWith(
       renderMail(onSignup, {
         to: [{ email: newUser.email, name: newUser.name }],
         variables: { activationHash: activationHashes[0].hash }
@@ -83,7 +86,7 @@ describe("Mutation.signup", () => {
         }
       }
     });
-    expect(errors[0].extensions.code).toEqual(ErrorCode.BAD_USER_INPUT);
+    expect(errors[0].extensions?.code).toEqual(ErrorCode.BAD_USER_INPUT);
   });
 
   it("should throw BAD_USER_INPUT if email already exist regarldess of the email casing", async () => {
@@ -99,7 +102,7 @@ describe("Mutation.signup", () => {
         }
       }
     });
-    expect(errors[0].extensions.code).toEqual(ErrorCode.BAD_USER_INPUT);
+    expect(errors[0].extensions?.code).toEqual(ErrorCode.BAD_USER_INPUT);
   });
 
   it("should throw BAD_USER_INPUT if email is not valid", async () => {
@@ -120,15 +123,15 @@ describe("Mutation.signup", () => {
         }
       }
     });
-    expect(errors[0].extensions.code).toEqual(ErrorCode.BAD_USER_INPUT);
+    expect(errors[0].extensions?.code).toEqual(ErrorCode.BAD_USER_INPUT);
   });
 
-  it("should throw BAD_USER_INPUT if password is less than 8 characters long", async () => {
+  it("should throw BAD_USER_INPUT if password is less than 10 characters long", async () => {
     const user = {
       email: "bademail",
       name: "New User",
       phone: "06 00 00 00 00",
-      password: "pass"
+      password: "loremipsu"
     };
     const { errors } = await mutate(SIGNUP, {
       variables: {
@@ -140,7 +143,76 @@ describe("Mutation.signup", () => {
         }
       }
     });
-    expect(errors[0].extensions.code).toEqual(ErrorCode.BAD_USER_INPUT);
+    expect(errors[0].extensions?.code).toEqual(ErrorCode.BAD_USER_INPUT);
+  });
+
+  it("should throw BAD_USER_INPUT if password is not complex enough", async () => {
+    const user = {
+      email: "bademail",
+      name: "New User",
+      phone: "06 00 00 00 00",
+      password: "aaaaaaaaaaaa"
+    };
+    const { errors } = await mutate(SIGNUP, {
+      variables: {
+        userInfos: {
+          email: user.email,
+          password: user.password,
+          name: user.name,
+          phone: user.phone
+        }
+      }
+    });
+    expect(errors[0].extensions?.code).toEqual(ErrorCode.BAD_USER_INPUT);
+  });
+
+  it("should throw BAD_USER_INPUT if password is to long", async () => {
+    const user = {
+      email: "bademail",
+      name: "New User",
+      phone: "06 00 00 00 00",
+      password:
+        "Lorem-ipsum-dolor-sit-amet-consectetur-adipiscing-elit-Ut-volutpat"
+    };
+    const { errors } = await mutate(SIGNUP, {
+      variables: {
+        userInfos: {
+          email: user.email,
+          password: user.password,
+          name: user.name,
+          phone: user.phone
+        }
+      }
+    });
+    expect(errors[0].extensions?.code).toEqual(ErrorCode.BAD_USER_INPUT);
+  });
+
+  it("should throw BAD_USER_INPUT if name contains unsafe SSTI chars", async () => {
+    const user = {
+      email: "newuser@td.io",
+      name: "Ihackoulol {{dump(app)}}",
+      phone: "06 00 00 00 00",
+      password: "newUserPassword"
+    };
+    const { errors } = await mutate(SIGNUP, {
+      variables: {
+        userInfos: {
+          email: user.email,
+          password: viablePassword,
+          name: user.name,
+          phone: user.phone
+        }
+      }
+    });
+
+    expect(errors).toEqual([
+      expect.objectContaining({
+        message: `Les caractères suivants sont interdits: { } % < > $ ' " =`,
+        extensions: expect.objectContaining({
+          code: ErrorCode.BAD_USER_INPUT
+        })
+      })
+    ]);
   });
 
   it("should accept pending invitations", async () => {
@@ -156,7 +228,7 @@ describe("Mutation.signup", () => {
     const invitation = await prisma.userAccountHash.create({
       data: {
         email: user.email,
-        companySiret: company.siret,
+        companySiret: company.siret!,
         hash: "hash",
         role: "MEMBER"
       }
@@ -166,18 +238,18 @@ describe("Mutation.signup", () => {
       variables: {
         userInfos: {
           email: user.email,
-          password: "newUserPassword",
+          password: viablePassword,
           name: user.name,
           phone: user.phone
         }
       }
     });
 
-    const newUser = await prisma.user.findUnique({
+    const newUser = await prisma.user.findUniqueOrThrow({
       where: { email: user.email }
     });
 
-    const updatedInvitation = await prisma.userAccountHash.findUnique({
+    const updatedInvitation = await prisma.userAccountHash.findUniqueOrThrow({
       where: {
         id: invitation.id
       }

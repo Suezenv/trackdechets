@@ -1,0 +1,8 @@
+.fullWidthTable {
+  > table {
+    display: table;
+    > tr {
+      word-break: break-word;
+    }
+  }
+}

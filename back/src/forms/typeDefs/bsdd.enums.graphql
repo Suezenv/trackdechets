@@ -12,6 +12,9 @@ enum FormStatus {
   """
   SEALED
 
+  "BSD signé par l'émetteur du bordereau"
+  SIGNED_BY_PRODUCER
+
   "BSD envoyé vers l'établissement de destination"
   SENT
 
@@ -23,6 +26,9 @@ enum FormStatus {
 
   "BSD dont les déchets ont été traités"
   PROCESSED
+
+  "BSD dont les déchets ont été traités en dehors de France sans rupture de traçabilité"
+  FOLLOWED_WITH_PNTTD
 
   "BSD en attente de regroupement"
   AWAITING_GROUP
@@ -45,8 +51,14 @@ enum FormStatus {
   "Déchet avec les cadres 14-19 complétées (si besoin), prêt à partir du site d'entreposage ou reconditionnement"
   RESEALED
 
+  "BSD signé par l'entreposage provisoire pour enlèvement"
+  SIGNED_BY_TEMP_STORER
+
   "Déchet envoyé du site d'entreposage ou reconditionnement vers sa destination de traitement"
   RESENT
+
+  "Bordereau annulé. L'annulation peut être demandée via le processus de révision"
+  CANCELED
 }
 
 enum FormRole {
@@ -62,11 +74,13 @@ enum FormRole {
   BROKER
   "Les BSD's dont je suis éco-organisme"
   ECO_ORGANISME
+  "Les BSD's dont je suis intermédiare"
+  INTERMEDIARY
 }
 
 "Types d'émetteur de déchet (choix multiple de la case 1)"
 enum EmitterType {
-  "Producetur de déchet"
+  "Producteur de déchet"
   PRODUCER
 
   "Autre détenteur"
@@ -74,6 +88,9 @@ enum EmitterType {
 
   "Collecteur de petites quantités de déchets relevant de la même rubrique"
   APPENDIX1
+
+  "Producteur d'un déchet collecté dans le cadre d'une annexe 1"
+  APPENDIX1_PRODUCER
 
   "Personne ayant transformé ou réalisé un traitement dont la provenance des déchets reste identifiable"
   APPENDIX2
@@ -92,6 +109,9 @@ enum Packagings {
 
   "Benne"
   BENNE
+
+  "Conditionné pour pipeline"
+  PIPELINE @deprecated(reason: "Utiliser `FormInput.isDirectSupply`")
 
   "Autre"
   AUTRE
@@ -157,24 +177,35 @@ enum FormsRegisterExportType {
   BROKERED
 }
 
-"""
-Format de l'export du registre
-"""
-enum FormsRegisterExportFormat {
-  """
-  Fichier csv
-  """
-  CSV
-  """
-  Fichier Excel
-  """
-  XLSX
+"Charte citerne - Raison pour laquelle la citerne n'a pas été rincée"
+enum CiterneNotWashedOutReason {
+  "Exemptions de rinçage (citerne dédiée)"
+  EXEMPTED
+
+  "Incompatibilité avec l'opération de rinçage à l'eau"
+  INCOMPATIBLE
+
+  "Indisponibilité de l'installation de rinçage"
+  UNAVAILABLE
+
+  "Rinçage non réalisé par le chauffeur"
+  NOT_BY_DRIVER
 }
 
-"Dénomination de l'auteur de la signature"
-enum SignatureAuthor {
-  "L'auteur de la signature est l'émetteur du déchet"
-  EMITTER
-  "L'auteur de la signature est l'éco-organisme figurant sur le BSD"
-  ECO_ORGANISME
+"Retour à vide ADR"
+enum EmptyReturnADR {
+  "Retour à vide, non nettoyé"
+  EMPTY_RETURN_NOT_WASHED
+
+  "Véhicule vide, dernière marchandise chargée"
+  EMPTY_VEHICLE
+
+  "Véhicule-Citerne vide, dernière marchandise chargée"
+  EMPTY_CITERNE
+
+  "Conteneur vide, dernière marchandise chargée"
+  EMPTY_CONTAINER
+
+  "Conteneur-citerne vide, dernière marchandise chargée"
+  EMPTY_CITERNE_CONTAINER
 }

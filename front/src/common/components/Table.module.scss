@@ -1,4 +1,5 @@
-@import "src/scss/Constants.scss";
+@import "../../scss/Constants.scss";
+@import "../../scss/Breakpoints.scss";
 
 .Table {
   width: 100%;
@@ -25,6 +26,16 @@
   font-size: 14px;
   padding: 8px 20px;
   border-bottom: 1px solid $grey-light;
+  max-width: 220px;
+  word-wrap: break-word;
+
+  @include xl-desktop {
+    max-width: 400px;
+  }
+}
+
+.TableRowDigest .TableCell {
+  border-top: 3px solid $grey-light;
 }
 
 .TableHeaderCell {
@@ -37,10 +48,10 @@
 }
 
 .TableSortIcon {
-  display: inline;
+  display: none;
   margin: 0 0.5rem;
   visibility: hidden;
 }
 .TableSortIconVisible {
-  visibility: visible;
+  display: inline;
 }

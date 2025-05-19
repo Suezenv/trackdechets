@@ -1,7 +1,10 @@
 import { libellesCodesNaf } from "./fixtures/libellesCodesNaf";
 
-/** */
-export function libelleFromCodeNaf(codeNaf: string) {
+/**
+ * Libellés NAF
+ */
+export function libelleFromCodeNaf(codeNaf: string): string {
+  if (!codeNaf) return "";
   const formattedNaf = codeNaf.replace(/[.-]/g, "");
   const libelle = libellesCodesNaf[formattedNaf];
   return libelle || "";
@@ -10,8 +13,8 @@ export function libelleFromCodeNaf(codeNaf: string) {
 /**
  * Build a full address string from its base components
  */
-export function buildAddress(addressComponents: string[]) {
-  return addressComponents.filter(x => !!x).join(" ");
+export function buildAddress(addressComponents: (string | null | undefined)[]) {
+  return addressComponents.filter(Boolean).join(" ");
 }
 
 export function safeParseFloat(f: string) {

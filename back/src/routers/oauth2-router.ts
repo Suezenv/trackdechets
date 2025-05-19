@@ -1,7 +1,7 @@
-import prisma from "../prisma";
+import { prisma } from "@td/prisma";
 import { Router, Request, Response } from "express";
 import passport from "passport";
-import { oauth2server } from "../oauth2";
+import { oauth2server } from "../oauth/oauth2";
 import ensureLoggedIn from "../common/middlewares/ensureLoggedIn";
 import { OAuth2, AuthorizationError } from "oauth2orize";
 
@@ -41,11 +41,10 @@ oauth2Router.get(
     const payload = {
       transactionID: req.oauth2.transactionID,
       user: {
-        name: req.user.name
+        name: req.user!.name
       },
       client: {
-        name: req.oauth2.client.name,
-        logoUrl: req.oauth2.client.logoUrl
+        name: req.oauth2.client.name
       },
       redirectURI: req.oauth2.redirectURI
     };

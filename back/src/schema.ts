@@ -9,6 +9,14 @@ import bsdsResolvers from "./bsds/resolvers";
 import dasriResolvers from "./bsdasris/resolvers";
 import bsffResolvers from "./bsffs/resolvers";
 import bsdaResolvers from "./bsda/resolvers";
+import bspaohResolvers from "./bspaoh/resolvers";
+import registryResolvers from "./registry/resolvers";
+import adminRequestResolvers from "./adminRequest/resolvers";
+import registryV2Resolvers from "./registryV2/resolvers";
+import applicationResolvers from "./applications/resolvers";
+import webhookResolvers from "./webhooks/resolvers";
+import companyDigestResolvers from "./companydigest/resolvers";
+import registryDelegationResolvers from "./registryDelegation/resolvers";
 
 // Merge GraphQL schema by merging types definitions and resolvers
 // from differents modules
@@ -22,7 +30,15 @@ const repositories = [
   "bsds",
   "bsdasris",
   "bsffs",
-  "bsda"
+  "bsda",
+  "bspaoh",
+  "registry",
+  "registryV2",
+  "applications",
+  "webhooks",
+  "companydigest",
+  "registryDelegation",
+  "adminRequest"
 ];
 
 const typeDefsPath = repositories.map(
@@ -42,7 +58,15 @@ const resolvers = [
   bsdsResolvers,
   dasriResolvers,
   bsffResolvers,
-  bsdaResolvers
+  bsdaResolvers,
+  bspaohResolvers,
+  registryResolvers,
+  registryV2Resolvers,
+  applicationResolvers,
+  webhookResolvers,
+  companyDigestResolvers,
+  registryDelegationResolvers,
+  adminRequestResolvers
 ];
 
 export { typeDefs, resolvers };

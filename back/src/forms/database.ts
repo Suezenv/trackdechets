@@ -2,49 +2,88 @@
  * PRISMA HELPER FUNCTIONS
  */
 
-import { Form, Prisma } from "@prisma/client";
-import { UserInputError } from "apollo-server-express";
-import prisma from "../prisma";
-import { FormRole } from "../generated/graphql/types";
-import { FormNotFound } from "./errors";
+import { BsddTransporter, Form, Prisma } from "@prisma/client";
+import { prisma } from "@td/prisma";
+import type { FormRole } from "@td/codegen-back";
+import { FormNotFound, FormTransporterNotFound } from "./errors";
 import { FullForm } from "./types";
+import { UserInputError } from "../common/errors";
 
 /**
  * Returns a prisma Form with all linked objects
- * (owner, ecoOrganisme, temporaryStorage, transportSegments)
+ * (owner, ecoOrganisme, temporaryStorage, transporters, intermediaries)
  * @param form
  */
 export async function getFullForm(form: Form): Promise<FullForm> {
-  const temporaryStorageDetail = await prisma.form
+  const forwardedIn = await prisma.form
     .findUnique({ where: { id: form.id } })
-    .temporaryStorageDetail();
-  const transportSegments = await prisma.form
-    .findUnique({ where: { id: form.id } })
-    .transportSegments();
+    .forwardedIn({ include: { transporters: true } });
+  const transporters = await prisma.form
+    .findUnique({
+      where: { id: form.id }
+    })
+    .transporters();
+  const intermediaries = await prisma.form
+    .findUnique({
+      where: { id: form.id }
+    })
+    .intermediaries();
+
+  if (forwardedIn) {
+    forwardedIn.transporters = getTransportersSync({
+      transporters: forwardedIn.transporters
+    }); // make sure transporters are sorted
+  }
+
   return {
     ...form,
-    temporaryStorageDetail,
-    transportSegments
+    forwardedIn,
+    transporters: getTransportersSync({ transporters }), // make sure transporters are sorted
+    intermediaries
   };
 }
 
 /**
  * Retrieves a form by id or readableId or throw a FormNotFound error
  */
-export async function getFormOrFormNotFound({
-  id,
-  readableId
-}: Prisma.FormWhereUniqueInput) {
+export async function getFormOrFormNotFound<
+  T extends Prisma.FormInclude | undefined
+>({ id, readableId }: Prisma.FormWhereUniqueInput, include?: T) {
   if (!id && !readableId) {
     throw new UserInputError("You should specify an id or a readableId");
   }
   const form = await prisma.form.findUnique({
-    where: id ? { id } : { readableId }
+    where: id ? { id } : { readableId },
+    include
   });
-  if (form == null || form.isDeleted == true) {
-    throw new FormNotFound(id ? id.toString() : readableId);
+  if (
+    form == null ||
+    form.isDeleted == true ||
+    form.readableId.endsWith("-suite")
+  ) {
+    throw new FormNotFound(id ? id.toString() : readableId!);
   }
-  return form;
+  return form as Prisma.FormGetPayload<{
+    include: T;
+  }>;
+}
+
+export async function getFormTransporterOrNotFound({ id }: { id: string }) {
+  if (!id) {
+    throw new UserInputError(
+      "Vous devez préciser un identifiant de transporteur"
+    );
+  }
+
+  const transporter = await prisma.bsddTransporter.findUnique({
+    where: { id }
+  });
+
+  if (transporter === null) {
+    throw new FormTransporterNotFound(id);
+  }
+
+  return transporter;
 }
 
 /**
@@ -55,55 +94,144 @@ export async function getFormOrFormNotFound({
  * @param siret the siret to filter on
  * @param roles optional [FormRole] to refine filter
  */
-export function getFormsRightFilter(siret: string, roles?: FormRole[]) {
+export function getFormsRightFilter(
+  siret: string,
+  roles?: FormRole[] | null
+): Prisma.FormWhereInput {
   const filtersByRole: {
     [key in FormRole]: Partial<Prisma.FormWhereInput>[];
   } = {
-    ["RECIPIENT"]: [
-      { recipientCompanySiret: siret },
-      {
-        temporaryStorageDetail: {
-          destinationCompanySiret: siret
-        }
-      }
-    ],
+    ["RECIPIENT"]: [{ recipientsSirets: { has: siret } }],
     ["EMITTER"]: [{ emitterCompanySiret: siret }],
-    ["TRANSPORTER"]: [
-      { transporterCompanySiret: siret },
-      {
-        transportSegments: {
-          some: {
-            transporterCompanySiret: siret
-          }
-        }
-      },
-      {
-        temporaryStorageDetail: {
-          transporterCompanySiret: siret
-        }
-      }
-    ],
+    ["TRANSPORTER"]: [{ transportersSirets: { has: siret } }],
     ["TRADER"]: [{ traderCompanySiret: siret }],
     ["BROKER"]: [{ brokerCompanySiret: siret }],
-    ["ECO_ORGANISME"]: [{ ecoOrganismeSiret: siret }]
+    ["ECO_ORGANISME"]: [{ ecoOrganismeSiret: siret }],
+    ["INTERMEDIARY"]: [{ intermediariesSirets: { has: siret } }]
   };
 
+  function getCommonORFilter({
+    defaultToAllRoles
+  }: {
+    defaultToAllRoles: boolean;
+  }) {
+    return {
+      OR: Object.keys(filtersByRole)
+        .filter((role: FormRole) => {
+          if (roles && roles.length > 0) {
+            return roles.includes(role);
+          }
+          return defaultToAllRoles;
+        })
+        .map(role => filtersByRole[role])
+        .flat()
+    };
+  }
+
   return {
-    OR: Object.keys(filtersByRole)
-      .filter((role: FormRole) =>
-        roles?.length > 0 ? roles.includes(role) : true
-      )
-      .map(role => filtersByRole[role])
-      .flat()
+    OR: [
+      {
+        status: { not: "DRAFT" },
+        ...getCommonORFilter({ defaultToAllRoles: true })
+      },
+      {
+        status: "DRAFT",
+        canAccessDraftSirets: { has: siret },
+        ...(roles && getCommonORFilter({ defaultToAllRoles: false }))
+      }
+    ]
   };
 }
 
-export async function getFinalDestinationSiret(form: Form) {
-  return form.temporaryStorageDetailId
-    ? (
-        await prisma.form
-          .findUnique({ where: { id: form.id } })
-          .temporaryStorageDetail()
-      )?.destinationCompanySiret
-    : form.recipientCompanySiret;
+export const SIRETS_BY_ROLE_INCLUDE = {
+  transporters: {
+    select: { transporterCompanySiret: true, transporterCompanyVatNumber: true }
+  },
+  intermediaries: { select: { siret: true } },
+  forwardedIn: {
+    select: {
+      recipientCompanySiret: true,
+      transporters: {
+        select: {
+          transporterCompanySiret: true,
+          transporterCompanyVatNumber: true
+        }
+      }
+    }
+  }
+};
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const fullInclude = { include: SIRETS_BY_ROLE_INCLUDE };
+
+export function getFormSiretsByRole(
+  form: Prisma.FormGetPayload<typeof fullInclude>
+) {
+  return {
+    recipientsSirets: [
+      form.recipientCompanySiret,
+      form.forwardedIn?.recipientCompanySiret
+    ].filter(Boolean),
+    transportersSirets: [
+      ...(form.transporters ?? []).flatMap(t => [
+        t.transporterCompanySiret,
+        t.transporterCompanyVatNumber
+      ]),
+      ...(form.forwardedIn?.transporters ?? []).flatMap(t => [
+        t.transporterCompanySiret,
+        t.transporterCompanyVatNumber
+      ])
+    ].filter(Boolean),
+    intermediariesSirets:
+      form.intermediaries?.map(intermediary => intermediary.siret) ?? []
+  };
+}
+
+export async function getTransporters(
+  form: Pick<Form, "id">
+): Promise<BsddTransporter[]> {
+  const transporters = await prisma.form
+    .findUnique({ where: { id: form.id } })
+    .transporters({ orderBy: { number: "asc" } });
+  return transporters ?? [];
+}
+
+export function getTransportersSync(form: {
+  transporters: BsddTransporter[] | null;
+}): BsddTransporter[] {
+  return (form.transporters ?? []).sort((t1, t2) => t1.number - t2.number);
+}
+
+export async function getFirstTransporter(
+  form: Pick<Form, "id">
+): Promise<BsddTransporter | null> {
+  const transporters = await getTransporters(form);
+  const firstTransporter = transporters.find(t => t.number === 1);
+  return firstTransporter ?? null;
+}
+
+export function getFirstTransporterSync(form: {
+  transporters: BsddTransporter[] | null;
+}): BsddTransporter | null {
+  const transporters = getTransportersSync(form);
+  const firstTransporter = transporters.find(t => t.number === 1);
+  return firstTransporter ?? null;
+}
+
+export function getLastTransporterSync(form: {
+  transporters: BsddTransporter[] | null;
+}): BsddTransporter | null {
+  const transporters = getTransportersSync(form);
+  const greatestNumber = Math.max(...transporters.map(t => t.number));
+  const lastTransporter = transporters.find(t => t.number === greatestNumber);
+  return lastTransporter ?? null;
+}
+
+// Renvoie le premier transporteur qui n'a pas encor signé
+export function getNextTransporterSync(form: {
+  transporters: BsddTransporter[] | null;
+}): BsddTransporter | null {
+  const transporters = getTransportersSync(form);
+  const nextTransporter = transporters.find(t => !t.takenOverAt);
+  return nextTransporter ?? null;
 }

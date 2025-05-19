@@ -1,23 +1,31 @@
 import { CompanyType } from "@prisma/client";
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import prisma from "../../../../prisma";
-import { companyFactory } from "../../../../__tests__/factories";
+import { prisma } from "@td/prisma";
+import { companyFactory, siretify } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
-import * as sirene from "../../../sirene";
 
-const searchCompanySpy = jest.spyOn(sirene, "searchCompany");
+const mockSearchSirene = jest.fn();
+jest.mock("../../../sirene/searchCompany", () => ({
+  __esModule: true,
+  default: (...args) => mockSearchSirene(...args)
+}));
 
 describe("query { companyInfos(siret: <SIRET>) }", () => {
-  afterEach(async () => {
-    await resetDatabase();
-    searchCompanySpy.mockReset();
+  let query: ReturnType<typeof makeClient>["query"];
+  beforeAll(() => {
+    const testClient = makeClient();
+    query = testClient.query;
   });
 
-  const { query } = makeClient(null);
+  afterEach(async () => {
+    await resetDatabase();
+    mockSearchSirene.mockReset();
+  });
 
-  test("Random company not registered in Trackdéchets", async () => {
-    searchCompanySpy.mockResolvedValueOnce({
-      siret: "85001946400013",
+  it("Random company not registered in Trackdéchets", async () => {
+    const siret = siretify(8);
+    mockSearchSirene.mockResolvedValueOnce({
+      siret,
       etatAdministratif: "A",
       name: "CODE EN STOCK",
       address: "4 Boulevard Longchamp 13001 Marseille",
@@ -31,7 +39,7 @@ describe("query { companyInfos(siret: <SIRET>) }", () => {
 
     const gqlquery = `
       query {
-        companyInfos(siret: "85001946400013") {
+        companyInfos(siret: "${siret}") {
           siret
           etatAdministratif
           name
@@ -51,7 +59,7 @@ describe("query { companyInfos(siret: <SIRET>) }", () => {
     const response = await query<any>(gqlquery);
 
     expect(response.data.companyInfos).toEqual({
-      siret: "85001946400013",
+      siret,
       etatAdministratif: "A",
       name: "CODE EN STOCK",
       address: "4 Boulevard Longchamp 13001 Marseille",
@@ -66,9 +74,10 @@ describe("query { companyInfos(siret: <SIRET>) }", () => {
     });
   });
 
-  test("ICPE registered in Trackdéchets", async () => {
-    searchCompanySpy.mockResolvedValueOnce({
-      siret: "85001946400013",
+  it("ICPE registered in Trackdéchets", async () => {
+    const siret = siretify(8);
+    mockSearchSirene.mockResolvedValueOnce({
+      siret,
       etatAdministratif: "A",
       name: "CODE EN STOCK",
       address: "4 Boulevard Longchamp 13001 Marseille",
@@ -81,7 +90,7 @@ describe("query { companyInfos(siret: <SIRET>) }", () => {
     });
 
     await companyFactory({
-      siret: "85001946400013",
+      siret,
       name: "Code en Stock",
       contactEmail: "john.snow@trackdechets.fr",
       contactPhone: "0600000000",
@@ -93,13 +102,13 @@ describe("query { companyInfos(siret: <SIRET>) }", () => {
 
     await prisma.installation.create({
       data: {
-        s3icNumeroSiret: "85001946400013",
+        s3icNumeroSiret: siret,
         codeS3ic: "0064.00001"
       }
     });
     const gqlquery = `
       query {
-        companyInfos(siret: "85001946400013") {
+        companyInfos(siret: "${siret}") {
           siret
           etatAdministratif
           name
@@ -119,7 +128,7 @@ describe("query { companyInfos(siret: <SIRET>) }", () => {
     const response = await query<any>(gqlquery);
     // informations from insee, TD and ICPE database are merged
     expect(response.data.companyInfos).toEqual({
-      siret: "85001946400013",
+      siret,
       etatAdministratif: "A",
       name: "CODE EN STOCK",
       address: "4 Boulevard Longchamp 13001 Marseille",
@@ -136,9 +145,10 @@ describe("query { companyInfos(siret: <SIRET>) }", () => {
     });
   });
 
-  test("Transporter company with transporter receipt", async () => {
-    searchCompanySpy.mockResolvedValueOnce({
-      siret: "85001946400013",
+  it("Transporter company with transporter receipt", async () => {
+    const siret = siretify(8);
+    mockSearchSirene.mockResolvedValueOnce({
+      siret,
       etatAdministratif: "A",
       name: "CODE EN STOCK",
       address: "4 Boulevard Longchamp 13001 Marseille",
@@ -157,7 +167,7 @@ describe("query { companyInfos(siret: <SIRET>) }", () => {
     };
 
     await companyFactory({
-      siret: "85001946400013",
+      siret,
       name: "Code en Stock",
       securityCode: 1234,
       contactEmail: "john.snow@trackdechets.fr",
@@ -168,7 +178,7 @@ describe("query { companyInfos(siret: <SIRET>) }", () => {
 
     const gqlquery = `
       query {
-        companyInfos(siret: "85001946400013") {
+        companyInfos(siret: "${siret}") {
           transporterReceipt {
             receiptNumber
             validityLimit
@@ -180,9 +190,11 @@ describe("query { companyInfos(siret: <SIRET>) }", () => {
     expect(response.data.companyInfos.transporterReceipt).toEqual(receipt);
   });
 
-  test("Trader company with trader receipt", async () => {
-    searchCompanySpy.mockResolvedValueOnce({
-      siret: "85001946400013",
+  it("Trader company with trader receipt", async () => {
+    const siret = siretify(8);
+
+    mockSearchSirene.mockResolvedValueOnce({
+      siret,
       etatAdministratif: "A",
       name: "CODE EN STOCK",
       address: "4 Boulevard Longchamp 13001 Marseille",
@@ -201,7 +213,7 @@ describe("query { companyInfos(siret: <SIRET>) }", () => {
     };
 
     await companyFactory({
-      siret: "85001946400013",
+      siret,
       name: "Code en Stock",
       securityCode: 1234,
       contactEmail: "john.snow@trackdechets.fr",
@@ -212,7 +224,7 @@ describe("query { companyInfos(siret: <SIRET>) }", () => {
 
     const gqlquery = `
       query {
-        companyInfos(siret: "85001946400013") {
+        companyInfos(siret: "${siret}") {
           traderReceipt {
             receiptNumber
             validityLimit
@@ -224,9 +236,11 @@ describe("query { companyInfos(siret: <SIRET>) }", () => {
     expect(response.data.companyInfos.traderReceipt).toEqual(receipt);
   });
 
-  test("Company with direct dasri takeover allowance", async () => {
-    searchCompanySpy.mockResolvedValueOnce({
-      siret: "85001946400013",
+  it("Company with direct dasri takeover allowance", async () => {
+    const siret = siretify(8);
+
+    mockSearchSirene.mockResolvedValueOnce({
+      siret,
       etatAdministratif: "A",
       name: "CODE EN STOCK",
       address: "4 Boulevard Longchamp 13001 Marseille",
@@ -239,7 +253,7 @@ describe("query { companyInfos(siret: <SIRET>) }", () => {
     });
 
     await companyFactory({
-      siret: "85001946400013",
+      siret,
       name: "Code en Stock",
       securityCode: 1234,
       contactEmail: "john.snow@trackdechets.fr",
@@ -250,25 +264,30 @@ describe("query { companyInfos(siret: <SIRET>) }", () => {
 
     const gqlquery = `
       query {
-        companyInfos(siret: "85001946400013") {
+        companyInfos(siret: "${siret}") {
           allowBsdasriTakeOverWithoutSignature
+          isRegistered
         }
       }`;
     const response = await query<any>(gqlquery);
     expect(
       response.data.companyInfos.allowBsdasriTakeOverWithoutSignature
     ).toEqual(true);
+    expect(response.data.companyInfos.isRegistered).toEqual(true);
   });
 
-  test.skip("Closed company", async () => {
-    // This test is skipped because it make a real call to SIRENE API
-    // It can be used to check our code is working well on closed companies
-    // (etatAdministratif = "F")
-    // Cf https://trello.com/c/6MtzqQk8
-    searchCompanySpy.mockRestore();
+  it("Shows etatAdministratif=F when company is closed in INSEE", async () => {
+    const siret = siretify(8);
+
+    mockSearchSirene.mockResolvedValueOnce({
+      siret,
+      etatAdministratif: "F",
+      name: "OPTIQUE LES AIX",
+      address: "49 Rue de la République 18220 Les Aix-d'Angillon"
+    });
     const gqlquery = `
     query {
-      companyInfos(siret: "41268783200011") {
+      companyInfos(siret: "${siret}") {
         siret
         etatAdministratif
         name
@@ -284,32 +303,83 @@ describe("query { companyInfos(siret: <SIRET>) }", () => {
         }
       }
     }`;
-    const response = await query<any>(gqlquery);
-    const company = response.data.companyInfos;
-    const expected = {
-      siret: "41268783200011",
-      etatAdministratif: "F",
-      name: "OPTIQUE LES AIX",
-      address: "49 Rue de la République 18220 Les Aix-d'Angillon",
-      naf: "52.4T",
-      libelleNaf: "",
-      isRegistered: false,
-      contactEmail: null,
-      contactPhone: null,
-      website: null,
-      installation: null
-    };
-    expect(company).toEqual(expected);
+    const { errors } = await query<any>(gqlquery);
+
+    // Then
+    expect(errors).not.toBeUndefined();
+    expect(errors[0].message).toBe("Cet établissement est fermé");
+    expect(errors[0].extensions?.code).toBe("BAD_USER_INPUT");
   });
 
-  test.skip("Hidden company", async () => {
-    // This test is skipped because it make a real call to SIRENE API
-    // It can be used to check our code is working well on hidden companies
-    // Cf https://trello.com/c/6MtzqQk8
-    searchCompanySpy.mockRestore();
+  it("Hides company infos if non-diffusible in INSEE and not registered in TD", async () => {
+    const siret = siretify(8);
+    mockSearchSirene.mockResolvedValueOnce({
+      siret,
+      etatAdministratif: "A",
+      name: "OPTIQUE LES AIX",
+      address: "49 Rue de la République 18220 Les Aix-d'Angillon",
+      statutDiffusionEtablissement: "P"
+    });
+
     const gqlquery = `
       query {
-        companyInfos(siret: "43317467900046") {
+        companyInfos(siret: "${siret}") {
+          siret
+          etatAdministratif
+          name
+          address
+          naf
+          libelleNaf
+          isRegistered
+          statutDiffusionEtablissement
+          contactEmail
+          contactPhone
+          website
+          installation {
+            codeS3ic
+          }
+        }
+      }`;
+    const { data } = await query<any>(gqlquery);
+    expect(data.companyInfos).toMatchObject({
+      address: null,
+      contactEmail: null,
+      contactPhone: null,
+      etatAdministratif: "A",
+      installation: null,
+      isRegistered: false,
+      statutDiffusionEtablissement: "P",
+      libelleNaf: null,
+      naf: null,
+      name: null,
+      siret,
+      website: null
+    });
+  });
+
+  it("Hides company infos if non-diffusible in INSEE, even if registered in TD", async () => {
+    const siret = siretify(8);
+    mockSearchSirene.mockResolvedValueOnce({
+      siret,
+      etatAdministratif: "A",
+      name: "OPTIQUE LES AIX",
+      address: "49 Rue de la République 18220 Les Aix-d'Angillon",
+      statutDiffusionEtablissement: "P"
+    });
+
+    await companyFactory({
+      siret,
+      name: "Code en Stock",
+      contactEmail: "john.snow@trackdechets.fr",
+      contactPhone: "0600000000",
+      website: "https://trackdechets.beta.gouv.fr",
+      companyTypes: {
+        set: [CompanyType.WASTEPROCESSOR]
+      }
+    });
+    const gqlquery = `
+      query {
+        companyInfos(siret: "${siret}") {
           siret
           etatAdministratif
           name
@@ -323,23 +393,115 @@ describe("query { companyInfos(siret: <SIRET>) }", () => {
           installation {
             codeS3ic
           }
+          statutDiffusionEtablissement
         }
       }`;
-    const response = await query<any>(gqlquery);
-    const company = response.data.companyInfos;
-    const expected = {
-      siret: "43317467900046",
-      etatAdministratif: null,
-      name: null,
-      address: "",
-      naf: null,
-      libelleNaf: "",
-      isRegistered: false,
+    const { data } = await query<any>(gqlquery);
+    expect(data.companyInfos).toMatchObject({
+      address: null,
       contactEmail: null,
       contactPhone: null,
-      website: null,
-      installation: null
-    };
-    expect(company).toEqual(expected);
+      etatAdministratif: "A",
+      installation: null,
+      isRegistered: true,
+      statutDiffusionEtablissement: "P",
+      libelleNaf: null,
+      naf: null,
+      name: null,
+      siret,
+      website: null
+    });
+  });
+
+  it("should return TD-specific infos even if company is anonymous", async () => {
+    // Given
+    const siret = siretify(8);
+    mockSearchSirene.mockResolvedValueOnce({
+      siret,
+      etatAdministratif: "A",
+      name: "OPTIQUE LES AIX",
+      address: "49 Rue de la République 18220 Les Aix-d'Angillon",
+      statutDiffusionEtablissement: "P"
+    });
+
+    await companyFactory({
+      siret,
+      allowBsdasriTakeOverWithoutSignature: true,
+      companyTypes: {
+        set: [CompanyType.WASTEPROCESSOR]
+      }
+    });
+    const gqlquery = `
+      query {
+        companyInfos(siret: "${siret}") {
+          allowBsdasriTakeOverWithoutSignature
+        }
+      }`;
+
+    // When
+    const { data } = await query<any>(gqlquery);
+
+    // Then
+    expect(data.companyInfos.allowBsdasriTakeOverWithoutSignature).toBeTruthy();
+  });
+
+  it("should return explicit error if non-diffusible AND closed", async () => {
+    // Given
+    const siret = siretify(8);
+    mockSearchSirene.mockResolvedValueOnce({
+      siret,
+      etatAdministratif: "F",
+      name: "OPTIQUE LES AIX",
+      address: "49 Rue de la République 18220 Les Aix-d'Angillon",
+      statutDiffusionEtablissement: "P"
+    });
+
+    // When
+    const gqlquery = `
+      query {
+        companyInfos(siret: "${siret}") {
+          siret
+        }
+      }`;
+    const { errors } = await query<any>(gqlquery);
+
+    // Then
+    expect(errors).not.toBeUndefined();
+    expect(errors[0].message).toBe("Cet établissement est fermé");
+    expect(errors[0].extensions?.code).toBe("BAD_USER_INPUT");
+  });
+
+  it.each([true, false])("should return isDormant = %p", async isDormant => {
+    // Given
+    const company = await companyFactory({
+      isDormantSince: isDormant ? new Date() : null
+    });
+
+    mockSearchSirene.mockResolvedValueOnce({
+      siret: company.siret,
+      etatAdministratif: "A",
+      name: "CODE EN STOCK",
+      address: "4 Boulevard Longchamp 13001 Marseille",
+      codeCommune: "13201",
+      naf: "62.01Z",
+      libelleNaf: "Programmation informatique",
+      addressVoie: "4 boulevard Longchamp",
+      addressCity: "Marseille",
+      addressPostalCode: "13001"
+    });
+
+    // When
+    const gqlquery = `
+      query {
+        companyInfos(siret: "${company.siret}") {
+          siret
+          isDormant
+        }
+      }`;
+    const { errors, data } = await query<any>(gqlquery);
+
+    // Then
+    expect(errors).toBeUndefined();
+    expect(data.companyInfos.isDormant).toBe(isDormant);
   });
 });

@@ -6,11 +6,13 @@ import {
   bsdasriFactory,
   initialData,
   readyToReceiveData,
-  readyToProcessData
+  readyToProcessData,
+  readyToPublishData
 } from "../../../__tests__/factories";
-import { Query } from "../../../../generated/graphql/types";
+import type { Query } from "@td/codegen-back";
 import { fullGroupingBsdasriFragment } from "../../../fragments";
-import { gql } from "apollo-server-express";
+import { gql } from "graphql-tag";
+import { BsdasriType } from "@prisma/client";
 
 const GET_BSDASRI = gql`
   ${fullGroupingBsdasriFragment}
@@ -27,9 +29,11 @@ describe("Query.Bsdasri", () => {
   it("should disallow unauthenticated user", async () => {
     const { query } = makeClient();
     const { company } = await userWithCompanyFactory("MEMBER");
+    const { company: destination } = await userWithCompanyFactory("MEMBER");
     const dasri = await bsdasriFactory({
       opt: {
-        ...initialData(company)
+        ...initialData(company),
+        ...readyToPublishData(destination)
       }
     });
 
@@ -48,9 +52,11 @@ describe("Query.Bsdasri", () => {
 
   it("should forbid access to user not on the bsd", async () => {
     const { company } = await userWithCompanyFactory("MEMBER");
+    const { company: destination } = await userWithCompanyFactory("MEMBER");
     const dasri = await bsdasriFactory({
       opt: {
-        ...initialData(company)
+        ...initialData(company),
+        ...readyToPublishData(destination)
       }
     });
     const { user: otherUser } = await userWithCompanyFactory("MEMBER");
@@ -69,11 +75,35 @@ describe("Query.Bsdasri", () => {
     ]);
   });
 
-  it("should get a dasri by id", async () => {
-    const { user, company } = await userWithCompanyFactory("MEMBER");
+  it("should allow access to admin user not on the bsd", async () => {
+    const { company } = await userWithCompanyFactory("MEMBER");
+    const { company: destination } = await userWithCompanyFactory("MEMBER");
     const dasri = await bsdasriFactory({
       opt: {
-        ...initialData(company)
+        ...initialData(company),
+        ...readyToPublishData(destination)
+      }
+    });
+    const { user: otherUser } = await userWithCompanyFactory(
+      "MEMBER",
+      {},
+      { isAdmin: true }
+    );
+
+    const { query } = makeClient(otherUser);
+    const { data } = await query<Pick<Query, "bsdasri">>(GET_BSDASRI, {
+      variables: { id: dasri.id }
+    });
+    expect(data.bsdasri.id).toBe(dasri.id);
+  });
+
+  it("should get a dasri by id", async () => {
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+    const { company: destination } = await userWithCompanyFactory("MEMBER");
+    const dasri = await bsdasriFactory({
+      opt: {
+        ...initialData(company),
+        ...readyToPublishData(destination)
       }
     });
 
@@ -88,13 +118,15 @@ describe("Query.Bsdasri", () => {
     expect(data.bsdasri.grouping).toStrictEqual([]);
   });
 
-  it("should retrieve regrouped dasris", async () => {
+  it("should retrieve grouped dasris", async () => {
     const { user, company } = await userWithCompanyFactory("MEMBER");
+    const { company: destination } = await userWithCompanyFactory("MEMBER");
     const transporterTakenOverAt = new Date();
     const toRegroup = await bsdasriFactory({
       opt: {
         ...initialData(company),
-        ...readyToReceiveData(company),
+        ...readyToPublishData(destination),
+        ...readyToReceiveData(),
         ...readyToProcessData,
         status: "PROCESSED",
         transporterTakenOverAt
@@ -104,7 +136,8 @@ describe("Query.Bsdasri", () => {
     const dasri = await bsdasriFactory({
       opt: {
         ...initialData(company),
-
+        ...readyToPublishData(destination),
+        type: BsdasriType.GROUPING,
         grouping: { connect: [{ id: toRegroup.id }] }
       }
     });

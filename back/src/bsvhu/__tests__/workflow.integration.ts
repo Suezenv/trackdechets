@@ -11,23 +11,20 @@ describe("Exemples de circuit du bordereau de suivi de véhicule hors d'usage", 
   afterEach(resetDatabase);
 
   async function apiKey(user: User) {
-    const { clearToken } = await createAccessToken(user);
-    return clearToken;
+    const { token } = await createAccessToken({ user });
+    return token;
   }
 
   it("Acheminement d'un centre VHU vers un broyeur", async () => {
-    const {
-      user: producteurUser,
-      company: producteurCompany
-    } = await userWithCompanyFactory("MEMBER");
-    const {
-      user: transporterUser,
-      company: transporterCompany
-    } = await userWithCompanyFactory("MEMBER");
-    const {
-      user: broyeurUser,
-      company: broyeurCompany
-    } = await userWithCompanyFactory("MEMBER");
+    const { user: producteurUser, company: producteurCompany } =
+      await userWithCompanyFactory("MEMBER");
+    const { user: transporterUser, company: transporterCompany } =
+      await userWithCompanyFactory("MEMBER");
+    const { user: broyeurUser, company: broyeurCompany } =
+      await userWithCompanyFactory("MEMBER", {
+        companyTypes: ["WASTE_VEHICLES"],
+        wasteVehiclesTypes: ["BROYEUR", "DEMOLISSEUR"]
+      });
 
     const producteurToken = await apiKey(producteurUser);
     const transporteurToken = await apiKey(transporterUser);
@@ -124,9 +121,10 @@ describe("Exemples de circuit du bordereau de suivi de véhicule hors d'usage", 
             updateBsvhu(id: "${id}", input: {
               transporter: {
                 recepisse: {
-                  number: "recepisse number"
-                  department: "75"
-                  validityLimit: "2020-06-30"
+                  isExempted: true
+                }
+                transport: {
+                  plates: "XY-23-TE"
                 }
               }
             }) { id }

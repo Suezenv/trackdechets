@@ -1,7 +1,7 @@
 import { UserRole } from "@prisma/client";
-import { gql } from "apollo-server-express";
+import { gql } from "graphql-tag";
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import { Query } from "../../../../generated/graphql/types";
+import type { Query } from "@td/codegen-back";
 import {
   formFactory,
   userWithCompanyFactory
@@ -41,7 +41,7 @@ describe("appendix2Forms resolver", () => {
     );
     const form = await formFactory({
       ownerId: user.id,
-      opt: { emitterCompanySiret: emitter.siret }
+      opt: { emitterCompanySiret: emitter.siret, emitterType: "APPENDIX2" }
     });
     const { query } = makeClient(user);
     const { data } = await query<Pick<Query, "form">>(FORM, {
@@ -51,22 +51,19 @@ describe("appendix2Forms resolver", () => {
   });
 
   it("should return appendix2 forms", async () => {
-    const {
-      user: emitter,
-      company: emitterCompany
-    } = await userWithCompanyFactory(UserRole.MEMBER);
+    const { user: emitter, company: emitterCompany } =
+      await userWithCompanyFactory(UserRole.MEMBER);
 
-    const {
-      user: collector,
-      company: collectorCompany
-    } = await userWithCompanyFactory(UserRole.MEMBER);
+    const { user: collector, company: collectorCompany } =
+      await userWithCompanyFactory(UserRole.MEMBER);
 
     const appendix2 = await formFactory({
       ownerId: emitter.id,
       opt: {
         emitterCompanySiret: emitterCompany.siret,
         emitterCompanyAddress: "40 boulevard Voltaire 13001 Marseille",
-        recipientCompanySiret: collectorCompany.siret
+        recipientCompanySiret: collectorCompany.siret,
+        quantityReceived: 1
       }
     });
 
@@ -74,7 +71,13 @@ describe("appendix2Forms resolver", () => {
       ownerId: collector.id,
       opt: {
         emitterCompanySiret: collectorCompany.siret,
-        appendix2Forms: { connect: { id: appendix2.id } }
+        emitterType: "APPENDIX2",
+        grouping: {
+          create: {
+            initialFormId: appendix2.id,
+            quantity: appendix2.quantityReceived!.toNumber()
+          }
+        }
       }
     });
 
@@ -95,10 +98,55 @@ describe("appendix2Forms resolver", () => {
           }
         },
         signedAt: appendix2.signedAt,
-        quantityReceived: appendix2.quantityReceived,
+        quantityReceived: appendix2.quantityReceived?.toNumber(),
         processingOperationDone: appendix2.processingOperationDone,
         emitterPostalCode: "13001"
       }
+    ]);
+  });
+
+  it("should use pickup site postal code when available", async () => {
+    const { user: emitter, company: emitterCompany } =
+      await userWithCompanyFactory(UserRole.MEMBER);
+
+    const { user: collector, company: collectorCompany } =
+      await userWithCompanyFactory(UserRole.MEMBER);
+
+    const appendix2 = await formFactory({
+      ownerId: emitter.id,
+      opt: {
+        emitterCompanySiret: emitterCompany.siret,
+        emitterCompanyAddress: "40 boulevard Voltaire 13001 Marseille",
+        emitterWorkSiteName: "Adresse de collecte",
+        emitterWorkSiteAddress: "Rue du chantier",
+        emitterWorkSiteCity: "Annonay",
+        emitterWorkSitePostalCode: "07100",
+        recipientCompanySiret: collectorCompany.siret,
+        quantityReceived: 1
+      }
+    });
+    const regroupementForm = await formFactory({
+      ownerId: collector.id,
+      opt: {
+        emitterCompanySiret: collectorCompany.siret,
+        emitterType: "APPENDIX2",
+        grouping: {
+          create: {
+            initialFormId: appendix2.id,
+            quantity: appendix2.quantityReceived!.toNumber()
+          }
+        }
+      }
+    });
+
+    const { query } = makeClient(collector);
+    const { data } = await query<Pick<Query, "form">>(FORM, {
+      variables: { id: regroupementForm.id }
+    });
+    expect(data.form.appendix2Forms).toEqual([
+      expect.objectContaining({
+        emitterPostalCode: "07100"
+      })
     ]);
   });
 });

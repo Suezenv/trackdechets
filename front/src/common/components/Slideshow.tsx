@@ -1,6 +1,9 @@
 import * as React from "react";
 import classNames from "classnames";
-import { IconArrowLeft1, IconArrowRight1 } from "common/components/Icons";
+import {
+  IconArrowLeft1,
+  IconArrowRight1
+} from "../../Apps/common/Components/Icons/Icons";
 import { List, ListItem } from "./List";
 import styles from "./Slideshow.module.scss";
 
@@ -19,7 +22,7 @@ export function Slideshow({ children }: SlideshowProps) {
         <button
           type="button"
           className={classNames(styles.SlideshowArrowLeft, {
-            [styles.SlideshowArrowDisabled]: currentSlideIndex <= 0,
+            [styles.SlideshowArrowDisabled]: currentSlideIndex <= 0
           })}
           onClick={() =>
             setCurrentSlideIndex(Math.max(0, currentSlideIndex - 1))
@@ -32,7 +35,7 @@ export function Slideshow({ children }: SlideshowProps) {
           type="button"
           className={classNames(styles.SlideshowArrowRight, {
             [styles.SlideshowArrowDisabled]:
-              currentSlideIndex >= slides.length - 1,
+              currentSlideIndex >= slides.length - 1
           })}
           onClick={() =>
             setCurrentSlideIndex(
@@ -50,7 +53,7 @@ export function Slideshow({ children }: SlideshowProps) {
             <button
               type="button"
               className={classNames(styles.SlideshowDotsItem, {
-                [styles.SlideshowDotsItemActive]: currentSlideIndex === index,
+                [styles.SlideshowDotsItemActive]: currentSlideIndex === index
               })}
               onClick={() => setCurrentSlideIndex(index)}
             />

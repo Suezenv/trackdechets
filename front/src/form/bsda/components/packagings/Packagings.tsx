@@ -1,23 +1,23 @@
-import { IconClose } from "common/components/Icons";
-import RedErrorMessage from "common/components/RedErrorMessage";
-import NumberInput from "form/common/components/custom-inputs/NumberInput";
+import { IconClose } from "../../../../Apps/common/Components/Icons/Icons";
+import RedErrorMessage from "../../../../common/components/RedErrorMessage";
+import NumberInput from "../../../common/components/custom-inputs/NumberInput";
 import { Field, FieldArray, FieldProps, useFormikContext } from "formik";
-import { BsdaPackaging, BsdaPackagingType } from "generated/graphql/types";
+import { BsdaPackaging, BsdaPackagingType } from "@td/codegen-ui";
 import React, { InputHTMLAttributes } from "react";
 import "./Packagings.scss";
 
 export const PACKAGINGS_NAMES = {
-  [BsdaPackagingType.BigBag]: "Big-bag",
+  [BsdaPackagingType.BigBag]: "Big-bag / GRV",
   [BsdaPackagingType.DepotBag]: "Dépôt-bag",
   [BsdaPackagingType.PaletteFilme]: "Palette filmée",
   [BsdaPackagingType.SacRenforce]: "Sac renforcé",
   [BsdaPackagingType.ConteneurBag]: "Conteneur-bag",
-  [BsdaPackagingType.Other]: "Autre(s)",
+  [BsdaPackagingType.Other]: "Autre(s)"
 };
 
 export default function Packagings({
   field: { name, value },
-  disabled,
+  disabled
 }: FieldProps<BsdaPackaging[] | null> & InputHTMLAttributes<HTMLInputElement>) {
   const { setFieldValue } = useFormikContext();
 
@@ -49,6 +49,7 @@ export default function Packagings({
                           Type
                           <select
                             name={fieldName}
+                            disabled={disabled}
                             className="td-select"
                             value={p.type}
                             onChange={event => {
@@ -58,13 +59,15 @@ export default function Packagings({
                                   event.target.value === BsdaPackagingType.Other
                                     ? p.other
                                     : "",
-                                quantity: p.quantity,
+                                quantity: p.quantity
                               });
                             }}
                           >
-                            {(Object.entries(PACKAGINGS_NAMES) as Array<
-                              [keyof typeof PACKAGINGS_NAMES, string]
-                            >).map(([optionValue, optionLabel]) => (
+                            {(
+                              Object.entries(PACKAGINGS_NAMES) as Array<
+                                [keyof typeof PACKAGINGS_NAMES, string]
+                              >
+                            ).map(([optionValue, optionLabel]) => (
                               <option key={optionValue} value={optionValue}>
                                 {optionLabel}
                               </option>
@@ -80,6 +83,7 @@ export default function Packagings({
                               className="td-input"
                               name={`${name}.${idx}.other`}
                               placeholder="..."
+                              disabled={disabled}
                             />
                           </label>
                         )}
@@ -92,12 +96,23 @@ export default function Packagings({
                           name={`${name}.${idx}.quantity`}
                           placeholder="Nombre"
                           min="1"
+                          disabled={disabled}
+                          onBlur={() => {
+                            // Having an empty quantity is not valid in our gql schema
+                            // So we forbid it with this form
+                            if (
+                              p.quantity == null ||
+                              Number.isNaN(p.quantity)
+                            ) {
+                              setFieldValue(`${name}.${idx}.quantity`, 1);
+                            }
+                          }}
                         />
                       </div>
                     </div>
                     <div
                       className="tw-px-2"
-                      onClick={() => arrayHelpers.remove(idx)}
+                      onClick={() => !disabled && arrayHelpers.remove(idx)}
                     >
                       <button type="button">
                         <IconClose />
@@ -118,7 +133,7 @@ export default function Packagings({
                 arrayHelpers.push({
                   type: BsdaPackagingType.Other,
                   other: "",
-                  quantity: 1,
+                  quantity: 1
                 })
               }
             >

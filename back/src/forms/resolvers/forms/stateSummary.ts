@@ -1,147 +1,141 @@
-import { TemporaryStorageDetail } from "@prisma/client";
-import prisma from "../../../prisma";
-import {
+import { QuantityType, Status } from "@prisma/client";
+import type {
   Form,
   FormResolvers,
-  PackagingInfo
-} from "../../../generated/graphql/types";
-
-function getTransporter(
-  form: Form,
-  temporaryStorageDetail: TemporaryStorageDetail
-) {
-  if (["SEALED", "DRAFT"].includes(form.status)) {
-    return form.transporter?.company;
-  }
-
-  if (
-    temporaryStorageDetail &&
-    ["RESEALED", "TEMP_STORED", "TEMP_STORER_ACCEPTED"].includes(form.status)
-  ) {
-    return {
-      name: temporaryStorageDetail.transporterCompanyName,
-      siret: temporaryStorageDetail.transporterCompanySiret,
-      address: temporaryStorageDetail.transporterCompanyAddress,
-      contact: temporaryStorageDetail.transporterCompanyContact,
-      phone: temporaryStorageDetail.transporterCompanyPhone,
-      mail: temporaryStorageDetail.transporterCompanyMail
-    };
-  }
-
-  return null;
-}
-
-function getRecipient(
-  form: Form,
-  temporaryStorageDetail: TemporaryStorageDetail
-) {
-  if (
-    temporaryStorageDetail &&
-    !["DRAFT", "SENT", "SEALED"].includes(form.status)
-  ) {
-    return {
-      name: temporaryStorageDetail.destinationCompanyName,
-      siret: temporaryStorageDetail.destinationCompanySiret,
-      address: temporaryStorageDetail.destinationCompanyAddress,
-      contact: temporaryStorageDetail.destinationCompanyContact,
-      phone: temporaryStorageDetail.destinationCompanyPhone,
-      mail: temporaryStorageDetail.destinationCompanyMail
-    };
-  }
-
-  return form.recipient?.company;
-}
-
-function getEmitter(
-  form: Form,
-  temporaryStorageDetail: TemporaryStorageDetail
-) {
-  if (
-    temporaryStorageDetail &&
-    ["TEMP_STORED", "TEMP_STORER_ACCEPTED", "RESEALED"].includes(form.status)
-  ) {
-    return form.recipient?.company;
-  }
-
-  return form.emitter?.company;
-}
+  TemporaryStorageDetail
+} from "@td/codegen-back";
+import { isDefined } from "../../../common/helpers";
 
 function getLastActionOn(
   form: Form,
-  temporaryStorageDetail: TemporaryStorageDetail
+  temporaryStorageDetail: TemporaryStorageDetail | null | undefined
 ): Date {
   switch (form.status) {
     case "SENT":
-      return form.sentAt;
+      return form.takenOverAt!;
     case "RECEIVED":
     case "ACCEPTED":
-      return form.receivedAt;
+      return form.receivedAt!;
     case "PROCESSED":
-      return form.processedAt;
+      return form.processedAt!;
     case "TEMP_STORED":
     case "TEMP_STORER_ACCEPTED":
     case "RESEALED":
-      return temporaryStorageDetail.tempStorerReceivedAt;
+      if (temporaryStorageDetail) {
+        /** QUICK FIX
+         *
+         * `getLastActionOn` may be called in the resolver of a BSDD computed in the FormRevisionRequest resolver.
+         * The BSDD is supposed to reflect the state of the BSDD at the time the form revision request was created
+         * thanks to the function `getBsddFromActivityEvents`.
+         * The problem is that `getBsddFromActivityEvents` is not able to compute the state of dependant
+         * objects like `forwardedIn`. The value of `forwardedIn` is thus injected from PostgreSQL (see FormRevisionRequest.ts).
+         * The result is a BSDD whose state is in between two states.
+         * If a revision request is made when the status of the BSDD is `TEMP_STORED` or `TEMP_STORED_ACCEPTED` and if
+         * an anticipated treatment is done on the BSDD (see https://github.com/MTES-MCT/trackdechets/pull/1449), it is possible
+         * to have here a virtual BSDD whose status is `TEMP_STORED` or `TEMP_STORER_ACCEPTED` but with no temporaryStorageDetail
+         * associated.
+         *
+         * A proper fix will be to enhance `getBsddFromActivityEvents`to be able to compute a bsdd AND related objects like
+         * `forwardedIn` from events.
+         */
+        return temporaryStorageDetail.temporaryStorer!.receivedAt!;
+      }
+      return form.receivedAt!;
     case "RESENT":
-      return temporaryStorageDetail.signedAt;
+      return temporaryStorageDetail!.takenOverAt!;
     default:
-      return form.createdAt;
+      return form.createdAt!;
   }
 }
 
-function getQuantity(
-  form: Form,
-  temporaryStorageDetail: TemporaryStorageDetail
-): number | null {
-  // When the form is received we have the definitive quantity
-  if (form.quantityReceived != null) {
-    return form.quantityReceived;
-  }
-  // When form is temp stored the quantity is reported on arrival and might be changed
-  if (form.recipient?.isTempStorage) {
-    // Repackaging
-    if (temporaryStorageDetail?.wasteDetailsQuantity) {
-      return temporaryStorageDetail.wasteDetailsQuantity;
-    }
+export function getStateSummary(form: Form) {
+  const { temporaryStorageDetail } = form;
 
-    // Arrival
-    if (temporaryStorageDetail?.tempStorerQuantityReceived != null) {
-      return temporaryStorageDetail.tempStorerQuantityReceived;
+  // This boolean is true when a form with temporary
+  // storage has been resealed or resent
+  const isResealed =
+    form.recipient?.isTempStorage &&
+    !!temporaryStorageDetail &&
+    (form.status === Status.RESEALED ||
+      !!form.temporaryStorageDetail?.emittedAt);
+
+  // Quantity & quantity type
+  let quantity: number | undefined | null;
+  let quantityType: QuantityType | undefined | null = QuantityType.REAL;
+  if (isDefined(form.quantityReceived)) {
+    quantity = form.quantityAccepted ?? form.quantityReceived;
+    quantityType = form.quantityReceivedType ?? QuantityType.REAL;
+  } else {
+    if (
+      [Status.TEMP_STORED, Status.TEMP_STORER_ACCEPTED].includes(
+        form.status as any
+      )
+    ) {
+      quantity =
+        form.temporaryStorageDetail?.temporaryStorer?.quantityAccepted ??
+        form.temporaryStorageDetail?.temporaryStorer?.quantityReceived;
+      quantityType =
+        form.temporaryStorageDetail?.temporaryStorer?.quantityType ??
+        QuantityType.REAL;
+    } else if (isResealed) {
+      quantity = form.temporaryStorageDetail?.wasteDetails?.quantity;
+      quantityType =
+        form.temporaryStorageDetail?.wasteDetails?.quantityType ??
+        QuantityType.REAL;
+    } else {
+      quantity = form.wasteDetails?.quantity;
+      quantityType = form.wasteDetails?.quantityType ?? QuantityType.REAL;
     }
   }
-  // Not a lot happened yet, use the quantity input
-  if (form.wasteDetails?.quantity) {
-    return form.wasteDetails.quantity;
-  }
-  // For drafts, we might not have a quantity yet
-  return null;
-}
 
-export async function getStateSummary(form: Form) {
-  const temporaryStorageDetail = await prisma.form
-    .findUnique({ where: { id: form.id } })
-    .temporaryStorageDetail();
+  const onuCode = isResealed
+    ? form.temporaryStorageDetail?.wasteDetails?.onuCode
+    : form.wasteDetails?.onuCode;
+
+  const nonRoadRegulationMention = isResealed
+    ? form.temporaryStorageDetail?.wasteDetails?.nonRoadRegulationMention
+    : form.wasteDetails?.nonRoadRegulationMention;
 
   const packagingInfos =
-    (temporaryStorageDetail?.wasteDetailsPackagingInfos as PackagingInfo[]) ??
-    form.wasteDetails?.packagingInfos ??
-    [];
+    (isResealed
+      ? form.temporaryStorageDetail?.wasteDetails?.packagingInfos
+      : form.wasteDetails?.packagingInfos) ?? [];
+
+  const transporter = isResealed
+    ? {
+        transporterNumberPlate:
+          form.temporaryStorageDetail?.transporter?.numberPlate,
+        transporterCustomInfo:
+          form.temporaryStorageDetail?.transporter?.customInfo,
+        transporter: form.temporaryStorageDetail?.transporter?.company
+      }
+    : {
+        transporterNumberPlate: form.transporter?.numberPlate,
+        transporterCustomInfo: form.transporter?.customInfo,
+        transporter: form.transporter?.company
+      };
+
+  const recipient = isResealed
+    ? form.temporaryStorageDetail?.destination?.company
+    : form.recipient?.company;
+
+  const emitter = isResealed ? form.recipient?.company : form.emitter?.company;
+
+  const isSubjectToADR = isResealed
+    ? form.temporaryStorageDetail?.wasteDetails?.isSubjectToADR
+    : form.wasteDetails?.isSubjectToADR;
 
   return {
-    quantity: getQuantity(form, temporaryStorageDetail),
+    quantity,
+    quantityType,
     packagingInfos,
     packagings: packagingInfos.map(pi => pi.type),
-    onuCode:
-      temporaryStorageDetail?.wasteDetailsOnuCode ?? form.wasteDetails?.onuCode,
-    transporterNumberPlate:
-      temporaryStorageDetail?.transporterNumberPlate ??
-      form.transporter?.numberPlate,
-    transporterCustomInfo:
-      temporaryStorageDetail?.transporterNumberPlate ??
-      form.transporter?.customInfo,
-    transporter: getTransporter(form, temporaryStorageDetail),
-    recipient: getRecipient(form, temporaryStorageDetail),
-    emitter: getEmitter(form, temporaryStorageDetail),
+    isSubjectToADR,
+    onuCode,
+    nonRoadRegulationMention,
+    ...transporter,
+    recipient,
+    emitter,
     lastActionOn: getLastActionOn(form, temporaryStorageDetail)
   };
 }

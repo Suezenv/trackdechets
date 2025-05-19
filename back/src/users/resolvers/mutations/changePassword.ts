@@ -1,22 +1,29 @@
-import { UserInputError } from "apollo-server-express";
 import { compare } from "bcrypt";
-import prisma from "../../../prisma";
+import { prisma } from "@td/prisma";
 import { applyAuthStrategies, AuthType } from "../../../auth";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import {
+import type {
   MutationChangePasswordArgs,
   MutationResolvers
-} from "../../../generated/graphql/types";
-import { hashPassword } from "../../utils";
+} from "@td/codegen-back";
+import { checkPasswordCriteria } from "../../utils";
+import { updateUserPassword } from "../../database";
+import { storeUserSessionsId } from "../../../common/redis/users";
+import { clearUserSessions } from "../../clearUserSessions";
+import { UserInputError } from "../../../common/errors";
 
 /**
  * Change user password
  */
 export async function changePasswordFn(
   userId: string,
-  { oldPassword, newPassword }: MutationChangePasswordArgs
+  { oldPassword, newPassword }: MutationChangePasswordArgs,
+  currentSessionId: string
 ) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) {
+    throw new Error(`Cannot find user ${userId}`);
+  }
   const passwordValid = await compare(oldPassword, user.password);
   if (!passwordValid) {
     throw new UserInputError("L'ancien mot de passe est incorrect.", {
@@ -24,16 +31,32 @@ export async function changePasswordFn(
     });
   }
 
-  const hashedPassword = await hashPassword(newPassword);
-  const updatedUser = await prisma.user.update({
-    where: { id: userId },
-    data: { password: hashedPassword }
+  // Delete all password reset hashes
+  await prisma.userResetPasswordHash.deleteMany({
+    where: { userId: user.id }
   });
+
+  const trimmedPassword = newPassword.trim();
+
+  checkPasswordCriteria(trimmedPassword);
+
+  const updatedUser = await updateUserPassword({
+    userId: user.id,
+    trimmedPassword
+  });
+
+  // bust opened sessions to disconnect user from all devices and browsers
+  // current user session is regenerated thanks to graphqlRegenerateSessionMiddleware,
+  // but not yet referenced is userSessionsIds, so user is not disconnected
+  await clearUserSessions(user.id);
+  // store session reference
+  await storeUserSessionsId(user.id, currentSessionId);
 
   return {
     ...updatedUser,
     // companies are resolved through a separate resolver (User.companies)
-    companies: []
+    companies: [],
+    featureFlags: []
   };
 }
 
@@ -46,7 +69,7 @@ const changePasswordResolver: MutationResolvers["changePassword"] = (
 
   const user = checkIsAuthenticated(context);
 
-  return changePasswordFn(user.id, args);
+  return changePasswordFn(user.id, args, context.req.sessionID);
 };
 
 export default changePasswordResolver;

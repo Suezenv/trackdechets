@@ -1,10 +1,10 @@
-import { unflattenBsdasri } from "../../converter";
+import { expandBsdasriFromDB } from "../../converter";
 
 import { MissingIdOrReadableId } from "../../../forms/errors";
-import { QueryResolvers } from "../../../generated/graphql/types";
+import type { QueryResolvers } from "@td/codegen-back";
 import { checkIsAuthenticated } from "../../../common/permissions";
 import { getBsdasriOrNotFound } from "../../database";
-import { checkCanReadBsdasri } from "../../permissions";
+import { checkCanRead } from "../../permissions";
 
 function validateArgs(args: any) {
   if (args.id == null) {
@@ -22,8 +22,8 @@ const bsdasriResolver: QueryResolvers["bsdasri"] = async (_, args, context) => {
 
   const bsdasri = await getBsdasriOrNotFound(validArgs);
 
-  await checkCanReadBsdasri(user, bsdasri);
-  return unflattenBsdasri(bsdasri);
+  await checkCanRead(user, bsdasri);
+  return expandBsdasriFromDB(bsdasri);
 };
 
 export default bsdasriResolver;

@@ -1,38 +1,46 @@
-import { MutationResolvers } from "../../../generated/graphql/types";
+import type { MutationResolvers } from "@td/codegen-back";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { getFormOrFormNotFound, getFullForm } from "../../database";
-import { ForbiddenError } from "apollo-server-express";
+import { isBsddTransporterFieldEditable } from "@td/constants";
+import { getFormOrFormNotFound } from "../../database";
 import { checkCanUpdateTransporterFields } from "../../permissions";
-import prisma from "../../../prisma";
-import { expandFormFromDb } from "../../form-converter";
-import { indexForm } from "../../elastic";
+import { getAndExpandFormFromDb } from "../../converter";
+import { getFormRepository } from "../../repository";
+import { ForbiddenError } from "../../../common/errors";
+import { transporterPlatesSchema } from "../../validation";
 
-const updateTransporterFieldsResolver: MutationResolvers["updateTransporterFields"] = async (
-  parent,
-  { id, transporterCustomInfo, transporterNumberPlate },
-  context
-) => {
-  const user = checkIsAuthenticated(context);
+const updateTransporterFieldsResolver: MutationResolvers["updateTransporterFields"] =
+  async (
+    parent,
+    { id, transporterCustomInfo, transporterNumberPlate },
+    context
+  ) => {
+    const user = checkIsAuthenticated(context);
 
-  const form = await getFormOrFormNotFound({ id });
+    const form = await getFormOrFormNotFound({ id });
 
-  if (form.status !== "SEALED") {
-    throw new ForbiddenError(
-      "Ce champ n'est pas modifiable sur un bordereau qui n'est pas en statut scellé"
+    if (!isBsddTransporterFieldEditable(form.status)) {
+      throw new ForbiddenError(
+        "Ce champ n'est pas modifiable sur un bordereau qui n'est pas en statut scellé ou signé par le producteur"
+      );
+    }
+
+    await checkCanUpdateTransporterFields(user, form);
+
+    await transporterPlatesSchema.validate({ transporterNumberPlate });
+
+    const updatedForm = await getFormRepository(user).update(
+      { id },
+      {
+        transporters: {
+          updateMany: {
+            where: { number: 1 },
+            data: { transporterNumberPlate, transporterCustomInfo }
+          }
+        }
+      }
     );
-  }
 
-  await checkCanUpdateTransporterFields(user, form);
-
-  const updatedForm = await prisma.form.update({
-    where: { id },
-    data: { transporterNumberPlate, transporterCustomInfo }
-  });
-
-  const fullForm = await getFullForm(updatedForm);
-  await indexForm(fullForm, context);
-
-  return expandFormFromDb(updatedForm);
-};
+    return getAndExpandFormFromDb(updatedForm.id);
+  };
 
 export default updateTransporterFieldsResolver;

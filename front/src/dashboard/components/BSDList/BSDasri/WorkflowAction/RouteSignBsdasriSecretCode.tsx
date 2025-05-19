@@ -1,52 +1,60 @@
 import React from "react";
-import { RedErrorMessage, Label } from "common/components";
-import Packagings from "form/bsdasri/components/packagings/Packagings";
-import WeightWidget from "form/bsdasri/components/Weight";
-import { useParams, useHistory, generatePath } from "react-router-dom";
-import { BdasriSummary } from "dashboard/components/BSDList/BSDasri/Summary/BsdasriSummary";
-import Loader from "common/components/Loaders";
+import {
+  RedErrorMessage,
+  Label,
+  FieldSwitch
+} from "../../../../../common/components";
+import Packagings from "../../../../../form/bsdasri/components/packagings/Packagings";
+import WeightWidget from "../../../../../form/bsdasri/components/Weight";
+import { useParams, useNavigate, generatePath } from "react-router-dom";
+import { BdasriSummary } from "../Summary/BsdasriSummary";
+import Loader from "../../../../../Apps/common/Components/Loader/Loaders";
 import { useQuery, useMutation } from "@apollo/client";
+
 import {
   Query,
   QueryBsdasriArgs,
   Mutation,
   MutationSignBsdasriEmissionWithSecretCodeArgs,
   MutationUpdateBsdasriArgs,
-  BsdasriSignatureType,
-} from "generated/graphql/types";
-import { getComputedState } from "form/common/stepper/GenericStepList";
+  BsdasriSignatureType
+} from "@td/codegen-ui";
+import { getComputedState } from "../../../../../Apps/Dashboard/Creation/getComputedState";
 import getInitialState, {
-  getInitialWeightFn,
-} from "form/bsdasri/utils/initial-state";
+  getInitialWeightFn
+} from "../../../../../form/bsdasri/utils/initial-state";
 
-import { GET_DETAIL_DASRI } from "common/queries";
-import { InlineError, NotificationError } from "common/components/Error";
-import EmptyDetail from "dashboard/detail/common/EmptyDetailView";
+import { GET_DETAIL_DASRI } from "../../../../../Apps/common/queries";
+import {
+  InlineError,
+  NotificationError
+} from "../../../../../Apps/common/Components/Error/Error";
+import EmptyDetail from "../../../../detail/common/EmptyDetailView";
 import { Formik, Field, Form } from "formik";
-import routes from "common/routes";
+import routes from "../../../../../Apps/routes";
 import { removeSections } from "./PartialForms";
 import {
   SIGN_BSDASRI_EMISSION_WITH_SECRET_CODE,
-  UPDATE_BSDASRI,
-} from "form/bsdasri/utils/queries";
+  UPDATE_BSDASRI
+} from "../../../../../Apps/common/queries/bsdasri/queries";
 import {
   emissionSignatureSecretCodeValidationSchema,
-  prefillWasteDetails,
+  prefillWasteDetails
 } from "./utils";
-import SignatureCodeInput from "form/common/components/custom-inputs/SignatureCodeInput";
+import SignatureCodeInput from "../../../../../form/common/components/custom-inputs/SignatureCodeInput";
 
 export function RouteBSDasrisSignEmissionSecretCode() {
-  const history = useHistory();
+  const navigate = useNavigate();
   const { id: formId, siret } = useParams<{ id: string; siret: string }>();
   const { error, data, loading } = useQuery<
     Pick<Query, "bsdasri">,
     QueryBsdasriArgs
   >(GET_DETAIL_DASRI, {
     variables: {
-      id: formId,
+      id: formId!
     },
 
-    fetchPolicy: "network-only",
+    fetchPolicy: "no-cache"
   });
   const [updateBsdasri, { error: updateError }] = useMutation<
     Pick<Mutation, "updateBsdasri">,
@@ -59,15 +67,15 @@ export function RouteBSDasrisSignEmissionSecretCode() {
 
   const toCollectDashboard = {
     pathname: generatePath(routes.dashboard.transport.toCollect, {
-      siret,
-    }),
+      siret
+    })
   };
   const signTransporterRedirection = {
     pathname: generatePath(routes.dashboard.bsdasris.sign.transporter, {
       siret,
-      id: formId,
+      id: formId!
     }),
-    state: { background: toCollectDashboard },
+    state: { background: toCollectDashboard }
   };
 
   if (error) {
@@ -83,10 +91,16 @@ export function RouteBSDasrisSignEmissionSecretCode() {
 
   return (
     <div>
-      <h2 className="td-modal-title">Signature producteur</h2>
+      <h2 className="td-modal-title">Signature émetteur</h2>
       <div className="notification success">
         Cet écran est à lire et signer par le{" "}
-        <strong>producteur du déchet</strong> sur le terminal du transporteur
+        <strong>producteur du déchet</strong>{" "}
+        {!!bsdasri?.ecoOrganisme?.siret && (
+          <>
+            ou <strong>l'éco-organisme</strong>{" "}
+          </>
+        )}
+        sur le terminal du transporteur
       </div>
       <BdasriSummary bsdasri={bsdasri} />
       <Formik
@@ -95,18 +109,20 @@ export function RouteBSDasrisSignEmissionSecretCode() {
           signature: {
             author: "",
             securityCode: "",
-          },
+            signatureAuthor: false
+          }
         }}
         validationSchema={emissionSignatureSecretCodeValidationSchema}
         onSubmit={async values => {
           const { id, signature, ...rest } = values;
+
           await updateBsdasri({
             variables: {
               id: id,
               input: {
-                ...removeSections(rest, BsdasriSignatureType.Emission),
-              },
-            },
+                ...removeSections(rest, BsdasriSignatureType.Emission)
+              }
+            }
           });
           await signBsdasriEmissionWithSecretCode({
             variables: {
@@ -114,11 +130,17 @@ export function RouteBSDasrisSignEmissionSecretCode() {
               input: {
                 ...signature,
                 securityCode: parseInt(signature.securityCode, 10),
-              },
-            },
+
+                signatureAuthor: !!signature.signatureAuthor
+                  ? "ECO_ORGANISME"
+                  : "EMITTER"
+              }
+            }
           });
 
-          history.push(signTransporterRedirection);
+          navigate(signTransporterRedirection.pathname, {
+            state: signTransporterRedirection.state
+          });
         }}
       >
         {({ isSubmitting, handleReset }) => {
@@ -146,6 +168,14 @@ export function RouteBSDasrisSignEmissionSecretCode() {
                   required
                   style={{ width: "100px" }}
                 />
+                {bsdasri?.ecoOrganisme?.siret && (
+                  <Field
+                    type="checkbox"
+                    component={FieldSwitch}
+                    name="signature.signatureAuthor"
+                    label="Le code est celui de l'éco-organisme"
+                  />
+                )}
               </div>
               <RedErrorMessage name="signature.securityCode" />
               <div className="form__row">
@@ -167,7 +197,7 @@ export function RouteBSDasrisSignEmissionSecretCode() {
                   className="btn btn--outline-primary"
                   onClick={() => {
                     handleReset();
-                    history.push(toCollectDashboard);
+                    navigate(toCollectDashboard);
                   }}
                 >
                   Annuler
@@ -185,25 +215,22 @@ export function RouteBSDasrisSignEmissionSecretCode() {
           );
         }}
       </Formik>
-      {(updateError || signError) && (
-        <>
+
+      {signError &&
+        !signError?.graphQLErrors
+          ?.map(err => err?.extensions?.errorCode)
+          ?.includes("SECRET_CODE_ERROR") && (
           <p className="tw-mt-2 tw-text-red-700">
             Vous devez mettre à jour le bordereau et renseigner les champs
             nécessaires avant de le signer.
           </p>
-          {updateError && (
-            <NotificationError
-              className="action-error"
-              apolloError={updateError}
-            />
-          )}
-          {signError && (
-            <NotificationError
-              className="action-error"
-              apolloError={signError}
-            />
-          )}
-        </>
+        )}
+      {updateError && (
+        <NotificationError className="action-error" apolloError={updateError} />
+      )}
+
+      {signError && (
+        <NotificationError className="action-error" apolloError={signError} />
       )}
     </div>
   );

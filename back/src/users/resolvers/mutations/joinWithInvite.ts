@@ -1,13 +1,13 @@
-import { UserInputError } from "apollo-server-express";
-import prisma from "../../../prisma";
 import * as yup from "yup";
-import { MutationResolvers } from "../../../generated/graphql/types";
+import type { MutationResolvers } from "@td/codegen-back";
 import {
   acceptNewUserCompanyInvitations,
   getUserAccountHashOrNotFound,
-  userExists
+  userExists,
+  createUser
 } from "../../database";
 import { hashPassword } from "../../utils";
+import { UserInputError } from "../../../common/errors";
 
 const validationSchema = yup.object({
   name: yup.string().required("Le nom est un champ requis"),
@@ -39,7 +39,7 @@ const joinWithInviteResolver: MutationResolvers["joinWithInvite"] = async (
   }
 
   const hashedPassword = await hashPassword(password);
-  const user = await prisma.user.create({
+  const user = await createUser({
     data: {
       name,
       email: existingHash.email,
@@ -56,7 +56,8 @@ const joinWithInviteResolver: MutationResolvers["joinWithInvite"] = async (
   return {
     ...user,
     // companies are resolved through a separate resolver (User.companies)
-    companies: []
+    companies: [],
+    featureFlags: []
   };
 };
 

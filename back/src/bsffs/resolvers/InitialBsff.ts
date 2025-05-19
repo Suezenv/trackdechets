@@ -1,25 +1,25 @@
-import prisma from "../../prisma";
-import { BsffResolvers } from "../../generated/graphql/types";
-import { getFicheInterventions } from "../database";
-import { isBsffContributor } from "../permissions";
-import { ForbiddenError } from "apollo-server-express";
+import type { BsffResolvers } from "@td/codegen-back";
+import { checkCanRead } from "../permissions";
+import { Bsff } from "./Bsff";
+import { getReadonlyBsffRepository } from "../repository";
+import { ForbiddenError } from "../../common/errors";
 
 export const InitialBsff: BsffResolvers = {
+  packagings: Bsff.packagings,
+  ficheInterventions: Bsff.ficheInterventions,
   emitter: async ({ id, emitter }, _, { user }) => {
-    const bsff = await prisma.bsff.findUnique({ where: { id } });
+    const { findUnique } = getReadonlyBsffRepository();
+    const bsff = await findUnique({
+      where: { id },
+      include: { transporters: true }
+    });
     try {
-      await isBsffContributor(user, bsff);
-    } catch (err) {
+      await checkCanRead(user!, bsff!);
+    } catch (_) {
       throw new ForbiddenError(
         `Vous ne pouvez pas accéder au champ "emitter" du bordereau initial ${id}`
       );
     }
-    return emitter;
-  },
-  ficheInterventions: async ({ id }, _, context) => {
-    const prismaBsff = await prisma.bsff.findUnique({
-      where: { id }
-    });
-    return getFicheInterventions({ bsff: prismaBsff, context });
+    return emitter ?? null;
   }
 };

@@ -1,29 +1,63 @@
-import React from "react";
-import { RedErrorMessage } from "common/components";
-import { BsdasriSignatureType } from "generated/graphql/types";
-import Packagings from "form/bsdasri/components/packagings/Packagings";
-import WeightWidget from "form/bsdasri/components/Weight";
-import DateInput from "form/common/components/custom-inputs/DateInput";
-import Acceptation from "form/bsdasri/components/acceptation/Acceptation";
-import NumberInput from "form/common/components/custom-inputs/NumberInput";
+import React, { lazy, useEffect } from "react";
+import { RedErrorMessage } from "../../../../../common/components";
 import {
-  ExtraSignatureType,
-  SignatureType,
-} from "dashboard/components/BSDList/BSDasri/types";
-import { Field } from "formik";
-import { omitDeep } from "common/omitDeep";
-import { getInitialWeightFn } from "form/bsdasri/utils/initial-state";
-
-export function ProducerSignatureForm() {
+  BsdasriSignatureType,
+  BsdasriStatus,
+  Bsdasri,
+  BsdasriType
+} from "@td/codegen-ui";
+import Packagings from "../../../../../form/bsdasri/components/packagings/Packagings";
+import WeightWidget from "../../../../../form/bsdasri/components/Weight";
+import DateInput from "../../../../../form/common/components/custom-inputs/DateInput";
+import Acceptation from "../../../../../form/bsdasri/components/acceptation/Acceptation";
+import NumberInput from "../../../../../form/common/components/custom-inputs/NumberInput";
+import { customInfoToolTip } from "../../../../../form/bsdasri/steps/Emitter";
+import { ExtraSignatureType, SignatureType } from "../types";
+import { Field, useFormikContext } from "formik";
+import omitDeep from "omit-deep-lodash";
+import { getInitialWeightFn } from "../../../../../form/bsdasri/utils/initial-state";
+import Transport from "../../../../../form/bsdasri/steps/Transport";
+import TransporterRecepisseWrapper from "../../../../../form/common/components/company/TransporterRecepisseWrapper";
+import { subMonths } from "date-fns";
+import OperationModeSelect from "../../../../../common/components/OperationModeSelect";
+import Tooltip from "../../../../../Apps/common/Components/Tooltip/Tooltip";
+const TagsInput = lazy(
+  () => import("../../../../../common/components/tags-input/TagsInput")
+);
+export function EmitterSignatureForm() {
   return (
     <>
       <div className="form__row">
-        <Field name="emitter.emission.packagingInfos" component={Packagings} />
+        <label>
+          Personne à contacter
+          <Field
+            type="text"
+            name="emitter.company.contact"
+            className="td-input"
+          />
+        </label>
+
+        <RedErrorMessage name="emitter.company.contact" />
+      </div>
+      <div className="form__row">
+        <label>
+          Téléphone ou Fax
+          <Field
+            type="text"
+            name="emitter.company.phone"
+            className="td-input"
+          />
+        </label>
+
+        <RedErrorMessage name="emitter.company.phone" />
+      </div>
+      <div className="form__row">
+        <Field name="emitter.emission.packagings" component={Packagings} />
       </div>
       <h4 className="form__section-heading">Quantité remise</h4>
       <div className="form__row">
         <WeightWidget
-          switchLabel="Je souhaite ajouter un poids"
+          switchLabel="Je préciser une quantité"
           dasriPath="emitter.emission"
           getInitialWeightFn={getInitialWeightFn}
         />
@@ -40,54 +74,52 @@ export function ProducerSignatureForm() {
   );
 }
 export function TransportSignatureForm() {
+  const { values } = useFormikContext<Bsdasri>();
+
   return (
     <>
       <div className="form__row">
         <label>
-          Numéro de récépissé
+          Personne à contacter
           <Field
             type="text"
-            name="transporter.recepisse.number"
+            name="transporter.company.contact"
             className="td-input"
           />
         </label>
 
-        <RedErrorMessage name="transporter.recepisse.number" />
+        <RedErrorMessage name="transporter.company.contact" />
       </div>
       <div className="form__row">
         <label>
-          Département
+          Téléphone ou Fax
           <Field
             type="text"
-            name="transporter.recepisse.department"
-            placeholder="Ex: 83"
-            className="td-input td-department"
+            name="transporter.company.phone"
+            className="td-input"
           />
         </label>
 
-        <RedErrorMessage name="transporter.recepisse.department" />
-      </div>
-      <div className="form__row">
-        <label>
-          Limite de validité
-          <div className="td-date-wrapper">
-            <Field
-              component={DateInput}
-              name="transporter.recepisse.validityLimit"
-              className="td-input td-date"
-            />
-          </div>
-        </label>
-
-        <RedErrorMessage name="transporter.recepisse.validityLimit" />
+        <RedErrorMessage name="transporter.company.phone" />
       </div>
 
-      <div className="form__row">
-        <Field
-          name="transporter.transport.acceptation"
-          component={Acceptation}
-        />
-      </div>
+      <Transport status={BsdasriStatus.SignedByProducer} />
+      <TransporterRecepisseWrapper transporter={values.transporter!} />
+    </>
+  );
+}
+
+export function SynthesisTransportSignatureForm() {
+  const { setFieldValue, values } = useFormikContext<Bsdasri>();
+
+  // is always accepted for synthesis
+  useEffect(() => {
+    setFieldValue(`transporter.transport.acceptation.status`, "ACCEPTED");
+  }, [setFieldValue]);
+
+  return (
+    <>
+      <TransporterRecepisseWrapper transporter={values.transporter!} />
       <div className="form__row">
         <label>
           Date de prise en charge
@@ -100,6 +132,15 @@ export function TransportSignatureForm() {
           </div>
         </label>
       </div>
+      {values.transporter?.transport?.mode === "ROAD" ? (
+        <div className="form__row">
+          <label htmlFor="transporter.transport.plates">
+            Immatriculations
+            <Tooltip className="fr-ml-1w" title={customInfoToolTip} />
+          </label>
+          <TagsInput name="transporter.transport.plates" />
+        </div>
+      ) : null}
       <div className="form__row">
         <Field
           name="transporter.transport.packagingInfos"
@@ -109,7 +150,7 @@ export function TransportSignatureForm() {
       <h4 className="form__section-heading">Quantité transportée</h4>
 
       <WeightWidget
-        switchLabel="Je souhaite ajouter un poids"
+        switchLabel="Je souhaite préciser le poids"
         dasriPath="transporter.transport"
         getInitialWeightFn={getInitialWeightFn}
       />
@@ -118,14 +159,53 @@ export function TransportSignatureForm() {
 }
 
 export function ReceptionSignatureForm() {
+  const { values, setFieldValue } = useFormikContext<Bsdasri>();
+
+  // is always accepted for synthesis
+  useEffect(() => {
+    if (values.type === BsdasriType.Synthesis) {
+      setFieldValue(`destination.reception.acceptation.status`, "ACCEPTED");
+    }
+  }, [setFieldValue, values.type]);
+
+  const TODAY = new Date();
+
   return (
     <>
       <div className="form__row">
-        <Field
-          name="destination.reception.acceptation"
-          component={Acceptation}
-        />
+        <label>
+          Personne à contacter
+          <Field
+            type="text"
+            name="destination.company.contact"
+            className="td-input"
+          />
+        </label>
+
+        <RedErrorMessage name="destination.company.contact" />
       </div>
+      <div className="form__row">
+        <label>
+          Téléphone ou Fax
+          <Field
+            type="text"
+            name="destination.company.phone"
+            className="td-input"
+          />
+        </label>
+        <RedErrorMessage name="destination.company.phone" />
+      </div>
+      <div className="form__row">
+        <Field name="destination.reception.packagings" component={Packagings} />
+      </div>
+      {values.type !== BsdasriType.Synthesis && (
+        <div className="form__row">
+          <Field
+            name="destination.reception.acceptation"
+            component={Acceptation}
+          />
+        </div>
+      )}
       <div className="form__row">
         <label>
           Date de réception
@@ -133,6 +213,8 @@ export function ReceptionSignatureForm() {
             <Field
               name="destination.reception.date"
               component={DateInput}
+              minDate={subMonths(TODAY, 2)}
+              maxDate={TODAY}
               className="td-input"
             />
           </div>
@@ -149,6 +231,8 @@ export function ReceptionSignatureForm() {
   );
 }
 export function OperationSignatureForm() {
+  const TODAY = new Date();
+  const { values } = useFormikContext<Bsdasri>();
   return (
     <>
       <div className="form__row">
@@ -167,16 +251,24 @@ export function OperationSignatureForm() {
           <option value="R1">
             R1 - Incinération + valorisation énergétique
           </option>
-          <option value="D12">
-            D12 - Groupement avant désinfection en D9 ou incinération en D10 sur
-            un site relevant de la rubrique 2718
-          </option>
-          <option value="R12">
-            R12 - Groupement avant incinération en R1, sur un site relevant de
-            la rubrique 2718
-          </option>
+          {values.type !== BsdasriType.Synthesis ? (
+            <>
+              <option value="D13">
+                D13 - Groupement avant désinfection en D9 ou incinération en D10
+                sur un site relevant de la rubrique 2718
+              </option>
+              <option value="R12">
+                R12 - Groupement avant incinération en R1, sur un site relevant
+                de la rubrique 2718
+              </option>
+            </>
+          ) : null}
         </Field>
       </div>
+      <OperationModeSelect
+        operationCode={values?.destination?.operation?.code}
+        name="destination.operation.mode"
+      />
       <div className="form__row">
         <label>
           Date de traitement :
@@ -184,14 +276,14 @@ export function OperationSignatureForm() {
             <Field
               name="destination.operation.date"
               component={DateInput}
+              minDate={subMonths(TODAY, 2)}
+              maxDate={TODAY}
               className="td-input"
             />
           </div>
         </label>
       </div>
-
       <h4 className="form__section-heading">Quantité traitée</h4>
-
       <div className="form__row">
         <label>
           Quantité en kg :
@@ -203,7 +295,6 @@ export function OperationSignatureForm() {
             min="0"
             step="0.1"
           />
-          <span className="tw-ml-2">kg</span>
         </label>
 
         <RedErrorMessage name="destination.operation.weight.value" />
@@ -214,47 +305,71 @@ export function OperationSignatureForm() {
 
 export const removeSections = (input, signatureType: SignatureType) => {
   const emitterKey = "emitter";
-
   const wasteKey = "waste";
   const ecoOrganismeKey = "ecoOrganisme";
   const transporterKey = "transporter";
   const destinationKey = "destination";
   const receptionKey = "reception";
   const operationKey = "operation";
-  const companyKey = "company";
+  const wholeCompanyKey = "company";
+  const companySiretKey = "siret";
+  const companyNameKey = "name";
   const customInfoKey = "customInfo";
-  const groupingBsdasrisKey = "grouping";
+  const groupingKey = "grouping";
+  const synthesizingKey = "synthesizing";
+  const synthesizedInKey = "synthesizedIn";
+  const identificationKey = "identification";
+  const vatNumberKey = "vatNumber";
+  const transporterTransportPackagingsKey = "transporter.transport.packagings";
+  const transporterTransportVolumeKey = "transporter.transport.volume";
+
   const common = [
     wasteKey,
-    companyKey,
+    companySiretKey,
+    companyNameKey,
     ecoOrganismeKey,
     customInfoKey,
-    groupingBsdasrisKey,
+    groupingKey,
+    synthesizingKey,
+    synthesizedInKey,
+    transporterTransportVolumeKey
   ];
   const mapping = {
     [BsdasriSignatureType.Emission]: [
       transporterKey,
       destinationKey,
-      ...common,
+      ...common
+    ],
+
+    [ExtraSignatureType.SynthesisTakeOver]: [
+      emitterKey,
+      destinationKey,
+      vatNumberKey,
+      transporterTransportPackagingsKey,
+
+      ...common
     ],
     [BsdasriSignatureType.Transport]: [emitterKey, destinationKey, ...common],
     [ExtraSignatureType.DirectTakeover]: [
       emitterKey,
       destinationKey,
-      ...common,
+      ...common
     ],
     [BsdasriSignatureType.Reception]: [
       emitterKey,
       transporterKey,
       operationKey,
-      ...common,
+      ...common
     ],
     [BsdasriSignatureType.Operation]: [
       emitterKey,
       transporterKey,
       receptionKey,
-      ...common,
-    ],
+      wholeCompanyKey,
+      identificationKey,
+      ...common
+    ]
   };
-  return omitDeep(input, mapping[signatureType]);
+  const { type, ...payload } = input;
+  return omitDeep(payload, mapping[signatureType]);
 };

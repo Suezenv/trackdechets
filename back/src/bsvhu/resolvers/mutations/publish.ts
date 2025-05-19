@@ -1,39 +1,46 @@
-import { ForbiddenError } from "apollo-server-express";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { MutationPublishBsvhuArgs } from "../../../generated/graphql/types";
-import prisma from "../../../prisma";
+import type { MutationPublishBsvhuArgs } from "@td/codegen-back";
 import { GraphQLContext } from "../../../types";
 import { expandVhuFormFromDb } from "../../converter";
-import { getFormOrFormNotFound } from "../../database";
-import { checkIsFormContributor } from "../../permissions";
-import { validateBsvhu } from "../../validation";
-import { indexBsvhu } from "../../elastic";
-export default async function create(
+import { getBsvhuOrNotFound } from "../../database";
+import { parseBsvhuAsync } from "../../validation";
+import { getBsvhuRepository } from "../../repository";
+import { checkCanUpdate } from "../../permissions";
+import { ForbiddenError } from "../../../common/errors";
+import { prismaToZodBsvhu } from "../../validation/helpers";
+import { BsvhuForParsingInclude } from "../../validation/types";
+
+export default async function publish(
   _,
   { id }: MutationPublishBsvhuArgs,
   context: GraphQLContext
 ) {
   const user = checkIsAuthenticated(context);
 
-  const prismaForm = await getFormOrFormNotFound(id);
-  await checkIsFormContributor(
-    user,
-    prismaForm,
-    "Vous ne pouvez pas modifier un bordereau sur lequel votre entreprise n'apparait pas"
-  );
+  const existingBsvhu = await getBsvhuOrNotFound(id, {
+    include: BsvhuForParsingInclude
+  });
 
-  if (!prismaForm.isDraft) {
+  await checkCanUpdate(user, existingBsvhu);
+
+  if (!existingBsvhu.isDraft) {
     throw new ForbiddenError(
       "Impossible de publier un bordereau qui n'est pas un brouillon"
     );
   }
 
-  await validateBsvhu(prismaForm, { emissionSignature: true });
+  await parseBsvhuAsync(
+    { ...prismaToZodBsvhu(existingBsvhu), isDraft: false },
+    {
+      user,
+      currentSignatureType: "EMISSION"
+    }
+  );
 
-  const updatedForm = await prisma.bsvhu.update({
-    where: { id },
-    data: { isDraft: false }
-  });
-  await indexBsvhu(updatedForm, context);
-  return expandVhuFormFromDb(updatedForm);
+  const updatedBsvhu = await getBsvhuRepository(user).update(
+    { id },
+    { isDraft: false }
+  );
+
+  return expandVhuFormFromDb(updatedBsvhu);
 }

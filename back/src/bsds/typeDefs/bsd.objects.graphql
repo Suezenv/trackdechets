@@ -1,26 +1,10 @@
-"""
-URL de téléchargement accompagné d'un token
-permettant de valider le téléchargement.
-"""
-type FileDownload {
-  "Token ayant une durée de validité de 10s"
-  token: String
-
-  "Lien de téléchargement"
-  downloadLink: String
-}
-
-type PageInfo {
-  startCursor: String
-  endCursor: String
-  hasNextPage: Boolean!
-  hasPreviousPage: Boolean!
-}
-
 "Information sur un établissement dans un BSD"
 type FormCompany {
   "Nom de l'établissement"
   name: String
+
+  "SIRET ou TVA de l'établissement"
+  orgId: String
 
   "SIRET de l'établissement"
   siret: String
@@ -32,7 +16,7 @@ type FormCompany {
   Code ISO 3166-1 alpha-2 du pays d'origine de l'entreprise :
   https://fr.wikipedia.org/wiki/ISO_3166-1_alpha-2
 
-  Seul la destination ultérieure case 12 (`form.nextDestination.company`) peut être à l'étranger.
+  Utilisé uniquement lorsque l'entreprise est à l'étranger
   """
   country: String
 
@@ -47,6 +31,15 @@ type FormCompany {
 
   "Numéro de TVA intracommunautaire"
   vatNumber: String
+
+  """
+  Numéro OMI ou IMO (International Maritime Organization) pour les navires étrangers (sans SIRET).
+  Il est composé des trois lettres IMO suivi d'un nombre de sept chiffres (ex: IMO 1234567).
+  """
+  omiNumber: String
+
+  "Un identifiant d'établissement hors EU"
+  extraEuropeanId: String
 }
 
 "Informations sur une adresse chantier"

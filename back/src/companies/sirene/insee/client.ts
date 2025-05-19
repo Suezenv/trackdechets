@@ -1,15 +1,16 @@
 import {
   SearchResponseInsee,
-  CompanySearchResult,
-  FullTextSearchResponseInsee
+  FullTextSearchResponseInsee,
+  SireneSearchResult
 } from "../types";
 import { libelleFromCodeNaf, buildAddress } from "../utils";
-import { UserInputError } from "apollo-server-express";
 import { authorizedAxiosGet } from "./token";
-import { AnonymousCompanyError } from "../errors";
+import { AnonymousCompanyError, SiretNotFoundError } from "../errors";
 import { format } from "date-fns";
 
-const SIRENE_API_BASE_URL = "https://api.insee.fr/entreprises/sirene/V3";
+const SIRENE_API_BASE_URL = "https://api.insee.fr/api-sirene/prive/3.11";
+
+export const SEARCH_COMPANIES_MAX_SIZE = 20;
 
 /**
  * Build a company object from a search response
@@ -17,7 +18,7 @@ const SIRENE_API_BASE_URL = "https://api.insee.fr/entreprises/sirene/V3";
  */
 function searchResponseToCompany({
   etablissement
-}: SearchResponseInsee): CompanySearchResult {
+}: SearchResponseInsee): SireneSearchResult {
   const addressVoie = buildAddress([
     etablissement.adresseEtablissement.numeroVoieEtablissement,
     etablissement.adresseEtablissement.indiceRepetitionEtablissement,
@@ -47,7 +48,10 @@ function searchResponseToCompany({
     codeCommune: etablissement.adresseEtablissement.codeCommuneEtablissement,
     name: etablissement.uniteLegale.denominationUniteLegale,
     naf: lastPeriod?.activitePrincipaleEtablissement,
-    libelleNaf: ""
+    libelleNaf: libelleFromCodeNaf(
+      lastPeriod?.activitePrincipaleEtablissement ?? ""
+    ),
+    statutDiffusionEtablissement: etablissement.statutDiffusionEtablissement
   };
 
   if (company.naf) {
@@ -70,30 +74,36 @@ function searchResponseToCompany({
   return company;
 }
 
+export const searchCompanySirene = async siret => {
+  const searchUrl = `${SIRENE_API_BASE_URL}/siret/${siret}`;
+  const response = await authorizedAxiosGet<SearchResponseInsee>(searchUrl);
+  return searchResponseToCompany(response.data);
+};
+
 /**
  * Search a company by SIRET
  * @param siret
  */
-export function searchCompany(siret: string): Promise<CompanySearchResult> {
-  const searchUrl = `${SIRENE_API_BASE_URL}/siret/${siret}`;
+export async function searchCompany(
+  siret: string,
+  _source_includes?: string[] // ignored
+): Promise<SireneSearchResult> {
+  try {
+    return await searchCompanySirene(siret);
+  } catch (error) {
+    // The request was made and the server responded with a status code
+    // that falls out of the range of 2xx
+    if (error.response?.status === 404) {
+      // 404 "no results found"
+      throw new SiretNotFoundError();
+    }
+    if (error.response?.status === 403) {
+      // this is not supposed to happen anymore since https://www.insee.fr/fr/information/6683782
+      throw new AnonymousCompanyError();
+    }
 
-  return authorizedAxiosGet<SearchResponseInsee>(searchUrl)
-    .then(r => searchResponseToCompany(r.data))
-    .catch(error => {
-      // The request was made and the server responded with a status code
-      // that falls out of the range of 2xx
-      if (error.response?.status === 404) {
-        // 404 "no results found"
-        throw new UserInputError("Aucun établissement trouvé avec ce SIRET", {
-          invalidArgs: ["siret"]
-        });
-      }
-      if (error.response?.status === 403) {
-        throw new AnonymousCompanyError();
-      }
-
-      throw error;
-    });
+    throw error;
+  }
 }
 
 /**
@@ -102,7 +112,7 @@ export function searchCompany(siret: string): Promise<CompanySearchResult> {
  */
 function fullTextSearchResponseToCompanies(
   r: FullTextSearchResponseInsee
-): CompanySearchResult[] {
+): SireneSearchResult[] {
   return r.etablissements.map(etablissement =>
     searchResponseToCompany({ etablissement })
   );
@@ -116,15 +126,18 @@ function fullTextSearchResponseToCompanies(
  */
 export function searchCompanies(
   clue: string,
-  department?: string
-): Promise<CompanySearchResult[]> {
+  department?: string,
+  allowClosedCompanies = true
+): Promise<SireneSearchResult[]> {
   // list of filters to pass as "q" arguments
-  const filters = [];
+  const filters: string[] = [];
 
   const today = format(new Date(), "yyyy-MM-dd");
 
   // exclude closed companies
-  filters.push(`periode(etatAdministratifEtablissement:A)`);
+  if (!allowClosedCompanies) {
+    filters.push(`periode(etatAdministratifEtablissement:A")`);
+  }
 
   if (/[0-9]{14}/.test(clue)) {
     // clue is formatted like a SIRET
@@ -140,8 +153,10 @@ export function searchCompanies(
   // the date parameter allows to apply the filter on current period
   const q = `${filters.join(" AND ")} &date=${today}`;
 
-  const searchUrl = `${SIRENE_API_BASE_URL}/siret?q=${q}`;
+  const searchUrl = `${SIRENE_API_BASE_URL}/siret?q=${q}&nombre=${SEARCH_COMPANIES_MAX_SIZE}`;
 
+  // API docs https://api.insee.fr/catalogue/site/themes/wso2/subthemes/insee/pages/item-info.jag?name=Sirene&version=V3&provider=insee#!/Etablissement/findSiretByQ
+  // Nombre d'éléments demandés dans la réponse, défaut 20
   return authorizedAxiosGet<FullTextSearchResponseInsee>(searchUrl)
     .then(r => {
       return fullTextSearchResponseToCompanies(r.data);

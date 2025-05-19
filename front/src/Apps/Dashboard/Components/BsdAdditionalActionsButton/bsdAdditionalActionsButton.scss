@@ -1,0 +1,59 @@
+$shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.16), 0 2px 8px 0 rgba(0, 0, 0, 0.12);
+
+.bsd-actions-kebab-menu {
+  position: relative;
+
+  &__button.fr-btn {
+    width: 32px !important;
+    min-height: 32px !important;
+    height: 32px !important;
+  }
+
+  &__button {
+    position: relative;
+    display: inline-block;
+    box-sizing: border-box;
+    padding: 3px 12px;
+    border: 1px solid #dddddd;
+    background: none;
+
+    .dots {
+      width: 4px;
+      height: 4px;
+      border-radius: 5px;
+      background: #000091;
+      margin: 2px 0;
+    }
+  }
+
+  &__dropdown {
+    position: absolute;
+    right: 0;
+    top: 45px;
+    transform: scale(0);
+    transform-origin: 100% 0;
+    box-shadow: $shadow;
+    background: #fff;
+    z-index: 99;
+    padding: 0;
+    min-width: 200px;
+
+    li {
+      display: block;
+      width: 100%;
+
+      .fr-btn {
+        width: 100%;
+        margin: 0;
+        padding: 16px;
+        color: #000000;
+        font-size: 0.875rem; //14px;
+        height: 40px;
+      }
+    }
+  }
+
+  &__dropdown--active {
+    transform: scale(1);
+  }
+}

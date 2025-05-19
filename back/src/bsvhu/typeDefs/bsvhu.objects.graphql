@@ -9,19 +9,31 @@ type BsvhuEdge {
   node: Bsvhu!
 }
 
+type BsvhuMetadataFields {
+  "Liste des champs scellés"
+  sealed: [[String!]!]!
+}
+
 type BsvhuMetadata {
   errors: [BsvhuError!]!
+  "Informations sur les champs"
+  fields: BsvhuMetadataFields!
 }
 
 type BsvhuError {
   message: String!
-  path: String!
+  path: [String!]!
   requiredFor: SignatureTypeInput!
 }
 
 type Bsvhu {
   "Numéro unique attribué par Trackdéchets"
   id: ID!
+  """
+  Identifiant personnalisé permettant de faire le lien avec un
+  objet un système d'information tierce
+  """
+  customId: String
   "Date de création"
   createdAt: DateTime
   "Date de dernière modification"
@@ -30,6 +42,12 @@ type Bsvhu {
   isDraft: Boolean!
   "Status du bordereau"
   status: BsvhuStatus!
+
+  """
+  Identifiant du bordereau à partir duquel ce celui-ci a été dupliqué.
+  Est égal à `null` si le bordereau n'est pas issue d'une duplication.
+  """
+  isDuplicateOf: String
 
   "Émetteur du bordereau"
   emitter: BsvhuEmitter
@@ -42,21 +60,42 @@ type Bsvhu {
   identification: BsvhuIdentification
   "Quantité de VHUs"
   quantity: Int
-  "Poids"
+  "Poids en tonnes"
   weight: BsvhuWeight
 
   "Destinataire du bordereau"
   destination: BsvhuDestination
   "Transporteur"
   transporter: BsvhuTransporter
+  """
+  Liste d'entreprises intermédiaires. Un intermédiaire est une entreprise qui prend part à la gestion du déchet,
+  mais pas à la responsabilité de la traçabilité. Il pourra lire ce bordereau, sans étape de signature.
+  """
+  intermediaries: [FormCompany!]
+
+  "Eco-organisme"
+  ecoOrganisme: BsvhuEcoOrganisme
+
+  "Courtier"
+  broker: BsvhuBroker
+
+  "Négociant"
+  trader: BsvhuTrader
 
   metadata: BsvhuMetadata!
+
+  "Comprend des véhicules éléctriques ou hybrides"
+  containsElectricOrHybridVehicles: Boolean
 }
 
 type BsvhuEmitter {
   "Numéro d'agrément émetteur"
   agrementNumber: String
-  "Coordonnées de l'entreprise émétrice"
+  "Indique si l'émetteur est en situation irrégulière"
+  irregularSituation: Boolean!
+  "Indique si l'émetteur est un particulier ou une entreprise sans SIRET"
+  noSiret: Boolean!
+  "Coordonnées de l'entreprise émettrice"
   company: FormCompany
   "Déclaration générale de l'émetteur du bordereau"
   emission: BsvhuEmission
@@ -66,25 +105,56 @@ type BsvhuEmission {
   signature: Signature
 }
 
+"Information sur l'éco-organisme responsable du BSVHU"
+type BsvhuEcoOrganisme {
+  name: String!
+  siret: String!
+}
+
 type BsvhuTransporter {
   "Coordonnées de l'entreprise de transport"
   company: FormCompany
   "Récépissé transporteur"
   recepisse: BsvhuRecepisse
+  "Champ libre"
+  customInfo: String
   "Informations liés au transport"
   transport: BsvhuTransport
 }
 
 type BsvhuTransport {
+  "Mode de transport"
+  mode: TransportMode
+  "Plaque(s) d'immatriculation"
+  plates: [String!]
   "Date de prise en charge"
   takenOverAt: DateTime
   signature: Signature
 }
 
 type BsvhuRecepisse {
+  "Exemption de récépissé"
+  isExempted: Boolean
+  "Numéro de récépissé"
   number: String
+  "Département"
   department: String
+  "Date limite de validité"
   validityLimit: DateTime
+}
+
+type BsvhuBroker {
+  "Coordonnées de l'entreprise courtier"
+  company: FormCompany
+  "Récépissé courtier"
+  recepisse: BsvhuRecepisse
+}
+
+type BsvhuTrader {
+  "Coordonnées de l'entreprise de négoce"
+  company: FormCompany
+  "Récépissé négociant"
+  recepisse: BsvhuRecepisse
 }
 
 type BsvhuDestination {
@@ -108,14 +178,16 @@ type BsvhuReception {
   date: DateTime
   "Quantité de VHUs reçue"
   quantity: Int
-  "Poids réel reçu"
+  "Poids réel reçu en tonnes"
   weight: Float
   "Lot accepté oui/non"
-  acceptationStatus: BsvhuAcceptationStatus
+  acceptationStatus: WasteAcceptationStatus
   "Motif de refus"
   refusalReason: String
   "Identification éventuelle des VHU à la reception (numéro de lots ou d'ordre)"
   identification: BsvhuIdentification
+  "Données relatives à la signature de la réception (optionelle)"
+  signature: Signature
 }
 
 type BsvhuOperation {
@@ -123,6 +195,8 @@ type BsvhuOperation {
   date: DateTime
   "Opération de traitement réalisée (R4 ou R12)"
   code: String
+  "Qualification du traitement final"
+  mode: OperationMode
   "Broyeur de destination, à remplir uniquement lorsque la destination est lui même un centre VHU"
   nextDestination: BsvhuNextDestination
   signature: Signature
@@ -138,6 +212,7 @@ type BsvhuIdentification {
 }
 
 type BsvhuWeight {
+  "Poids en tonnes"
   value: Float
   isEstimate: Boolean
 }

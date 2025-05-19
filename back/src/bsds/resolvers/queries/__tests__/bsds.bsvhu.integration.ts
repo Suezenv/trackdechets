@@ -1,12 +1,11 @@
-import { addYears } from "date-fns";
 import {
   Company,
   User,
   UserRole,
   WasteAcceptationStatus
 } from "@prisma/client";
-import prisma from "../../../../prisma";
-import {
+import { prisma } from "@td/prisma";
+import type {
   Query,
   QueryBsdsArgs,
   Mutation,
@@ -15,16 +14,23 @@ import {
   MutationSignBsvhuArgs,
   MutationDeleteBsvhuArgs,
   MutationDuplicateBsvhuArgs
-} from "../../../../generated/graphql/types";
+} from "@td/codegen-back";
 import {
   resetDatabase,
   refreshElasticSearch
 } from "../../../../../integration-tests/helper";
 import makeClient from "../../../../__tests__/testClient";
 import { ErrorCode } from "../../../../common/errors";
-import { indexBsvhu } from "../../../../bsvhu/elastic";
-import { userWithCompanyFactory } from "../../../../__tests__/factories";
-import { vhuFormFactory } from "../../../../bsvhu/__tests__/factories.vhu";
+import {
+  BsvhuForElasticInclude,
+  getBsvhuForElastic,
+  indexBsvhu
+} from "../../../../bsvhu/elastic";
+import {
+  transporterReceiptFactory,
+  userWithCompanyFactory
+} from "../../../../__tests__/factories";
+import { bsvhuFactory } from "../../../../bsvhu/__tests__/factories.vhu";
 
 const GET_BSDS = `
   query GetBsds($where: BsdWhere) {
@@ -43,7 +49,7 @@ const CREATE_DRAFT_VHU = `
 mutation CreateDraftVhu($input: BsvhuInput!) {
   createDraftBsvhu(input: $input) {
     id
-     
+
   }
 }
 `;
@@ -82,9 +88,13 @@ describe("Query.bsds.vhus base workflow", () => {
         set: ["TRANSPORTER"]
       }
     });
+    await transporterReceiptFactory({ company: transporter.company });
     destination = await userWithCompanyFactory(UserRole.ADMIN, {
       companyTypes: {
-        set: ["WASTEPROCESSOR"]
+        set: ["WASTE_VEHICLES"]
+      },
+      wasteVehiclesTypes: {
+        set: ["BROYEUR", "DEMOLISSEUR"]
       }
     });
   });
@@ -104,6 +114,7 @@ describe("Query.bsds.vhus base workflow", () => {
       >(CREATE_DRAFT_VHU, {
         variables: {
           input: {
+            customId: "theCustomId",
             emitter: {
               company: {
                 siret: emitter.company.siret,
@@ -149,11 +160,7 @@ describe("Query.bsds.vhus base workflow", () => {
                 phone: "0101010101",
                 mail: "transporter@mail.com"
               },
-              recepisse: {
-                number: "122",
-                department: "83",
-                validityLimit: addYears(new Date(), 1).toISOString() as any
-              }
+              transport: { plates: ["XY-87-IU"] }
             }
           }
         }
@@ -188,7 +195,7 @@ describe("Query.bsds.vhus base workflow", () => {
         {
           variables: {
             where: {
-              isDraftFor: [emitter.company.siret]
+              isDraftFor: [emitter.company.siret!]
             }
           }
         }
@@ -198,39 +205,90 @@ describe("Query.bsds.vhus base workflow", () => {
         expect.objectContaining({ node: { id: vhuId } })
       ]);
     });
-    it("draft vhu should be isDraftFor transporter", async () => {
+
+    it("draft vhu should be found with custom id", async () => {
+      const { query } = makeClient(emitter.user);
+      const { data: data1 } = await query<Pick<Query, "bsds">, QueryBsdsArgs>(
+        GET_BSDS,
+        {
+          variables: {
+            where: {
+              customId: { _contains: "nope" },
+              isDraftFor: [emitter.company.siret!]
+            }
+          }
+        }
+      );
+
+      expect(data1.bsds.edges.length).toEqual(0);
+
+      const { data: data2 } = await query<Pick<Query, "bsds">, QueryBsdsArgs>(
+        GET_BSDS,
+        {
+          variables: {
+            where: {
+              customId: { _contains: "theCustomId" },
+              isDraftFor: [emitter.company.siret!]
+            }
+          }
+        }
+      );
+
+      expect(data2.bsds.edges).toEqual([
+        expect.objectContaining({ node: { id: vhuId } })
+      ]);
+    });
+
+    it("draft vhu should be found with plates", async () => {
+      const { query } = makeClient(emitter.user);
+      const { data } = await query<Pick<Query, "bsds">, QueryBsdsArgs>(
+        GET_BSDS,
+        {
+          variables: {
+            where: {
+              transporter: {
+                transport: { plates: { _has: "XY-87-IU" } }
+              }
+            }
+          }
+        }
+      );
+
+      expect(data.bsds.edges).toEqual([
+        expect.objectContaining({ node: { id: vhuId } })
+      ]);
+    });
+
+    it("draft vhu should not be isDraftFor transporter", async () => {
       const { query } = makeClient(transporter.user);
       const { data } = await query<Pick<Query, "bsds">, QueryBsdsArgs>(
         GET_BSDS,
         {
           variables: {
             where: {
-              isDraftFor: [transporter.company.siret]
+              isDraftFor: [transporter.company.siret!]
             }
           }
         }
       );
 
-      expect(data.bsds.edges).toEqual([
-        expect.objectContaining({ node: { id: vhuId } })
-      ]);
+      expect(data.bsds.edges).toEqual([]);
     });
-    it("draft vhu should be isDraftFor destination", async () => {
+
+    it("draft vhu should not be isDraftFor destination", async () => {
       const { query } = makeClient(destination.user);
       const { data } = await query<Pick<Query, "bsds">, QueryBsdsArgs>(
         GET_BSDS,
         {
           variables: {
             where: {
-              isDraftFor: [destination.company.siret]
+              isDraftFor: [destination.company.siret!]
             }
           }
         }
       );
 
-      expect(data.bsds.edges).toEqual([
-        expect.objectContaining({ node: { id: vhuId } })
-      ]);
+      expect(data.bsds.edges).toEqual([]);
     });
   });
 
@@ -257,7 +315,7 @@ describe("Query.bsds.vhus base workflow", () => {
         {
           variables: {
             where: {
-              isForActionFor: [emitter.company.siret]
+              isForActionFor: [emitter.company.siret!]
             }
           }
         }
@@ -268,14 +326,14 @@ describe("Query.bsds.vhus base workflow", () => {
       ]);
     });
 
-    it("published vhu should be isToCollectFor transporter", async () => {
+    it("published vhu should be isFollowFor transporter", async () => {
       const { query } = makeClient(transporter.user);
       const { data } = await query<Pick<Query, "bsds">, QueryBsdsArgs>(
         GET_BSDS,
         {
           variables: {
             where: {
-              isToCollectFor: [transporter.company.siret]
+              isFollowFor: [transporter.company.siret!]
             }
           }
         }
@@ -293,7 +351,7 @@ describe("Query.bsds.vhus base workflow", () => {
         {
           variables: {
             where: {
-              isFollowFor: [destination.company.siret]
+              isFollowFor: [destination.company.siret!]
             }
           }
         }
@@ -329,7 +387,7 @@ describe("Query.bsds.vhus base workflow", () => {
         {
           variables: {
             where: {
-              isFollowFor: [emitter.company.siret]
+              isFollowFor: [emitter.company.siret!]
             }
           }
         }
@@ -347,7 +405,7 @@ describe("Query.bsds.vhus base workflow", () => {
         {
           variables: {
             where: {
-              isToCollectFor: [transporter.company.siret]
+              isToCollectFor: [transporter.company.siret!]
             }
           }
         }
@@ -365,7 +423,7 @@ describe("Query.bsds.vhus base workflow", () => {
         {
           variables: {
             where: {
-              isFollowFor: [destination.company.siret]
+              isFollowFor: [destination.company.siret!]
             }
           }
         }
@@ -401,7 +459,7 @@ describe("Query.bsds.vhus base workflow", () => {
         {
           variables: {
             where: {
-              isFollowFor: [emitter.company.siret]
+              isFollowFor: [emitter.company.siret!]
             }
           }
         }
@@ -419,7 +477,7 @@ describe("Query.bsds.vhus base workflow", () => {
         {
           variables: {
             where: {
-              isCollectedFor: [transporter.company.siret]
+              isCollectedFor: [transporter.company.siret!]
             }
           }
         }
@@ -437,7 +495,7 @@ describe("Query.bsds.vhus base workflow", () => {
         {
           variables: {
             where: {
-              isForActionFor: [destination.company.siret]
+              isForActionFor: [destination.company.siret!]
             }
           }
         }
@@ -461,7 +519,9 @@ describe("Query.bsds.vhus base workflow", () => {
           destinationReceptionWeight: 10.0,
           destinationReceptionAcceptationStatus:
             WasteAcceptationStatus.ACCEPTED,
-          destinationOperationCode: "R 4"
+          destinationOperationCode: "R 4",
+          destinationOperationMode: "REUTILISATION",
+          destinationOperationDate: new Date()
         }
       });
       await mutate<Pick<Mutation, "signBsvhu">, MutationSignBsvhuArgs>(
@@ -484,7 +544,7 @@ describe("Query.bsds.vhus base workflow", () => {
         {
           variables: {
             where: {
-              isArchivedFor: [emitter.company.siret]
+              isArchivedFor: [emitter.company.siret!]
             }
           }
         }
@@ -502,7 +562,7 @@ describe("Query.bsds.vhus base workflow", () => {
         {
           variables: {
             where: {
-              isArchivedFor: [transporter.company.siret]
+              isArchivedFor: [transporter.company.siret!]
             }
           }
         }
@@ -513,14 +573,14 @@ describe("Query.bsds.vhus base workflow", () => {
       ]);
     });
 
-    it("processed  vhu should be isArchivedFor destination", async () => {
+    it("processed vhu should be isArchivedFor destination", async () => {
       const { query } = makeClient(destination.user);
       const { data } = await query<Pick<Query, "bsds">, QueryBsdsArgs>(
         GET_BSDS,
         {
           variables: {
             where: {
-              isArchivedFor: [destination.company.siret]
+              isArchivedFor: [destination.company.siret!]
             }
           }
         }
@@ -536,9 +596,14 @@ describe("Query.bsds.vhus base workflow", () => {
     beforeAll(async () => {
       const refusedVhu = await prisma.bsvhu.update({
         where: { id: vhuId },
-        data: { status: "REFUSED" }
+        data: { status: "REFUSED" },
+        include: {
+          ...BsvhuForElasticInclude
+        }
       });
-      await indexBsvhu(refusedVhu);
+      const bsvhuForElastic = await getBsvhuForElastic(refusedVhu);
+      await indexBsvhu(bsvhuForElastic);
+
       await refreshElasticSearch();
     });
 
@@ -549,7 +614,7 @@ describe("Query.bsds.vhus base workflow", () => {
         {
           variables: {
             where: {
-              isArchivedFor: [emitter.company.siret]
+              isArchivedFor: [emitter.company.siret!]
             }
           }
         }
@@ -567,7 +632,7 @@ describe("Query.bsds.vhus base workflow", () => {
         {
           variables: {
             where: {
-              isArchivedFor: [transporter.company.siret]
+              isArchivedFor: [transporter.company.siret!]
             }
           }
         }
@@ -578,14 +643,14 @@ describe("Query.bsds.vhus base workflow", () => {
       ]);
     });
 
-    it("refused  vhu should be isArchivedFor recipient", async () => {
+    it("refused vhu should be isArchivedFor recipient", async () => {
       const { query } = makeClient(destination.user);
       const { data } = await query<Pick<Query, "bsds">, QueryBsdsArgs>(
         GET_BSDS,
         {
           variables: {
             where: {
-              isArchivedFor: [destination.company.siret]
+              isArchivedFor: [destination.company.siret!]
             }
           }
         }
@@ -608,13 +673,14 @@ describe("Query.bsds.vhus mutations", () => {
       }
     });
 
-    const vhu = await vhuFormFactory({
+    const vhu = await bsvhuFactory({
       opt: {
         emitterCompanySiret: emitter.company.siret
       }
     });
 
-    await indexBsvhu(vhu);
+    const bsvhuForElastic = await getBsvhuForElastic(vhu);
+    await indexBsvhu(bsvhuForElastic);
     await refreshElasticSearch();
 
     const { query } = makeClient(emitter.user);
@@ -647,7 +713,7 @@ describe("Query.bsds.vhus mutations", () => {
     await refreshElasticSearch();
 
     res = await query<Pick<Query, "bsds">, QueryBsdsArgs>(GET_BSDS, {});
-    // vhu si not indexed anymore
+    // vhu is not indexed anymore
     expect(res.data.bsds.edges).toEqual([]);
   });
 
@@ -658,12 +724,13 @@ describe("Query.bsds.vhus mutations", () => {
       }
     });
 
-    const vhu = await vhuFormFactory({
+    const vhu = await bsvhuFactory({
       opt: {
         emitterCompanySiret: emitter.company.siret
       }
     });
-    await indexBsvhu(vhu);
+    const bsvhuForElastic = await getBsvhuForElastic(vhu);
+    await indexBsvhu(bsvhuForElastic);
 
     //duplicate vhu
     const { mutate } = makeClient(emitter.user);
@@ -689,7 +756,7 @@ describe("Query.bsds.vhus mutations", () => {
       }
     });
 
-    await indexBsvhu(vhu);
+    await indexBsvhu(bsvhuForElastic);
     await refreshElasticSearch();
 
     const { query } = makeClient(emitter.user);

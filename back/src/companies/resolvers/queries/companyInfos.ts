@@ -1,72 +1,103 @@
-import { UserInputError } from "apollo-server-express";
-import prisma from "../../../prisma";
-import {
-  CompanyPublic,
-  QueryResolvers
-} from "../../../generated/graphql/types";
-import { convertUrls, getInstallation } from "../../database";
-import { searchCompany } from "../../sirene";
+import { UserInputError } from "../../../common/errors";
+import type { CompanyPublic, QueryResolvers } from "@td/codegen-back";
+import { getInstallation } from "../../database";
+import { searchCompany } from "../../search";
+import { ClosedCompanyError } from "../../sirene/errors";
+import { isClosedCompany } from "@td/constants";
+
 /**
- * This function is used to return public company
- * information for a specific siret. It merge info
- * from Sirene database, S3ic database and TD without
- * exposing private TD info like securityCode, users, etc
- *
- * @param siret
+ * Recherche et renvoie les données diffusables
+ * sur une entreprise pour un numéro de SIRET ou de TVA
+ * Fusionnant les infos des bases Trackdéchets et S3IC
+ * si elles existent
+ * @param siretOrVat
  */
-export async function getCompanyInfos(siret: string): Promise<CompanyPublic> {
-  // retrieve cached info from SIRENE database
-  const sireneCompanyInfo = await searchCompany(siret);
-
-  // sireneCompanyInfo default to { siret: '', ...} if the siret is
-  // not recognized. Handle this edge case by throwing a NOT_FOUND
-  // exception
-  if (!sireneCompanyInfo || !sireneCompanyInfo.siret) {
-    throw new UserInputError("Ce siret n'existe pas", {
-      invalidArgs: ["siret"]
-    });
+export async function getCompanyInfos(
+  siretOrVat: string
+): Promise<CompanyPublic> {
+  if (!siretOrVat) {
+    throw new UserInputError(
+      "Paramètre absent. Un numéro SIRET ou de TVA intracommunautaire valide est requis",
+      {
+        invalidArgs: ["clue"]
+      }
+    );
   }
+  const searchResult = await searchCompany(siretOrVat);
 
-  // retrieves trackdechets public CompanyInfo
-  // it might be null if the company is not registered in TD
-  const trackdechetsCompanyInfo = await prisma.company.findUnique({
-    where: { siret },
-    select: {
-      companyTypes: true,
-      contactEmail: true,
-      contactPhone: true,
-      website: true,
-      ecoOrganismeAgreements: true,
-      allowBsdasriTakeOverWithoutSignature: true
-    }
-  });
-
-  const isRegistered = !!trackdechetsCompanyInfo;
-
-  const companyIcpeInfo = {
-    installation: await getInstallation(siret)
+  return {
+    orgId: searchResult.orgId,
+    siret: searchResult.siret,
+    vatNumber: searchResult.vatNumber,
+    codePaysEtrangerEtablissement: searchResult.codePaysEtrangerEtablissement,
+    etatAdministratif: searchResult.etatAdministratif,
+    statutDiffusionEtablissement: searchResult.statutDiffusionEtablissement,
+    address: searchResult.address,
+    codeCommune: searchResult.codeCommune,
+    name: searchResult.name,
+    naf: searchResult.naf,
+    libelleNaf: searchResult.libelleNaf,
+    installation: await getInstallation(siretOrVat),
+    contact: searchResult.contact,
+    contactEmail: searchResult.contactEmail,
+    contactPhone: searchResult.contactPhone,
+    website: searchResult.website,
+    isRegistered: searchResult.isRegistered,
+    companyTypes: searchResult.companyTypes ?? [],
+    wasteProcessorTypes: searchResult.wasteProcessorTypes ?? [],
+    wasteVehiclesTypes: searchResult.wasteVehiclesTypes ?? [],
+    collectorTypes: searchResult.collectorTypes ?? [],
+    ecoOrganismeAgreements: searchResult.ecoOrganismeAgreements ?? [],
+    allowBsdasriTakeOverWithoutSignature:
+      searchResult.allowBsdasriTakeOverWithoutSignature,
+    transporterReceipt: searchResult.transporterReceipt,
+    traderReceipt: searchResult.traderReceipt,
+    brokerReceipt: searchResult.brokerReceipt,
+    vhuAgrementDemolisseur: searchResult.vhuAgrementDemolisseur,
+    vhuAgrementBroyeur: searchResult.vhuAgrementBroyeur,
+    isDormant: searchResult.isDormant
   };
-
-  const company = {
-    isRegistered,
-    ecoOrganismeAgreements: [],
-
-    ...companyIcpeInfo,
-    ...sireneCompanyInfo,
-    ...convertUrls({
-      ...trackdechetsCompanyInfo,
-      companyTypes: isRegistered ? trackdechetsCompanyInfo.companyTypes : []
-    })
-  };
-
-  return company;
 }
 
-const companyInfosResolvers: QueryResolvers["companyInfos"] = (
-  parent,
+/**
+ * Public Query
+ */
+const companyInfosResolvers: QueryResolvers["companyInfos"] = async (
+  _,
   args
 ) => {
-  return getCompanyInfos(args.siret);
+  if (!args.siret && !args.clue) {
+    throw new UserInputError(
+      "Paramètre siret et clue absents. Un numéro SIRET ou de TVA intracommunautaire valide est requis",
+      {
+        invalidArgs: ["clue", "siret"]
+      }
+    );
+  }
+  const companyInfos = await getCompanyInfos(args.siret ?? args.clue!);
+
+  if (isClosedCompany(companyInfos)) {
+    throw new ClosedCompanyError();
+  }
+
+  if (!["P", "N"].includes(companyInfos.statutDiffusionEtablissement!)) {
+    return companyInfos;
+  } else {
+    // hide non-diffusible Company from public query
+    return {
+      orgId: companyInfos.orgId,
+      siret: companyInfos.siret,
+      vatNumber: companyInfos.vatNumber,
+      isRegistered: companyInfos.isRegistered,
+      companyTypes: companyInfos.companyTypes,
+      ecoOrganismeAgreements: companyInfos.ecoOrganismeAgreements,
+      statutDiffusionEtablissement: companyInfos.statutDiffusionEtablissement,
+      etatAdministratif: companyInfos.etatAdministratif,
+      allowBsdasriTakeOverWithoutSignature:
+        companyInfos.allowBsdasriTakeOverWithoutSignature,
+      isDormant: companyInfos.isDormant
+    };
+  }
 };
 
 export default companyInfosResolvers;

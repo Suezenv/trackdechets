@@ -1,7 +1,7 @@
-import prisma from "../prisma";
+import { prisma } from "@td/prisma";
 import supertest from "supertest";
 import { resetDatabase } from "../../integration-tests/helper";
-import { tokenErrorMessages } from "../oauth2";
+import { tokenErrorMessages } from "../oauth/oauth2";
 import { app } from "../server";
 import { getUid, hashToken } from "../utils";
 import { logIn } from "./auth.helper";
@@ -9,7 +9,7 @@ import { applicationFactory, userFactory } from "./factories";
 
 const request = supertest(app);
 
-describe("GET /oauth2/autorize", () => {
+describe("GET /oauth2/authorize", () => {
   afterAll(async () => {
     await resetDatabase();
   });
@@ -32,8 +32,7 @@ describe("GET /oauth2/autorize", () => {
     expect(res.body.transactionID).toHaveLength(8);
     expect(res.body.redirectURI).toEqual(application.redirectUris[0]);
     expect(res.body.client).toEqual({
-      name: application.name,
-      logoUrl: application.logoUrl
+      name: application.name
     });
     expect(res.body.user).toEqual({ name: user.name });
   });

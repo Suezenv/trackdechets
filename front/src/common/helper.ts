@@ -1,5 +1,7 @@
 import { DocumentNode } from "graphql";
 import { ApolloError, DataProxy } from "@apollo/client";
+import { getCountries, isValidPhoneNumber } from "libphonenumber-js";
+import Decimal from "decimal.js";
 
 export const capitalize = (str: string) =>
   str.charAt(0).toUpperCase() + str.slice(1);
@@ -9,13 +11,13 @@ export function updateApolloCache<T>(
   {
     query,
     getNewData,
-    variables = {},
+    variables = {}
   }: { query: DocumentNode; getNewData: (d: T) => T; variables: any }
 ) {
   try {
     const existingData = store.readQuery<T>({
       query,
-      variables,
+      variables
     });
 
     if (!existingData) {
@@ -27,7 +29,7 @@ export function updateApolloCache<T>(
     store.writeQuery<T>({
       query,
       variables,
-      data: { ...existingData, ...newData },
+      data: { ...existingData, ...newData }
     });
   } catch (_) {
     console.info(`Cache miss, skipping update.`);
@@ -55,10 +57,10 @@ function isObject(value: any): boolean {
  * @returns {Object} Object with the exact shape as defaults, with values from options where provided.
  */
 export function mergeDefaults<T>(defaults: T, options: Record<string, any>): T {
-  return Object.keys(defaults).reduce((acc, key) => {
+  return Object.keys(defaults as any).reduce((acc, key) => {
     if (options[key] == null) {
       return {
-        ...acc,
+        ...acc
       };
     }
 
@@ -66,7 +68,7 @@ export function mergeDefaults<T>(defaults: T, options: Record<string, any>): T {
       ...acc,
       [key]: isObject(acc[key])
         ? mergeDefaults(acc[key], options[key])
-        : options[key],
+        : options[key]
     };
   }, defaults);
 }
@@ -85,8 +87,136 @@ const traverse = ({ obj, paths, depth = 0 }) => {
  *   Retrieve an object node via its dotted path
  *  eg: getNestedValue(form, "emitter.emission.waste.weight")
  */
-export const getNestedNode = (obj: Object, path: String): any => {
+export const getNestedNode = (obj: Object, path: string): any => {
   const paths = path.split(".");
+  try {
+    return traverse({ obj, paths });
+  } catch (_) {
+    return null;
+  }
+};
 
-  return traverse({ obj, paths });
+/**
+ * Clean an object from null, undefined, empty string and empty objects values
+ * @param obj Input object
+ * @returns A cleaned object
+ */
+export function removeEmptyKeys<T>(obj: Object): Partial<T> | undefined {
+  function isValid(value) {
+    return (
+      value !== null &&
+      value !== undefined &&
+      value !== "" &&
+      (Array.isArray(value) ? value.length > 0 : true)
+    );
+  }
+
+  const newObject = Object.entries(obj)
+    .filter(([, value]) => isValid(value))
+    .reduce((cleanedObj, [key]) => {
+      const value =
+        typeof obj[key] === "object"
+          ? Array.isArray(obj[key])
+            ? obj[key]
+            : removeEmptyKeys(obj[key])
+          : obj[key];
+
+      if (isValid(value)) cleanedObj[key] = value;
+      return cleanedObj;
+    }, {});
+
+  return Object.keys(newObject).length !== 0 ? newObject : undefined;
+}
+
+export const decodeHash = (hash: string | string[] | null): string => {
+  if (!hash) {
+    return "";
+  }
+  return Array.isArray(hash)
+    ? decodeURIComponent(hash[0])
+    : decodeURIComponent(hash);
+};
+
+export const sortCompaniesByName = values => {
+  return [...values].sort((a, b) => {
+    const aName = a.givenName || a.name || "";
+    const bName = b.givenName || b.name || "";
+    return aName.localeCompare(bName);
+  });
+};
+
+const countries = getCountries().map(country => country);
+
+export const validatePhoneNumber = value =>
+  !!value &&
+  ((!value.startsWith("0") &&
+    value.startsWith("+") &&
+    countries.some(country => isValidPhoneNumber(value!, country))) ||
+    (value.startsWith("0") && /^(0[1-9])(?:[ _.-]?(\d{2})){4}$/.test(value)));
+
+export const debounce = <F extends (...args: any) => any>(
+  func: F,
+  waitFor: number
+) => {
+  let timeout: NodeJS.Timeout;
+
+  const debounced = (...args: any) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), waitFor);
+  };
+
+  return debounced as (...args: Parameters<F>) => ReturnType<F>;
+};
+
+/**
+ * Remove orgId from Input when it was built from FormCompany
+ */
+export function removeOrgId(obj: any, insideCompany = false): any {
+  if (typeof obj !== "object" || obj === null) {
+    return obj;
+  }
+
+  const newObj: any = Array.isArray(obj) ? [] : {};
+
+  for (const key of Object.keys(obj)) {
+    if (insideCompany && key === "orgId") {
+      continue;
+    }
+    if (["company", "intermediaries", "ecoOrganisme"].includes(key)) {
+      newObj[key] = removeOrgId(obj[key], true);
+    } else {
+      newObj[key] = removeOrgId(obj[key], insideCompany);
+    }
+  }
+
+  return newObj;
+}
+
+export const multiplyByRounded = (
+  num: number | null = 0,
+  multBy = 1000
+): number => {
+  if (!isDefinedStrict(num)) {
+    return 0;
+  }
+
+  return new Decimal(num ?? 0).times(multBy).toDecimalPlaces(6).toNumber();
+};
+
+export const isDefined = (
+  val: any,
+  accept = { acceptEmptyString: true }
+): boolean => {
+  if (val === "") return accept.acceptEmptyString;
+
+  return val !== undefined && val !== null;
+};
+
+/**
+ * This one does not consider empty strings "" as 'defined'
+ */
+export const isDefinedStrict = (val: any): boolean => {
+  if (val === "") return false;
+
+  return isDefined(val);
 };

@@ -1,4 +1,4 @@
-import { UserInputError } from "apollo-server-express";
+import { UserInputError } from "../common/errors";
 
 export class CompanyNotFound extends UserInputError {
   constructor() {
@@ -27,5 +27,11 @@ export class TransporterReceiptNotFound extends UserInputError {
 export class VhuAgrementNotFound extends UserInputError {
   constructor() {
     super(`Cet agrément VHU n'existe pas`);
+  }
+}
+
+export class WorkerCertificationNotFound extends UserInputError {
+  constructor() {
+    super(`Cette certification d'entreprise de travaux n'existe pas`);
   }
 }

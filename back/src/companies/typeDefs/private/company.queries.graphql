@@ -7,11 +7,17 @@ type Query {
   établissements qui font souvent partis des BSD édités
   """
   favorites(
-    "siret de l'entreprise pour laquelle retourner les favoris"
-    siret: String!
+    "siret ou numéro de TVA intra-communautaire de l'entreprise pour laquelle retourner les favoris"
+    orgId: String!
     "type de favoris"
     type: FavoriteType!
-  ): [CompanyFavorite!]!
+    """
+    (Optionnel) Filtre les résultats étrangers uniquement,
+    si 'orgId' est un numéro de TVA intra-communautaire non-français et allowForeignCompanies,
+    alors aucun résultat ne sera retourné
+    """
+    allowForeignCompanies: Boolean
+  ): [CompanySearchResult!]!
 
   "List companies for the company verfication table of the admin panel"
   companiesForVerification(
@@ -20,4 +26,28 @@ type Query {
     skip: Int
     where: CompanyForVerificationWhere
   ): CompanyForVerificationConnection!
+
+  """
+  Renvoie des informations restreintes sur un établissement
+  selon la même recherche par siret ou TVA que companyInfos
+  """
+  companyPrivateInfos(
+    """
+    SIRET ou numéro TVA intracommunautaire
+    """
+    clue: String!
+  ): CompanySearchPrivate!
+
+  """
+  Renvoie les établissements de l'utilisateur authentifié ainsi que les établissements
+  de ses délégants, utilisé pour le champ de recherche des établissements dans les pages de registre V2
+  """
+  registryCompanies(
+    firstCompanies: Int
+    firstDelegators: Int
+    search: String
+    userRoles: [UserRole!]
+  ): CompanyRegistryConnection!
+
+  companyExhaustive(siret: String!): CompanyExhaustive!
 }

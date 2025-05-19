@@ -9,11 +9,11 @@ const separator = ";";
  * @param csvpath path of the csv file
  * @param transform optional transform function to transform row
  */
-function readCsv<Row>(
+export function readCsv<Row>(
   csvpath: string,
   transform?: (row: any) => Row
 ): Promise<Row[]> {
-  const rows = [];
+  const rows: Row[] = [];
   return new Promise((resolve, reject) => {
     fs.createReadStream(csvpath)
       .pipe(csv({ separator }))
@@ -26,6 +26,8 @@ function readCsv<Row>(
   });
 }
 
+const splitRow = (row, field: string) =>
+  row[field] ? row[field].split(",") : [];
 /**
  * load companies from csv
  * companyTypes entry like "PRODUCER,WASTE_PROCESSOR" is transformed
@@ -36,7 +38,13 @@ export function loadCompanies(
 ): Promise<CompanyRow[]> {
   const csvPath = `${csvDir}/etablissements.csv`;
   return readCsv<CompanyRow>(csvPath, row => {
-    return { ...row, companyTypes: row.companyTypes.split(",") };
+    return {
+      ...row,
+      companyTypes: splitRow(row, "companyTypes"),
+      collectorTypes: splitRow(row, "collectorTypes"),
+      wasteProcessorTypes: splitRow(row, "wasteProcessorTypes"),
+      wasteVehiclesTypes: splitRow(row, "wasteVehiclesTypes")
+    };
   });
 }
 

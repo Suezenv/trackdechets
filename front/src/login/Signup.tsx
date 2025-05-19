@@ -1,208 +1,271 @@
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation } from "@apollo/client";
-import { Field } from "formik";
-import React, { useState } from "react";
-import { useHistory } from "react-router-dom";
-import {
-  IconEmailActionUnread,
-  IconView,
-  IconSingleNeutralIdCard4,
-  IconLock1,
-  IconPhone,
-} from "common/components/Icons";
-import { NotificationError } from "common/components/Error";
-import PasswordMeter from "common/components/PasswordMeter";
-import RedErrorMessage from "common/components/RedErrorMessage";
+import { Mutation, MutationSignupArgs } from "@td/codegen-ui";
 import { SIGNUP } from "./mutations";
-import styles from "./Signup.module.scss";
-import { Wizard } from "./Wizard";
-import { Mutation, MutationSignupArgs } from "generated/graphql/types";
-import routes from "common/routes";
+import PasswordHelper, {
+  getPasswordHint
+} from "../common/components/PasswordHelper";
+
+import routes from "../Apps/routes";
+
+import { Alert } from "@codegouvfr/react-dsfr/Alert";
+import { Button } from "@codegouvfr/react-dsfr/Button";
+import { Input } from "@codegouvfr/react-dsfr/Input";
+import { Checkbox } from "@codegouvfr/react-dsfr/Checkbox";
+import { PasswordInput } from "@codegouvfr/react-dsfr/blocks/PasswordInput";
+import styles from "./Login.module.scss";
+
+import { SENDER_EMAIL } from "../common/config";
+import { isEmail, isGenericEmail } from "@td/constants";
 
 export default function Signup() {
-  const [passwordType, setPasswordType] = useState("password");
-  const [signup, { error: signupError }] = useMutation<
-    Pick<Mutation, "signup">,
-    MutationSignupArgs
-  >(SIGNUP);
+  const [submittable, setSubmittable] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [signupCompleted, setSignupCompleted] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
-  const history = useHistory();
+  const [nameValue, setNameValue] = useState("");
+  const [emailValue, setEmailValue] = useState("");
+  const [passwordValue, setPasswordValue] = useState("");
+  const [cguValue, setCguValue] = useState(false);
+
+  const [signup] = useMutation<Pick<Mutation, "signup">, MutationSignupArgs>(
+    SIGNUP
+  );
+
+  const navigate = useNavigate();
+
+  const handleSubmit = event => {
+    event?.preventDefault();
+
+    if (!submittable || submitting) return;
+
+    const userInfos = {
+      email: emailValue || "",
+      name: nameValue || "",
+      password: passwordValue || ""
+    };
+
+    setSubmitting(true);
+
+    signup({ variables: { userInfos } })
+      .then(_ => {
+        setSignupCompleted(true);
+      })
+      .catch(_ => {
+        setErrorMessage(
+          _.message || "Une erreur est survenue, veuillez réessayer."
+        );
+        // error message might be off-screen, let's scroll to top
+        window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+        setSubmitting(false);
+      });
+  };
+
+  const onConnectClick = () => {
+    navigate(routes.login);
+  };
+
+  useEffect(() => {
+    const { hintType } = getPasswordHint(passwordValue);
+    const validPasswordValue = hintType !== "error" && !!passwordValue;
+
+    const formFilled =
+      !!nameValue && !!emailValue && validPasswordValue && !!cguValue;
+
+    setSubmittable(formFilled);
+  }, [nameValue, emailValue, passwordValue, cguValue]);
+
+  const alert =
+    errorMessage.length > 0 ? (
+      <div className="fr-grid-row fr-mb-2w">
+        <Alert title="Erreur" description={errorMessage} severity="error" />
+      </div>
+    ) : null;
+
+  const handleEmailChange = e => {
+    const { value } = e.target;
+
+    if (isEmail(value)) {
+      setEmailValue(value);
+      setErrorMessage("");
+    } else {
+      setErrorMessage("Format de l'email invalide");
+    }
+    if (!value) {
+      setErrorMessage("");
+    }
+  };
+
+  const formContent = (
+    <form onSubmit={handleSubmit}>
+      <div className={`fr-container fr-pt-10w ${styles.centralContainer}`}>
+        <div className="fr-grid-row fr-grid-row--center fr-mb-2w">
+          <div className="fr-col fr-m-auto">
+            <h1 className="fr-h3 fr-mb-1w">Créer mon compte Trackdéchets</h1>
+            <p className="fr-text--md fr-mb-3w">
+              Vous vous apprêtez à créer votre compte utilisateur. Cette étape
+              est préalable à l'enregistrement ou au rattachement d'une
+              entreprise dans Trackdéchets.
+            </p>
+            {alert}
+            <p className="fr-text--bold">Vos informations :</p>
+            <Input
+              label="Nom et prénom"
+              nativeInputProps={{
+                required: true,
+                onChange: e => setNameValue(e.target.value),
+                id: "fullnameSignUp"
+              }}
+            />
+            <Input
+              label="Email"
+              nativeInputProps={{
+                required: true,
+                type: "email",
+                onChange: handleEmailChange
+              }}
+            />
+            {Boolean(emailValue) && isGenericEmail(emailValue) && (
+              <Alert
+                className="fr-mb-3w"
+                description="Dans le cas où vous posséderiez une adresse e-mail professionnelle avec un nom de domaine d'entreprise (ex : nom@votre-entreprise.fr), nous vous recommandons de l'utiliser pour la création de votre compte, afin de faciliter le processus de vérification de rattachement à votre établissement."
+                severity="info"
+                closable={false}
+                small
+              />
+            )}
+
+            <PasswordInput
+              label="Mot de passe"
+              nativeInputProps={{
+                required: true,
+                onChange: e => setPasswordValue(e.target.value)
+              }}
+            />
+
+            <PasswordHelper password={passwordValue} />
+          </div>
+        </div>
+        <div className="fr-grid-row fr-mb-2w">
+          <div className={`fr-col ${styles.resetFlexCol}`}>
+            <Checkbox
+              options={[
+                {
+                  label: "Je certifie avoir lu les conditions générales",
+                  nativeInputProps: {
+                    onChange: e => {
+                      setCguValue(e.currentTarget.checked);
+                    }
+                  }
+                }
+              ]}
+            />
+            <a
+              href="https://trackdechets.beta.gouv.fr/cgu"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="fr-link force-external-link-content force-underline-link"
+            >
+              Voir les conditions générales.
+            </a>
+          </div>
+        </div>
+        <div className="fr-grid-row fr-grid-row--right">
+          <div className={`fr-col ${styles.resetFlexCol}`}>
+            <Button
+              iconId="ri-arrow-right-line"
+              iconPosition="right"
+              size="medium"
+              title={submitting ? "Création en cours..." : "Créer mon compte"}
+              disabled={!submittable || submitting}
+              onClick={handleSubmit}
+            >
+              Créer mon compte
+            </Button>
+          </div>
+        </div>
+      </div>
+    </form>
+  );
+
+  const successContent = (
+    <div className={`fr-container fr-pt-10w ${styles.centralContainerLarge}`}>
+      <div className="fr-grid-row fr-grid-row--center fr-mb-2w">
+        <div className="fr-col fr-m-auto fr-pr-2w">
+          <h1 className="fr-h3 fr-mb-1w">On y est presque !</h1>
+          <p className="fr-text--md fr-mb-1w">
+            Un email de confirmation vous a été envoyé à l'adresse{" "}
+            <strong>{emailValue}</strong> 📨
+          </p>
+          <p className="fr-text--md">
+            <span role="img" aria-label="emoji finger">
+              👉
+            </span>{" "}
+            Il peut mettre quelques minutes à arriver
+          </p>
+          <p className="fr-text--md">
+            <span role="img" aria-label="emoji finger">
+              👉
+            </span>{" "}
+            Vérifiez vos spams ou indésirables
+          </p>
+          <p className="fr-text--md">
+            <span role="img" aria-label="emoji finger">
+              👉
+            </span>{" "}
+            Ajoutez {SENDER_EMAIL} à vos contacts
+          </p>
+          <p className="fr-text--md">
+            <span role="img" aria-label="emoji finger">
+              👉
+            </span>{" "}
+            Si vous n'avez pas reçu l'email de confirmation au bout d'une heure,
+            vous pouvez le renvoyer depuis{" "}
+            <a href={routes.resendActivationEmail} className="fr-link">
+              cette page
+            </a>
+          </p>
+          <p className="fr-text--md">
+            Le message peut ne pas arriver pour les raisons suivantes :<br />-
+            adresse email erronée
+            <br />- antivirus ou suite logicielle de sécurité trop restrictifs
+          </p>
+          <p className="fr-text--md">
+            Pour finaliser votre inscription, cliquez sur le lien qui vous a été
+            envoyé par email. Vous pourrez ensuite vous connecter à
+            Trackdéchets.{" "}
+            <span role="img" aria-label="emoji rocket">
+              🚀
+            </span>
+          </p>
+          <p className="fr-text--md">
+            Des questions, des interrogations ? N'hésitez pas à nous contacter
+            via{" "}
+            <a
+              href="https://faq.trackdechets.fr/pour-aller-plus-loin/assistance"
+              className="fr-link"
+            >
+              la FAQ
+            </a>
+            .
+          </p>
+        </div>
+      </div>
+      <div className="fr-grid-row fr-grid-row--right">
+        <div className={`fr-col ${styles.resetFlexCol}`}>
+          <Button size="medium" title="Se connecter" onClick={onConnectClick}>
+            Se connecter
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
-    <section className="section section--white">
-      <div className="container">
-        <Wizard
-          initialValues={{
-            email: "",
-            name: "",
-            phone: "",
-            password: "",
-            cgu: false,
-          }}
-          onSubmit={(values: any, { setSubmitting }) => {
-            const { cgu, ...userInfos } = values;
-
-            signup({ variables: { userInfos } })
-              .then(_ =>
-                history.push({
-                  pathname: routes.signup.activation,
-                  state: { signupEmail: userInfos.email },
-                })
-              )
-              .catch(_ => {
-                setSubmitting(false);
-              });
-          }}
-        >
-          <Wizard.Page title="Bienvenue" formClassName="container-narrow">
-            <div>
-              <h1 className="h1 tw-mb-6">Bienvenue sur Trackdéchets</h1>
-
-              <p className="body-text">
-                Trackdéchets est un produit du Ministère de la Transition
-                Ecologique et Solidaire.
-              </p>
-
-              <p className="body-text">
-                Son objectif : simplifier la gestion des déchets dangereux au
-                quotidien. 0 papier, traçabilité en temps réel, informations
-                regroupées sur un outil unique, vérification de vos
-                prestataires.
-              </p>
-
-              <p className="body-text">
-                Il est libre d'utilisation et utilisable par tous les acteurs de
-                la filière déchets. Rejoignez-nous !
-              </p>
-
-              <p className="body-text">
-                Vous vous apprêtez à créer un compte personnel. Cette étape est
-                un prélable obligatoire à l'enregistrement ou au rattachement
-                d'une entreprise dans Trackdéchets.
-              </p>
-            </div>
-          </Wizard.Page>
-          <Wizard.Page
-            title="Informations utilisateur"
-            formClassName="container-narrow"
-            validate={(values: any) => {
-              let errors: any = {};
-
-              if (!values.email) {
-                errors.email = "L'email est obligatoire";
-              }
-              if (!values.name) {
-                errors.name = "Le nom et prénom sont obligatoires";
-              }
-
-              if (!values.password) {
-                errors.password = "Le mot de passe ne peut pas être vide";
-              }
-
-              if (!values.cgu) {
-                errors.cgu =
-                  "Vous devez avoir lu les conditions générales d'utilisation";
-              }
-
-              return errors;
-            }}
-          >
-            {" "}
-            <div className="container-narrow">
-              <h1 className="h1 tw-mb-6">Informations utilisateur</h1>
-
-              <div className="form__row">
-                <label>Nom et prénom</label>
-                <div className="field-with-icon-wrapper">
-                  <Field type="text" name="name" className="td-input" />
-                  <i>
-                    <IconSingleNeutralIdCard4 />
-                  </i>
-                </div>
-
-                <RedErrorMessage name="name" />
-              </div>
-
-              <div className="form__row">
-                <label>Email</label>
-                <div className="field-with-icon-wrapper">
-                  <Field type="email" name="email" className="td-input" />
-                  <i>
-                    <IconEmailActionUnread />
-                  </i>
-                </div>
-
-                <RedErrorMessage name="email" />
-              </div>
-
-              <div className="form__row">
-                <label>Téléphone (optionnel)</label>
-                <div className="field-with-icon-wrapper">
-                  <Field type="text" name="phone" className="td-input" />
-                  <i>
-                    <IconPhone />
-                  </i>
-                </div>
-              </div>
-
-              <div className="form__row">
-                <label>Mot de passe</label>
-
-                <Field name="password">
-                  {({ field }) => {
-                    return (
-                      <>
-                        <div className="field-with-icon-wrapper">
-                          <input
-                            type={passwordType}
-                            {...field}
-                            className="td-input"
-                          />
-                          <i>
-                            <IconLock1 />
-                          </i>
-                        </div>
-                        <span
-                          className={styles.showPassword}
-                          onClick={() =>
-                            setPasswordType(
-                              passwordType === "password" ? "text" : "password"
-                            )
-                          }
-                        >
-                          <IconView /> <span>Afficher le mot de passe</span>
-                        </span>
-                        <PasswordMeter password={field.value} />
-                      </>
-                    );
-                  }}
-                </Field>
-
-                <RedErrorMessage name="password" />
-              </div>
-
-              <div className="form__row">
-                <label>
-                  <Field name="cgu" type="checkbox" className="td-checkbox" />
-                  Je certifie avoir lu les{" "}
-                  <a
-                    href="https://trackdechets.beta.gouv.fr/cgu"
-                    target="_blank"
-                    className="link"
-                    rel="noopener noreferrer"
-                  >
-                    conditions générales d'utilisation
-                  </a>
-                  *
-                </label>
-              </div>
-
-              <RedErrorMessage name="cgu" />
-
-              {signupError && <NotificationError apolloError={signupError} />}
-            </div>
-          </Wizard.Page>
-        </Wizard>
-      </div>
-    </section>
+    <div className={styles.onboardingWrapper}>
+      {signupCompleted ? successContent : formContent}
+    </div>
   );
 }

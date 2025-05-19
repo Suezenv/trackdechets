@@ -1,9 +1,14 @@
 import { editProfileFn as editProfile } from "../editProfile";
+import configureYup from "../../../../common/yup/configureYup";
+
+configureYup();
 
 const mockUpdateUser = jest.fn();
 
-jest.mock("../../../../prisma", () => ({
-  user: { update: jest.fn((...args) => mockUpdateUser(...args)) }
+jest.mock("@td/prisma", () => ({
+  prisma: {
+    user: { update: jest.fn((...args) => mockUpdateUser(...args)) }
+  }
 }));
 
 describe("editProfile", () => {
@@ -11,19 +16,11 @@ describe("editProfile", () => {
     mockUpdateUser.mockReset();
   });
 
-  it("should allow setting fields to empty string", async () => {
-    await editProfile("userId", { name: "" });
+  it("should allow setting fields", async () => {
+    await editProfile("userId", { name: "John Doe" });
     expect(mockUpdateUser).toHaveBeenCalledWith({
       where: { id: "userId" },
-      data: { name: "" }
-    });
-  });
-
-  it("should allow setting fields to null value", async () => {
-    await editProfile("userId", { name: null });
-    expect(mockUpdateUser).toHaveBeenCalledWith({
-      where: { id: "userId" },
-      data: { name: null }
+      data: { name: "John Doe" }
     });
   });
 });

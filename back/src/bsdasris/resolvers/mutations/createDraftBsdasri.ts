@@ -1,17 +1,22 @@
-import {
+import { UserInputError } from "../../../common/errors";
+import type {
   MutationCreateBsdasriArgs,
   ResolversParentTypes
-} from "../../../generated/graphql/types";
+} from "@td/codegen-back";
 import { GraphQLContext } from "../../../types";
-
-import createBsdasri from "./create";
+import createBsdasri from "./createBsdasri";
 
 const createDraftBsdasriResolver = async (
-  parent: ResolversParentTypes["Mutation"],
-  input: MutationCreateBsdasriArgs,
+  _: ResolversParentTypes["Mutation"],
+  args: MutationCreateBsdasriArgs,
   context: GraphQLContext
 ) => {
-  return createBsdasri(parent, input, context, true);
+  if (args.input.synthesizing && args.input.synthesizing.length > 0) {
+    throw new UserInputError(
+      `La création de dasri de synthèse en brouillon n'est pas possible`
+    );
+  }
+  return createBsdasri(args.input, context, true);
 };
 
 export default createDraftBsdasriResolver;

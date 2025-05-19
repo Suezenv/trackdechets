@@ -3,7 +3,10 @@ import { User } from "@prisma/client";
 import { resetDatabase } from "../../../integration-tests/helper";
 import { app } from "../../server";
 import { createAccessToken } from "../../users/database";
-import { userWithCompanyFactory } from "../../__tests__/factories";
+import {
+  userWithCompanyFactory,
+  transporterReceiptFactory
+} from "../../__tests__/factories";
 
 const request = supertest(app);
 
@@ -11,21 +14,18 @@ describe("Exemples de circuit du bordereau de suivi des déchets d'amiante", () 
   afterEach(resetDatabase);
 
   async function apiKey(user: User) {
-    const { clearToken } = await createAccessToken(user);
-    return clearToken;
+    const { token } = await createAccessToken({ user });
+    return token;
   }
 
   it("Déchet déposé en déchetterie (collecte en 2710-1)", async () => {
-    const {
-      user: producteurUser,
-      company: producteurCompany
-    } = await userWithCompanyFactory("MEMBER");
-    const {
-      user: exutoireUser,
-      company: exutoireCompany
-    } = await userWithCompanyFactory("MEMBER");
+    const { user: exutoireUser, company: exutoireCompany } =
+      await userWithCompanyFactory("MEMBER", {
+        companyTypes: {
+          set: ["WASTE_CENTER"]
+        }
+      });
 
-    const producteurToken = await apiKey(producteurUser);
     const exutoireToken = await apiKey(exutoireUser);
 
     const createBsdaMutation = `mutation {
@@ -34,10 +34,8 @@ describe("Exemples de circuit du bordereau de suivi des déchets d'amiante", () 
             emitter: {
                 isPrivateIndividual: true
                 company: {
-                    siret: "${producteurCompany.siret}"
-                    name: "The Amianteur"
+                    name: "Amianteur Particulier"
                     address: "Rue du bsda"
-                    contact: "Un producteur d'amiante"
                     phone: "0101010101"
                     mail: "emitter@mail.com"
                 }
@@ -48,14 +46,13 @@ describe("Exemples de circuit du bordereau de suivi des déchets d'amiante", () 
                 consistence: SOLIDE
                 familyCode: "Code famille"
                 materialName: "A material"
-                name: "Amiante"
                 sealNumbers: ["1", "2"]
             }
             packagings: [{ quantity: 1, type: PALETTE_FILME }]
             weight: { isEstimate: true, value: 1.2 }
             destination: {
                 cap: "A cap"
-                plannedOperationCode: "D 13"
+                plannedOperationCode: "D 9"
                 company: {
                     siret: "${exutoireCompany.siret}"
                     name: "destination"
@@ -69,7 +66,7 @@ describe("Exemples de circuit du bordereau de suivi des déchets d'amiante", () 
 
     const createBsdaResponse = await request
       .post("/")
-      .set("Authorization", `Bearer ${producteurToken}`)
+      .set("Authorization", `Bearer ${exutoireToken}`)
       .send({ query: createBsdaMutation });
     const id: string = createBsdaResponse.body.data.createBsda.id;
     expect(createBsdaResponse.body.data.createBsda.status).toBe("INITIAL");
@@ -85,7 +82,8 @@ describe("Exemples de circuit du bordereau de suivi des déchets d'amiante", () 
                   acceptationStatus: ACCEPTED
               }
               operation: {
-                  code: "R 13"
+                  code: "D 5"
+                  mode: ELIMINATION
                   date: "2020-06-30"
               }
           }
@@ -108,18 +106,12 @@ describe("Exemples de circuit du bordereau de suivi des déchets d'amiante", () 
   });
 
   it("Déchet collecté chez un particulier, avec signature papier détenue par l'entreprise de travaux", async () => {
-    const {
-      user: workerUser,
-      company: workerCompany
-    } = await userWithCompanyFactory("MEMBER");
-    const {
-      user: transporterUser,
-      company: transporterCompany
-    } = await userWithCompanyFactory("MEMBER");
-    const {
-      user: destinationUser,
-      company: destinationCompany
-    } = await userWithCompanyFactory("MEMBER");
+    const { user: workerUser, company: workerCompany } =
+      await userWithCompanyFactory("MEMBER");
+    const { user: transporterUser, company: transporterCompany } =
+      await userWithCompanyFactory("MEMBER");
+    const { user: destinationUser, company: destinationCompany } =
+      await userWithCompanyFactory("MEMBER");
 
     const workerToken = await apiKey(workerUser);
     const transporterToken = await apiKey(transporterUser);
@@ -130,6 +122,12 @@ describe("Exemples de circuit du bordereau de suivi des déchets d'amiante", () 
               type: OTHER_COLLECTIONS
               emitter: {
                   isPrivateIndividual: true
+                  company: {
+                    address: "Rue du bsda"
+                    name: "Un particulier"
+                    phone: "0101010101"
+                    mail: "particulier@mail.com"
+                  }
               }
               worker: {
                   company: {
@@ -157,14 +155,13 @@ describe("Exemples de circuit du bordereau de suivi des déchets d'amiante", () 
                   consistence: SOLIDE
                   familyCode: "Code famille"
                   materialName: "A material"
-                  name: "Amiante"
                   sealNumbers: ["1", "2"]
               }
               packagings: [{ quantity: 1, type: PALETTE_FILME }]
               weight: { isEstimate: true, value: 1.2 }
               destination: {
                   cap: "A cap"
-                  plannedOperationCode: "D 13"
+                  plannedOperationCode: "D 9"
                   company: {
                       siret: "${destinationCompany.siret}"
                       name: "destination"
@@ -209,16 +206,16 @@ describe("Exemples de circuit du bordereau de suivi des déchets d'amiante", () 
     expect(exutoireSignatureResponse.body.data.signBsda.status).toBe(
       "SIGNED_BY_WORKER"
     );
-
+    // le transporteur renseigne son récépissé juste avant signature.
+    await transporterReceiptFactory({ company: transporterCompany });
     // Ensuite le transporteur édite ses données, puis signe
     const transporterBsdaQuery = `
         mutation {
             updateBsda(id: "${id}", input: {
               transporter: {
-                recepisse: {
-                  number: "recepisse number"
-                  department: "75"
-                  validityLimit: "2020-06-30"
+                transport: {
+                  mode: ROAD,
+                  plates: ["AA-XX-00"]
                 }
               }
             }) { id }
@@ -246,7 +243,8 @@ describe("Exemples de circuit du bordereau de suivi des déchets d'amiante", () 
                       acceptationStatus: ACCEPTED
                   }
                   operation: {
-                      code: "R 13"
+                      code: "D 5"
+                      mode: ELIMINATION
                       date: "2020-06-30"
                   }
               }
@@ -267,22 +265,14 @@ describe("Exemples de circuit du bordereau de suivi des déchets d'amiante", () 
   });
 
   it("Déchet collecté chez un professionnel, curcuit complet", async () => {
-    const {
-      user: producteurUser,
-      company: producteurCompany
-    } = await userWithCompanyFactory("MEMBER");
-    const {
-      user: workerUser,
-      company: workerCompany
-    } = await userWithCompanyFactory("MEMBER");
-    const {
-      user: transporterUser,
-      company: transporterCompany
-    } = await userWithCompanyFactory("MEMBER");
-    const {
-      user: destinationUser,
-      company: destinationCompany
-    } = await userWithCompanyFactory("MEMBER");
+    const { user: producteurUser, company: producteurCompany } =
+      await userWithCompanyFactory("MEMBER");
+    const { user: workerUser, company: workerCompany } =
+      await userWithCompanyFactory("MEMBER");
+    const { user: transporterUser, company: transporterCompany } =
+      await userWithCompanyFactory("MEMBER");
+    const { user: destinationUser, company: destinationCompany } =
+      await userWithCompanyFactory("MEMBER");
 
     const producteurToken = await apiKey(producteurUser);
     const workerToken = await apiKey(workerUser);
@@ -330,20 +320,19 @@ describe("Exemples de circuit du bordereau de suivi des déchets d'amiante", () 
                     consistence: SOLIDE
                     familyCode: "Code famille"
                     materialName: "A material"
-                    name: "Amiante"
                     sealNumbers: ["1", "2"]
                 }
                 packagings: [{
                     quantity: 1
                     type: PALETTE_FILME
                 }]
-                weight: { 
+                weight: {
                     isEstimate: true
                     value: 1.2
                 }
                 destination: {
                     cap: "A cap"
-                    plannedOperationCode: "D 13"
+                    plannedOperationCode: "D 9"
                     company: {
                         siret: "${destinationCompany.siret}",
                         name: "destination"
@@ -407,16 +396,16 @@ describe("Exemples de circuit du bordereau de suivi des déchets d'amiante", () 
     expect(workerSignatureResponse.body.data.signBsda.status).toBe(
       "SIGNED_BY_WORKER"
     );
-
+    // le transporteur renseigne son récépissé juste avant signature.
+    await transporterReceiptFactory({ company: transporterCompany });
     // Ensuite le transporteur édite ses données, puis signe
     const transporterBsdaQuery = `
         mutation {
             updateBsda(id: "${id}", input: {
               transporter: {
-                recepisse: {
-                  number: "recepisse number"
-                  department: "75"
-                  validityLimit: "2020-06-30"
+                transport: {
+                  mode: ROAD,
+                  plates: ["AA-XX-00"]
                 }
               }
             }) { id }
@@ -444,7 +433,8 @@ describe("Exemples de circuit du bordereau de suivi des déchets d'amiante", () 
                       acceptationStatus: ACCEPTED
                   }
                   operation: {
-                      code: "R 13"
+                      code: "D 5"
+                      mode: ELIMINATION
                       date: "2020-06-30"
                   }
               }

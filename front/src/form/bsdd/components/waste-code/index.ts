@@ -1,2 +1,2 @@
-export { WasteCode } from "./WasteCode";
-export { wasteCodeValidator } from "./waste-code.validator";
+export { WasteCodeSelect } from "./WasteCode";
+export { bsddWasteCodeValidator } from "./waste-code.validator";

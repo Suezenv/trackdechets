@@ -1,109 +1,50 @@
-import RedErrorMessage from "common/components/RedErrorMessage";
-import TdSwitch from "common/components/Switch";
-import CompanySelector from "form/common/components/company/CompanySelector";
-import DateInput from "form/common/components/custom-inputs/DateInput";
-import { Field, useFormikContext } from "formik";
-import { Transporter as TransporterType } from "generated/graphql/types";
+import { useFormikContext } from "formik";
 import React from "react";
-import styles from "./Transporter.module.scss";
-
-type Values = {
-  transporter: TransporterType;
-};
+import { TransporterList } from "../../Apps/Forms/Components/TransporterList/TransporterList";
+import { useParams } from "react-router-dom";
+import { FormFormikValues } from "./utils/initial-state";
+import { BsdType, EmitterType } from "@td/codegen-ui";
+import { TransporterForm } from "../../Apps/Forms/Components/TransporterForm/TransporterForm";
+import TransporterDisplay from "../../Apps/Forms/Components/TransporterDisplay/TransporterDisplay";
+import { mapBsddTransporter } from "../../Apps/Forms/bsdTransporterMapper";
 
 export default function Transporter() {
-  const { setFieldValue, values } = useFormikContext<Values>();
+  const { values } = useFormikContext<FormFormikValues>();
+
+  const { siret } = useParams<{ siret: string }>();
+  const emitterType = values.emitter?.type;
+
+  if (values.isDirectSupply) {
+    return (
+      <h4 className="form__section-heading">
+        Acheminement direct par pipeline ou convoyeur
+      </h4>
+    );
+  } else if (
+    emitterType === EmitterType.Appendix1 ||
+    emitterType === EmitterType.Appendix1Producer
+  ) {
+    const transporter = values.transporters?.[0];
+    // TRA-13753 - Un seul transporteur est autorisé en cas de bordereau de tournée dédiée
+    if (transporter && transporter?.takenOverAt) {
+      return (
+        <TransporterDisplay transporter={mapBsddTransporter(transporter)} />
+      );
+    }
+    return (
+      <TransporterForm
+        orgId={siret}
+        fieldName="transporters[0]"
+        bsdType={BsdType.Bsdd}
+      />
+    );
+  }
 
   return (
-    <>
-      <h4 className="form__section-heading">Transporteur</h4>
-      <CompanySelector
-        name="transporter.company"
-        onCompanySelected={transporter => {
-          if (transporter.transporterReceipt) {
-            setFieldValue(
-              "transporter.receipt",
-              transporter.transporterReceipt.receiptNumber
-            );
-            setFieldValue(
-              "transporter.validityLimit",
-              transporter.transporterReceipt.validityLimit
-            );
-            setFieldValue(
-              "transporter.department",
-              transporter.transporterReceipt.department
-            );
-          } else {
-            setFieldValue("transporter.receipt", "");
-            setFieldValue("transporter.validityLimit", null);
-            setFieldValue("transporter.department", "");
-          }
-        }}
-      />
-
-      <h4 className="form__section-heading">Autorisations</h4>
-      <div className="form__row">
-        <TdSwitch
-          checked={!!values.transporter.isExemptedOfReceipt}
-          onChange={() =>
-            setFieldValue(
-              "transporter.isExemptedOfReceipt",
-              !values.transporter.isExemptedOfReceipt
-            )
-          }
-          label="Le transporteur déclare être exempté de récépissé conformément aux
-          dispositions de l'article R.541-50 du code de l'environnement."
-        />
-      </div>
-      {!values.transporter.isExemptedOfReceipt && (
-        <div className="form__row">
-          <label>
-            Numéro de récépissé
-            <Field
-              type="text"
-              name="transporter.receipt"
-              className="td-input"
-            />
-          </label>
-
-          <RedErrorMessage name="transporter.receipt" />
-
-          <label>
-            Département
-            <Field
-              type="text"
-              name="transporter.department"
-              placeholder="Ex: 83"
-              className={`td-input ${styles.transporterDepartment}`}
-            />
-          </label>
-
-          <RedErrorMessage name="transporter.department" />
-
-          <label>
-            Limite de validité (optionnel)
-            <Field
-              component={DateInput}
-              name="transporter.validityLimit"
-              className={`td-input ${styles.transporterValidityLimit}`}
-            />
-          </label>
-
-          <RedErrorMessage name="transporter.validityLimit" />
-
-          <label>
-            Immatriculation (optionnel)
-            <Field
-              type="text"
-              className={`td-input ${styles.transporterNumberPlate}`}
-              name="transporter.numberPlate"
-              placeholder="Plaque d'immatriculation du véhicule"
-            />
-          </label>
-
-          <RedErrorMessage name="transporter.numberPlate" />
-        </div>
-      )}
-    </>
+    <TransporterList
+      fieldName="transporters"
+      orgId={siret}
+      bsdType={BsdType.Bsdd}
+    />
   );
 }

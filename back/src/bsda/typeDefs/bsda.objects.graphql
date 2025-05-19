@@ -18,8 +18,14 @@ type Bsda {
   updatedAt: DateTime!
   "Indique si le bordereau est à l'état de brouillon"
   isDraft: Boolean!
-  "Statur du bordereau"
+  "Statut du bordereau"
   status: BsdaStatus!
+
+  """
+  Identifiant du bordereau à partir duquel ce celui-ci a été dupliqué.
+  Est égal à `null` si le bordereau n'est pas issue d'une duplication.
+  """
+  isDuplicateOf: String
 
   """
   Type de bordereau
@@ -35,11 +41,11 @@ type Bsda {
   "Courtier"
   broker: BsdaBroker
 
-  "Dénomination du déchet"
+  "Description du déchet"
   waste: BsdaWaste
   "Conditionnement"
   packagings: [BsdaPackaging!]
-  "Poids"
+  "Quantité en tonnes"
   weight: BsdaWeight
 
   "Installation de destination"
@@ -48,8 +54,14 @@ type Bsda {
   "Entreprise de travaux"
   worker: BsdaWorker
 
-  "Entreprise de transport"
+  "Entreprise de transport - 1er transporteur en cas de transport multi-modal"
   transporter: BsdaTransporter
+
+  """
+  Liste des transporteurs du déchet. Contient 1 seul transporteur en cas d'achemniment direct.
+  Peut contenir un maximum de 5 transporteurs différents en cas de transport multi-modal
+  """
+  transporters: [BsdaTransporter!]!
 
   "Bordereau que celui-ci réexpédie"
   forwarding: InitialBsda
@@ -63,10 +75,17 @@ type Bsda {
   """
   Bordereaux dans lequel celui-ci est groupé
   """
-  groupedIn: InitialBsda
+  groupedIn: Bsda
 
   "Metadata associées au bordereau"
   metadata: BsdaMetadata!
+
+  """
+  Liste d'entreprises intermédiaires. Un intermédiaire est une entreprise qui prend part à la gestion du déchet,
+  mais pas à la responsabilité de la traçabilité (entreprise de travaux, bureau d'étude, maitre d'oeuvre,
+  collectivité, etc.) Il pourra lire ce bordereau, sans étape de signature.
+  """
+  intermediaries: [FormCompany!]
 }
 
 type InitialBsda {
@@ -91,7 +110,7 @@ type InitialBsda {
   """
   waste: BsdaWaste
   """
-  Quantité totale du déchet en kilogrammes, il peut s'agir d'une estimation.
+  Quantité totale du déchet en tonnes, il peut s'agir d'une estimation.
   """
   weight: BsdaWeight
   """
@@ -135,11 +154,11 @@ type BsdaEmission {
 type BsdaWaste {
   "Rubrique Déchet"
   code: String
-  "Dénomination usuelle"
-  name: String
+  "DEPRECATED - Dénomination usuelle"
+  name: String @deprecated(reason: "Utiliser materialName")
   "Code famille"
   familyCode: String
-  "Nom du matériau"
+  "Nom usuel du matériau"
   materialName: String
   "Consistence"
   consistence: BsdaConsistence
@@ -147,6 +166,8 @@ type BsdaWaste {
   sealNumbers: [String!]
   "Mention ADR"
   adr: String
+  "Contient des Polluants Organiques Persistants (POP) oui / non"
+  pop: Boolean
 }
 
 type BsdaPackaging {
@@ -158,10 +179,15 @@ type BsdaPackaging {
 
   "Nombre de colis associés à ce conditionnement"
   quantity: Int!
+
+  "Volume du conditionnement en litre(s)"
+  volume: Float
+  "Numéros des contenants"
+  identificationNumbers: [String!]!
 }
 
 type BsdaWeight {
-  "Type de quantité (réelle ou estimé)"
+  "Type de quantité (réelle ou estimée)"
   isEstimate: Boolean
   "Quantité en tonne"
   value: Float
@@ -187,10 +213,10 @@ type BsdaDestination {
 type BsdaReception {
   "Date de présentation sur site"
   date: DateTime
-  "Poids présentée"
+  "Poids présenté"
   weight: Float
   "Lot accepté, accepté partiellement ou refusé"
-  acceptationStatus: BsdaAcceptationStatus
+  acceptationStatus: WasteAcceptationStatus
   "Motif de refus"
   refusalReason: String
   "Signature case 10"
@@ -200,6 +226,10 @@ type BsdaReception {
 type BsdaOperation {
   "Code D/R"
   code: String
+  "Qualification du traitement final"
+  mode: OperationMode
+  "Description de l'opération"
+  description: String
   "Date de réalisation de l'opération"
   date: DateTime
   "Exutoire final (si la destination ne l'est pas)"
@@ -217,10 +247,44 @@ type BsdaNextDestination {
 }
 
 type BsdaWorker {
+  "Indique si une entreprise de travaux est présente sur le BSDA (pour le cas d'un émetteur qui démonte lui même son amiante par ex)"
+  isDisabled: Boolean!
+
   "Entreprise de travaux"
   company: FormCompany
+
+  "Informations de certification"
+  certification: BsdaWorkerCertification
+
   "Déclaration générale"
   work: BsdaWork
+}
+
+type BsdaWorkerCertification {
+  """
+  Indique si l'entreprise réalise des travaux relevant de la sous-section 4
+  """
+  hasSubSectionFour: Boolean!
+
+  """
+  Indique si l'entreprise réalise des travaux relevant de la sous-section 3
+  """
+  hasSubSectionThree: Boolean!
+
+  """
+  Numéro de certification (sous-section 3 uniquement)
+  """
+  certificationNumber: String
+
+  """
+  Limite de validité de la certification (sous-section 3 uniquement)
+  """
+  validityLimit: DateTime
+
+  """
+  Organisation qui a décerné la certification (sous-section 3 uniquement)
+  """
+  organisation: String
 }
 
 type BsdaWork {
@@ -233,6 +297,8 @@ type BsdaWork {
 }
 
 type BsdaTransporter {
+  "Identifiant du transporteur"
+  id: ID!
   "Coordonnées de l'entreprise de transport"
   company: FormCompany
   "Champ libre"
@@ -272,11 +338,130 @@ type BsdaBroker {
 }
 
 type BsdaMetadata {
-  errors: [BsdaError!]
+  errors: [BsdaError]
+  "EXPERIMENTAL, ne pas utiliser - Dernière révision du bordereau"
+  latestRevision: BsdaRevisionRequest
 }
 
 type BsdaError {
   message: String!
   path: String!
   requiredFor: BsdaSignatureType!
+}
+
+"Demande de révision Bsda"
+type BsdaRevisionRequest {
+  "Identifiant de la demande de révison"
+  id: ID!
+
+  "Aperçu du bordereau concerné au moment de la création de la demande de révision. Il ne reflète pas le bordereau actuel."
+  bsda: Bsda!
+
+  "Date de création de la demande"
+  createdAt: DateTime!
+
+  "Entreprise à l'origine de la demande de révision"
+  authoringCompany: FormCompany!
+
+  "Liste des approbations apposées sur la révision"
+  approvals: [BsdaRevisionRequestApproval!]!
+
+  "Contenu de la révision"
+  content: BsdaRevisionRequestContent!
+
+  "Commentaire explicatif, saisi par l'auteur de la demande de révision"
+  comment: String!
+
+  "Statut d'acceptation de la révision"
+  status: RevisionRequestStatus!
+}
+
+"Approbation d'une demande de révision"
+type BsdaRevisionRequestApproval {
+  "Siret de l'entreprise responsable de cette approbation"
+  approverSiret: String!
+
+  "Commentaire explicatif, saisi par l'approbateur"
+  comment: String
+
+  "Statut d'acceptation de l'approbation"
+  status: RevisionRequestApprovalStatus!
+}
+
+"Payload de révision d'un bordereau. Disponible sur une liste restreinte de champs."
+type BsdaRevisionRequestContent {
+  "Maitre d'ouvrage ou détenteur du déchet"
+  emitter: BsdaRevisionRequestEmitter
+
+  "Courtier"
+  broker: BsdaBroker
+
+  "Installation de destination"
+  destination: BsdaRevisionRequestDestination
+
+  "Description du déchet"
+  waste: BsdaRevisionRequestWaste
+
+  "Conditionnement"
+  packagings: [BsdaPackaging!]
+
+  "Demande d'annulation du bordereau"
+  isCanceled: Boolean
+}
+
+type BsdaRevisionRequestEmitter {
+  "Informations chantier (si différente de l'adresse de l'entreprise)"
+  pickupSite: BsdaPickupSite
+}
+
+type BsdaRevisionRequestDestination {
+  "N° de CAP (le cas échéant)"
+  cap: String
+
+  "Expédition reçue à l'installation de destination"
+  reception: BsdaRevisionRequestReception
+
+  "Réalisation de l'opération (case 11)"
+  operation: BsdaRevisionRequestOperation
+}
+
+type BsdaRevisionRequestReception {
+  "Poids présenté"
+  weight: Float
+}
+
+type BsdaRevisionRequestOperation {
+  "Code D/R"
+  code: String
+
+  "Mode de traitement"
+  mode: OperationMode
+
+  "Description de l'opération"
+  description: String
+}
+
+type BsdaRevisionRequestWaste {
+  "Rubrique Déchet"
+  code: String
+
+  "Nom usuel du matériau"
+  materialName: String
+
+  "Numéros de scellés"
+  sealNumbers: [String!]
+
+  "Contient des Polluants Organiques Persistants (POP) oui / non"
+  pop: Boolean
+}
+
+type BsdaRevisionRequestConnection {
+  totalCount: Int!
+  pageInfo: PageInfo!
+  edges: [BsdaRevisionRequestEdge!]!
+}
+
+type BsdaRevisionRequestEdge {
+  cursor: String!
+  node: BsdaRevisionRequest!
 }

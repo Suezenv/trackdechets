@@ -1,28 +1,23 @@
-import React, { useState } from "react";
-import { Formik, Form, Field, ErrorMessage } from "formik";
-import * as yup from "yup";
-import { useLocation, Link } from "react-router-dom";
+import React from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, gql } from "@apollo/client";
-import {
-  Invitation,
-  Mutation,
-  MutationJoinWithInviteArgs,
-  Query,
-  User,
-} from "../generated/graphql/types";
-import {
-  IconEmailActionUnread,
-  IconLock1,
-  IconView,
-  IconSingleNeutralIdCard4,
-} from "common/components/Icons";
-import Loader from "common/components/Loaders";
-import { NotificationError } from "common/components/Error";
-import routes from "common/routes";
-import PasswordMeter from "common/components/PasswordMeter";
-import RedErrorMessage from "common/components/RedErrorMessage";
-import styles from "./Invite.module.scss";
+import { Formik, Form, Field } from "formik";
+import * as yup from "yup";
+import { Mutation, MutationJoinWithInviteArgs, Query } from "@td/codegen-ui";
+import Loader from "../Apps/common/Components/Loader/Loaders";
 import * as queryString from "query-string";
+import { decodeHash } from "../common/helper";
+import PasswordHelper, {
+  getPasswordHint
+} from "../common/components/PasswordHelper";
+import routes from "../Apps/routes";
+
+import { Alert } from "@codegouvfr/react-dsfr/Alert";
+import { Button } from "@codegouvfr/react-dsfr/Button";
+import { Input } from "@codegouvfr/react-dsfr/Input";
+import { PasswordInput } from "@codegouvfr/react-dsfr/blocks/PasswordInput";
+import styles from "./Login.module.scss";
+
 const INVITATION = gql`
   query Invitation($hash: String!) {
     invitation(hash: $hash) {
@@ -44,90 +39,16 @@ const JOIN_WITH_INVITE = gql`
       email
       companies {
         name
-        siret
+        orgId
       }
     }
   }
 `;
 
-/**
- * This page is shown on successful signup
- * The user get a list of all the companies he is part of
- */
-function SignupConfirmation({ user }: { user: User }) {
-  return (
-    <div className="container-narrow">
-      <section className="section section-white">
-        <h2 className="h2 tw-my-4">Confirmation de création de compte</h2>
-        <p className="body-text">
-          Votre compte <span className="tw-font-bold">{user.email}</span> a bien
-          été crée et vous êtes désormais membre des établissements suivants:
-        </p>
-        <ul className="bullets">
-          {user.companies?.map(company => (
-            <li key={company.siret}>
-              {company.name} - ({company.siret})
-            </li>
-          ))}
-        </ul>
-        <p className="body-text">
-          Connectez-vous à votre compte pour accéder à votre tableau de bord et
-          accéder aux bordereaux de ces établissements.
-        </p>
-        <div className="form__actions">
-          <Link to={routes.login} className="btn btn--primary">
-            Se connecter
-          </Link>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-/**
- * This page is shown when user try to join several times with the
- * same invite link
- */
-function AlreadyAccepted({ invitation }: { invitation: Invitation }) {
-  const { email, companySiret } = invitation;
-  return (
-    <div className="container-narrow">
-      <section className="section section-white">
-        <h2 className="h2 tw-my-4">Cette invitation n'est plus valide</h2>
-        <p className="body-text">
-          Votre compte <span className="tw-font-bold">{email}</span> a déjà été
-          crée et le rattachement à l'établissement dont le SIRET est{" "}
-          <span className="tw-font-bold">{companySiret}</span> est effectif.
-        </p>
-        <p className="body-text">
-          Connectez-vous à votre compte pour accéder à votre tableau de bord et
-          accéder aux bordereaux de cet établissement.
-        </p>
-        <div className="form__actions">
-          <Link to={routes.login} className="btn btn--primary">
-            Se connecter
-          </Link>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-const decodeHash = hash => {
-  if (!hash) {
-    return "";
-  }
-  return Array.isArray(hash)
-    ? decodeURIComponent(hash[0])
-    : decodeURIComponent(hash);
-};
-
-/**
- * Signup to Trackdéchets with an invitation link
- */
 export default function Invite() {
   // Extract invitation hash from URL
   const location = useLocation();
+  const navigate = useNavigate();
 
   // parse qs and get rid of extra parameters
   const parsedQs = queryString.parse(location.search);
@@ -136,54 +57,146 @@ export default function Invite() {
 
   const hash = decodeHash(qsHash);
 
-  const [passwordType, setPasswordType] = useState("password");
-
   // INVITATION QUERY
-  const { loading, error: queryError, data: queryData } = useQuery<
-    Pick<Query, "invitation">
-  >(INVITATION, {
-    variables: { hash },
+  const {
+    loading,
+    error: queryError,
+    data: queryData
+  } = useQuery<Pick<Query, "invitation">>(INVITATION, {
+    variables: { hash }
   });
 
   // JOIN_WITH_INVITE MUTATION
-  const [
-    joinWithInvite,
-    { error: mutationError, data: mutationData },
-  ] = useMutation<Pick<Mutation, "joinWithInvite">, MutationJoinWithInviteArgs>(
-    JOIN_WITH_INVITE
-  );
+  const [joinWithInvite, { error: mutationError, data: mutationData }] =
+    useMutation<Pick<Mutation, "joinWithInvite">, MutationJoinWithInviteArgs>(
+      JOIN_WITH_INVITE
+    );
 
   if (loading) {
     return <Loader />;
   }
 
+  const pageContent = content => {
+    return (
+      <div className={styles.onboardingWrapper}>
+        <div className={`fr-container fr-pt-10w ${styles.centralContainer}`}>
+          {content}
+        </div>
+      </div>
+    );
+  };
+
   if (mutationError) {
-    return <NotificationError apolloError={mutationError} />;
+    return pageContent(
+      <div className="fr-grid-row fr-grid-row--center fr-mb-2w">
+        <Alert
+          title="Erreur"
+          description={mutationError.message}
+          severity="error"
+        />
+      </div>
+    );
   }
 
   if (mutationData) {
     const user = mutationData.joinWithInvite;
-    return <SignupConfirmation user={user} />;
+
+    return pageContent(
+      <>
+        <div className="fr-grid-row fr-grid-row--center fr-mb-2w">
+          <div className="fr-col fr-m-auto">
+            <h2 className="fr-h3 fr-mb-1w">
+              Confirmation de création de compte
+            </h2>
+            <p className="fr-text--md fr-mb-1w">
+              Votre compte <strong>{user.email}</strong> a bien été crée et vous
+              êtes désormais membre des établissements suivants:
+            </p>
+            <ul className="bullets">
+              {user.companies?.map(company => (
+                <li key={company.orgId}>
+                  {company.name} - ({company.orgId})
+                </li>
+              ))}
+            </ul>
+            <p className="fr-text--md fr-mb-1w">
+              Connectez-vous à votre compte pour accéder à votre tableau de bord
+              et accéder aux bordereaux de ces établissements.
+            </p>
+          </div>
+        </div>
+        <div className="fr-grid-row fr-grid-row--right">
+          <div className={`fr-col ${styles.resetFlexCol}`}>
+            <Button
+              size="medium"
+              onClick={() => {
+                navigate(routes.login);
+              }}
+            >
+              Se connecter
+            </Button>
+          </div>
+        </div>
+      </>
+    );
   }
 
   if (queryError) {
-    return <NotificationError apolloError={queryError} />;
+    return pageContent(
+      <div className="fr-grid-row fr-grid-row--center mb-2w">
+        <Alert
+          title="Erreur"
+          description={queryError.message}
+          severity="error"
+        />
+      </div>
+    );
   }
 
   if (queryData && queryData.invitation) {
-    const invitation = queryData.invitation;
+    const { email, companySiret, acceptedAt } = queryData.invitation;
 
-    // invitation was already accepted
-    if (invitation.acceptedAt) {
-      return <AlreadyAccepted invitation={invitation} />;
+    if (acceptedAt) {
+      return pageContent(
+        <>
+          <div className="fr-grid-row fr-grid-row--center mb-2w">
+            <div className="fr-col fr-m-auto">
+              <h2 className="fr-h3 fr-mb-1w">
+                Cette invitation n'est plus valide
+              </h2>
+              <p className="fr-text--md fr-mb-1w">
+                Votre compte <strong>{email}</strong> a déjà été crée et le
+                rattachement à l'établissement dont le SIRET est{" "}
+                <strong>{companySiret}</strong> est effectif.
+              </p>
+              <p className="fr-text--md fr-mb-1w">
+                Connectez-vous à votre compte pour accéder à votre tableau de
+                bord et accéder aux bordereaux de ces établissements.
+              </p>
+            </div>
+          </div>
+          <div className="fr-grid-row fr-grid-row--right">
+            <div className={`fr-col ${styles.resetFlexCol}`}>
+              <Button
+                size="medium"
+                onClick={() => {
+                  navigate(routes.login);
+                }}
+              >
+                Se connecter
+              </Button>
+            </div>
+          </div>
+        </>
+      );
     }
 
-    return (
+    return pageContent(
       <Formik
         initialValues={{
-          email: invitation?.email ?? "",
+          email: email ?? "",
           name: "",
-          password: "",
+          password: ""
         }}
         validationSchema={yup.object().shape({
           email: yup.string().email().required("L'email est un champ requis"),
@@ -191,108 +204,102 @@ export default function Invite() {
           password: yup
             .string()
             .required("Le mot de passe est un champ requis")
-            .min(8, "Le mot de passe doit faire au moins 8 caractères"),
+            .test({
+              name: "is-valid-password",
+              test: value => {
+                if (!value) {
+                  return false;
+                }
+                const { hintType } = getPasswordHint(value);
+                if (hintType === "error") {
+                  return false;
+                }
+                return true;
+              }
+            })
         })}
         onSubmit={(values, { setSubmitting }) => {
           const { name, password } = values;
           joinWithInvite({
-            variables: { inviteHash: hash, name, password },
+            variables: { inviteHash: hash, name, password }
           }).then(_ => setSubmitting(false));
         }}
       >
-        {({ isSubmitting }) => (
-          <section className="section section-white">
-            <div className="container-narrow">
-              <Form>
-                <h1 className="h1 tw-my-4">Validez votre inscription</h1>
-                <p className="body-text">
+        {({ isSubmitting, errors, touched, isValid }) => (
+          <Form>
+            <div className="fr-grid-row fr-grid-row--center fr-mb-2w">
+              <div className="fr-col fr-m-auto">
+                <h1 className="fr-h3 fr-mb-1w">Validez votre inscription</h1>
+                <p className="fr-text--md fr-mb-1w">
                   Vous avez été invité à rejoindre Trackdéchets. Pour valider
                   votre inscription, veuillez compléter le formulaire
                   ci-dessous.
                 </p>
-
-                <div className="form__row">
-                  <label>Email</label>
-                  <div className="field-with-icon-wrapper">
-                    <Field
-                      type="email"
-                      name="email"
-                      className="td-input"
-                      readOnly
-                    />
-                    <i>
-                      <IconEmailActionUnread />
-                    </i>
-                  </div>
-                  <RedErrorMessage name="email" />
-                </div>
-
-                <div className="form__row">
-                  <label>Nom et prénom</label>
-                  <div className="field-with-icon-wrapper">
-                    <Field type="text" name="name" className="td-input" />
-                    <i>
-                      <IconSingleNeutralIdCard4 />
-                    </i>
-                  </div>
-
-                  <RedErrorMessage name="name" />
-                </div>
-
-                <div className="form__row">
-                  <label>Mot de passe</label>
-
-                  <Field name="password">
-                    {({ field }) => {
-                      return (
-                        <>
-                          <div className="field-with-icon-wrapper">
-                            <input
-                              type={passwordType}
-                              {...field}
-                              className="td-input"
-                            />
-                            <i>
-                              <IconLock1 />
-                            </i>
-                          </div>
-                          <span
-                            className={styles.showPassword}
-                            onClick={() =>
-                              setPasswordType(
-                                passwordType === "password"
-                                  ? "text"
-                                  : "password"
-                              )
-                            }
-                          >
-                            <IconView /> <span>Afficher le mot de passe</span>
-                          </span>
-                          <PasswordMeter password={field.value} />
-                        </>
-                      );
-                    }}
-                  </Field>
-
-                  <RedErrorMessage name="password" />
-                </div>
-
-                <ErrorMessage
-                  name="passwordConfirmation"
-                  render={msg => <div className="error-message">{msg}</div>}
-                />
-                <div className="form__actions">
-                  <button
-                    className="btn btn--primary"
-                    type="submit"
-                    disabled={isSubmitting}
-                  >
-                    Valider l'inscription
-                  </button>
-                </div>
-              </Form>
+                <p className="fr-text--bold">Vos informations :</p>
+                <Field name="name">
+                  {({ field }) => {
+                    return (
+                      <Input
+                        label="Nom et prénom"
+                        state={
+                          errors.name && touched.name ? "error" : "default"
+                        }
+                        stateRelatedMessage={
+                          errors.name && touched.name ? errors.name : ""
+                        }
+                        nativeInputProps={{
+                          required: true,
+                          ...field
+                        }}
+                      />
+                    );
+                  }}
+                </Field>
+                <Field name="email">
+                  {({ field }) => {
+                    return (
+                      <Input
+                        label="Email"
+                        nativeInputProps={{
+                          required: true,
+                          readOnly: true,
+                          ...field
+                        }}
+                      />
+                    );
+                  }}
+                </Field>
+                <Field name="password">
+                  {({ field }) => {
+                    return (
+                      <>
+                        <PasswordInput
+                          label="Mot de passe"
+                          nativeInputProps={{ required: true, ...field }}
+                        />
+                        <PasswordHelper password={field.value} />
+                      </>
+                    );
+                  }}
+                </Field>
+              </div>
             </div>
-          </section>
+            <div className="fr-grid-row fr-grid-row--right">
+              <div className={`fr-col ${styles.resetFlexCol}`}>
+                <Button
+                  iconId="ri-arrow-right-line"
+                  iconPosition="right"
+                  size="medium"
+                  disabled={!isValid}
+                  title={
+                    isSubmitting ? "Création en cours..." : "Créer mon compte"
+                  }
+                >
+                  Créer mon compte
+                </Button>
+              </div>
+            </div>
+          </Form>
         )}
       </Formik>
     );

@@ -1,176 +1,242 @@
 import { useMutation, useQuery } from "@apollo/client";
-import cogoToast from "cogo-toast";
-import routes from "common/routes";
-import GenericStepList, {
-  getComputedState,
-} from "form/common/stepper/GenericStepList";
-import { IStepContainerProps } from "form/common/stepper/Step";
+import toast from "react-hot-toast";
+import omitDeep from "omit-deep-lodash";
+import React, { lazy, ReactElement, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
+import { Loader } from "../../Apps/common/Components";
+import { getComputedState } from "../../Apps/Dashboard/Creation/getComputedState";
+
+import { IStepContainerProps } from "../common/stepper/Step";
+import { toastApolloError } from "../../Apps/Dashboard/Creation/toaster";
 import {
   Mutation,
   MutationCreateBsdasriArgs,
+  MutationCreateDraftBsdasriArgs,
   MutationUpdateBsdasriArgs,
   QueryBsdasriArgs,
   Query,
   Bsdasri,
   BsdasriInput,
   BsdasriStatus,
-} from "generated/graphql/types";
-import omit from "object.omit";
-import React, { ReactElement, useMemo } from "react";
-import { generatePath, useHistory, useParams } from "react-router-dom";
+  BsdasriType
+} from "@td/codegen-ui";
 import getInitialState from "./utils/initial-state";
-import { CREATE_BSDASRI, GET_BSDASRI, UPDATE_BSDASRI } from "./utils/queries";
+import {
+  CREATE_DRAFT_BSDASRI,
+  CREATE_BSDASRI,
+  GET_BSDASRI,
+  UPDATE_BSDASRI
+} from "../../Apps/common/queries/bsdasri/queries";
+import { TOAST_DURATION } from "../../common/config";
 
+const GenericStepList = lazy(() => import("../common/stepper/GenericStepList"));
 interface Props {
   children: (dasriForm: Bsdasri | undefined) => ReactElement;
   formId?: string;
   initialStep?: number;
   bsdasriFormType?: string;
 }
+
+const wasteKey = "waste";
+const ecoOrganismeKey = "ecoOrganisme";
+const emittedByEcoOrganismeKey = "ecoOrganisme.emittedByEcoOrganisme";
+
+const emitterKey = "emitter";
+const transporterKey = "transporter";
+const destinationKey = "destination";
+const identificationKey = "identification";
+const synthesizingKey = "synthesizing";
+const groupingKey = "grouping";
+const transporterCompanySiretKey = "transporter.company.siret";
+const transporterCompanyOrgIdKey = "transporter.company.orgId";
+const transporterCompanyVatNumberKey = "transporter.company.vatNumber";
+const transporterTransportPackagingsKey = "transporter.transport.packagings";
+const transporterTransportVolumeKey = "transporter.transport.volume";
+
+const getCommonKeys = (bsdasriType: BsdasriType): string[] => {
+  if (bsdasriType === BsdasriType.Synthesis) {
+    return [
+      groupingKey,
+      transporterCompanySiretKey,
+      transporterCompanyOrgIdKey,
+      transporterCompanyVatNumberKey,
+      transporterTransportPackagingsKey,
+      transporterTransportVolumeKey,
+      emittedByEcoOrganismeKey
+    ];
+  }
+  if (bsdasriType === BsdasriType.Grouping) {
+    return [synthesizingKey, emittedByEcoOrganismeKey];
+  }
+  if (bsdasriType === BsdasriType.Simple) {
+    return [synthesizingKey, groupingKey, emittedByEcoOrganismeKey];
+  }
+  return [];
+};
 /**
  * Do not resend sections locked by relevant signatures
  */
-const removeSignedSections = (input: BsdasriInput, status: BsdasriStatus) => {
-  const wasteKey = "waste";
-  const ecoOrganismeKey = "ecoOrganisme";
-  const emitterKey = "emitter";
-  const transporterKey = "transporter";
-  const destinationKey = "destination";
-
-  const mapping = {
-    INITIAL: [],
-    SIGNED_BY_PRODUCER: [wasteKey, ecoOrganismeKey, emitterKey],
-    SENT: [wasteKey, ecoOrganismeKey, emitterKey, transporterKey],
+const removeSections = (
+  input: BsdasriInput,
+  status: BsdasriStatus,
+  bsdasriType: BsdasriType
+) => {
+  const commonKeys = getCommonKeys(bsdasriType);
+  const mapping: Partial<Record<BsdasriStatus, string[]>> = {
+    INITIAL: [...commonKeys],
+    SIGNED_BY_PRODUCER: [...commonKeys],
+    SENT: [
+      wasteKey,
+      ecoOrganismeKey,
+      emitterKey,
+      transporterKey,
+      synthesizingKey,
+      groupingKey,
+      ...commonKeys
+    ],
     RECEIVED: [
       wasteKey,
       ecoOrganismeKey,
       emitterKey,
       transporterKey,
       destinationKey,
-    ],
+      identificationKey,
+      synthesizingKey,
+      groupingKey,
+      ...commonKeys
+    ]
   };
-  return omit(input, mapping[status]);
+
+  return omitDeep(input, mapping[status]);
 };
 export default function BsdasriStepsList(props: Props) {
-  const { siret } = useParams<{ siret: string }>();
-  const history = useHistory();
+  const navigate = useNavigate();
 
   const formQuery = useQuery<Pick<Query, "bsdasri">, QueryBsdasriArgs>(
     GET_BSDASRI,
     {
       variables: {
-        id: props.formId!,
+        id: props.formId!
       },
       skip: !props.formId,
-      fetchPolicy: "network-only",
+      fetchPolicy: "network-only"
     }
   );
 
-  // prefill packaging info with previous dasri actor data
-  const prefillWasteDetails = dasri => {
-    if (!dasri?.transporter?.transport?.packagings?.length) {
-      dasri.transporter.transport.packagings =
-        dasri?.emitter?.emission?.packagings;
-    }
-
-    if (!dasri?.destination?.reception?.packagings?.length) {
-      dasri.destination.reception.packagings =
-        dasri?.transporter?.transport?.packagings;
-    }
-    return dasri;
-  };
   const mapRegrouped = dasri => ({
     ...dasri,
     grouping: dasri?.grouping.map(d => d.id),
+    synthesizing: dasri?.synthesizing?.map(d => d.id)
   });
 
   const formState = useMemo(
     () =>
-      prefillWasteDetails(
-        getComputedState(
-          getInitialState(),
-          mapRegrouped(formQuery.data?.bsdasri)
-        )
+      getComputedState(
+        getInitialState(),
+        mapRegrouped(formQuery.data?.bsdasri)
       ),
     [formQuery.data]
   );
+
   const status = formState.id
     ? formQuery?.data?.bsdasri?.["bsdasriStatus"]
     : "INITIAL";
 
-  const [createBsdasri] = useMutation<
+  const [createDraftBsdasri, { loading: creatingDraft }] = useMutation<
+    Pick<Mutation, "createDraftBsdasri">,
+    MutationCreateDraftBsdasriArgs
+  >(CREATE_DRAFT_BSDASRI);
+
+  const [createBsdasri, { loading: creating }] = useMutation<
     Pick<Mutation, "createBsdasri">,
     MutationCreateBsdasriArgs
   >(CREATE_BSDASRI);
 
-  const [updateBsdasri] = useMutation<
+  const [updateBsdasri, { loading: updating }] = useMutation<
     Pick<Mutation, "updateBsdasri">,
     MutationUpdateBsdasriArgs
   >(UPDATE_BSDASRI);
 
-  function saveForm(input: BsdasriInput): Promise<any> {
-    return formState.id
-      ? updateBsdasri({
+  function saveForm(
+    input: BsdasriInput,
+    type: BsdasriType = BsdasriType.Simple
+  ): Promise<any> {
+    if (formState.id) {
+      if (type === BsdasriType.Synthesis) {
+        // synthesis bsdasri are  never created in draft state
+        const { grouping, emitter, ecoOrganisme, ...cleanedInput } = input;
+
+        return updateBsdasri({
           variables: {
             id: formState.id,
-            input: removeSignedSections(input, status),
-          },
-        })
-      : createBsdasri({ variables: { input: input } });
+            input: removeSections(cleanedInput, status, type)
+          }
+        });
+      }
+      return updateBsdasri({
+        variables: {
+          id: formState.id,
+          input: removeSections(input, status, type)
+        }
+      });
+    }
+
+    if (type === BsdasriType.Synthesis) {
+      const cleanedInput = omitDeep(input, [
+        groupingKey,
+        emitterKey,
+        ecoOrganismeKey,
+        transporterTransportPackagingsKey
+      ]);
+      // synthesis bsdasri are  never created in draft state
+      return createBsdasri({ variables: { input: cleanedInput } });
+    }
+    return createDraftBsdasri({ variables: { input: input } });
   }
 
-  function onSubmit(e, values) {
-    e.preventDefault();
-    // As we want to be able to save draft, we skip validation on submit
-    // and don't use the classic Formik mechanism
-
+  function onSubmit(values) {
+    const { id, type, ...input } = values;
     if (
-      props.bsdasriFormType === "bsdasriRegroup" ||
+      type === BsdasriType.Grouping ||
       formQuery.data?.bsdasri?.type === "GROUPING"
     ) {
       if (!values?.grouping?.length) {
-        cogoToast.error("Vous devez sélectionner des bordereaux à grouper", {
-          hideAfter: 7,
+        toast.error("Vous devez sélectionner des bordereaux à grouper", {
+          duration: TOAST_DURATION
         });
         return;
       }
     }
-    const { id, ...input } = values;
-    saveForm(input)
+
+    saveForm(input, type)
       .then(_ => {
-        // TODO  redirect to the correct dashboard
-        const redirectTo = generatePath(routes.dashboard.bsds.drafts, {
-          siret,
-        });
-        history.push(redirectTo);
+        navigate(-1);
       })
-      .catch(err => {
-        err.graphQLErrors.map(err =>
-          cogoToast.error(err.message, { hideAfter: 7 })
-        );
-      });
+      .catch(err => toastApolloError(err));
   }
 
   // As it's a render function, the steps are nested into a `<></>` block
   // So we render then unwrap to get the steps
 
   const parentOfSteps = props.children(formQuery.data?.bsdasri);
-  const steps = parentOfSteps.props.children as ReactElement<
-    IStepContainerProps
-  >[];
+  const steps = parentOfSteps.props
+    .children as ReactElement<IStepContainerProps>[];
 
   if ([BsdasriStatus.Processed, BsdasriStatus.Refused].includes(status)) {
     return <p>Ce bordereau n'est plus modifiable</p>;
   }
   return (
-    <GenericStepList
-      children={steps}
-      formId={props.formId}
-      formQuery={formQuery}
-      onSubmit={onSubmit}
-      initialValues={formState}
-      validationSchema={null}
-      initialStep={props?.initialStep}
-    />
+    <>
+      <GenericStepList
+        children={steps}
+        formId={props.formId}
+        formQuery={formQuery}
+        onSubmit={onSubmit}
+        initialValues={formState}
+        validationSchema={null}
+        initialStep={props?.initialStep}
+      />
+      {(creating || updating || creatingDraft) && <Loader />}
+    </>
   );
 }

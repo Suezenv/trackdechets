@@ -1,15 +1,11 @@
 import * as yup from "yup";
-import { Bsdasri } from "generated/graphql/types";
 
-export const signatureValidationSchema = (form: Bsdasri) =>
-  yup.object({
-    signature: yup.object({
-      author: yup
-        .string()
-        .nullable()
-        .required("Le nom du signataire est requis"),
-    }),
-  });
+export const signatureValidationSchema = yup.object({
+  signature: yup.object({
+    date: yup.date().required("La date d'émission est requise"),
+    author: yup.string().nullable().required("Le nom du signataire est requis")
+  })
+});
 
 export const emissionSignatureSecretCodeValidationSchema = yup.object({
   signature: yup.object({
@@ -17,8 +13,8 @@ export const emissionSignatureSecretCodeValidationSchema = yup.object({
     securityCode: yup
       .string()
       .required("Le code de signature est obligatoire")
-      .matches(/[1-9][0-9]{3}/, "Format invalide"),
-  }),
+      .matches(/[1-9][0-9]{3}/, "Format invalide")
+  })
 });
 
 export const prefillWasteDetails = dasri => {

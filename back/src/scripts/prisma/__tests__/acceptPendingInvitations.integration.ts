@@ -1,5 +1,5 @@
 import { resetDatabase } from "../../../../integration-tests/helper";
-import prisma from "../../../prisma";
+import { prisma } from "@td/prisma";
 import {
   companyFactory,
   userFactory,
@@ -18,17 +18,18 @@ describe("acceptPendingInvitations", () => {
       const invitation = await prisma.userAccountHash.create({
         data: {
           email: "john.snow@trackdechets.fr",
-          companySiret: company.siret,
+          companySiret: company.siret!,
           role: "MEMBER",
           hash: "hash1"
         }
       });
       await acceptPendingInvitations();
-      const untouchedInvitation = await prisma.userAccountHash.findUnique({
-        where: {
-          id: invitation.id
-        }
-      });
+      const untouchedInvitation =
+        await prisma.userAccountHash.findUniqueOrThrow({
+          where: {
+            id: invitation.id
+          }
+        });
       expect(untouchedInvitation).not.toBeNull();
       expect(untouchedInvitation.acceptedAt).toBeNull();
     }
@@ -42,7 +43,7 @@ describe("acceptPendingInvitations", () => {
       const invitation = await prisma.userAccountHash.create({
         data: {
           email: user.email,
-          companySiret: company.siret,
+          companySiret: company.siret!,
           role: "MEMBER",
           hash: "hash2"
         }
@@ -66,17 +67,19 @@ describe("acceptPendingInvitations", () => {
       const invitation = await prisma.userAccountHash.create({
         data: {
           email: user.email,
-          companySiret: company.siret,
+          companySiret: company.siret!,
           role: "MEMBER",
           hash: "hash3"
         }
       });
       await acceptPendingInvitations();
-      const acceptedInvitation = await prisma.userAccountHash.findUnique({
-        where: {
-          id: invitation.id
+      const acceptedInvitation = await prisma.userAccountHash.findUniqueOrThrow(
+        {
+          where: {
+            id: invitation.id
+          }
         }
-      });
+      );
       expect(acceptedInvitation.acceptedAt).not.toBeNull();
     }
   );

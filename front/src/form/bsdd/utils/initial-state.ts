@@ -10,7 +10,11 @@ import {
   Trader,
   Broker,
   WorkSite,
-} from "generated/graphql/types";
+  TransporterInput,
+  TransportMode
+} from "@td/codegen-ui";
+import { getInitialCompany } from "../../../Apps/common/data/initialState";
+import { emptyBsddPackaging } from "../../../Apps/Forms/Components/PackagingList/helpers";
 
 /**
  * Computes initial values for trader fields in Formik's form
@@ -21,7 +25,7 @@ export function getInitialTrader(trader?: Trader | null) {
     receipt: trader?.receipt ?? "",
     department: trader?.department ?? "",
     validityLimit: trader?.validityLimit ?? null,
-    company: getInitialCompany(trader?.company),
+    company: getInitialCompany(trader?.company)
   };
 }
 
@@ -34,23 +38,7 @@ export function getInitialBroker(broker?: Broker | null) {
     receipt: broker?.receipt ?? "",
     department: broker?.department ?? "",
     validityLimit: broker?.validityLimit ?? null,
-    company: getInitialCompany(broker?.company),
-  };
-}
-
-/**
- * Computes initial values for a company fields in Formik's form
- * by merging defaults with current state of the draft BSD (if any)
- */
-export function getInitialCompany(company?: FormCompany | null) {
-  return {
-    siret: company?.siret ?? "",
-    name: company?.name ?? "",
-    address: company?.address ?? "",
-    contact: company?.contact ?? "",
-    mail: company?.mail ?? "",
-    phone: company?.phone ?? "",
-    vatNumber: company?.vatNumber ?? "",
+    company: getInitialCompany(broker?.company)
   };
 }
 
@@ -66,8 +54,8 @@ export function getInitialTemporaryStorageDetail(
       company: getInitialCompany(temporaryStorageDetail?.destination?.company),
       cap: temporaryStorageDetail?.destination?.cap ?? "",
       processingOperation:
-        temporaryStorageDetail?.destination?.processingOperation ?? "",
-    },
+        temporaryStorageDetail?.destination?.processingOperation ?? ""
+    }
   };
 }
 
@@ -81,7 +69,7 @@ export function getInitialEmitterWorkSite(workSite?: WorkSite | null) {
     address: workSite?.address ?? "",
     city: workSite?.city ?? "",
     postalCode: workSite?.postalCode ?? "",
-    infos: workSite?.infos ?? "",
+    infos: workSite?.infos ?? ""
   };
 }
 
@@ -92,19 +80,72 @@ export function getInitialEmitterWorkSite(workSite?: WorkSite | null) {
 export function getInitialEcoOrganisme(ecoOrganisme?: FormEcoOrganisme | null) {
   return {
     siret: ecoOrganisme?.siret ?? "",
-    name: ecoOrganisme?.name ?? "",
+    name: ecoOrganisme?.name ?? ""
   };
 }
+
+/**
+ * Computes initial values for Form.intermediaries
+ */
+export function getInitialIntermediaries(intermediaries?: FormCompany[]) {
+  return intermediaries
+    ? intermediaries.map(company => ({
+        orgId: company?.orgId ?? "",
+        siret: company?.siret ?? "",
+        name: company?.name ?? "",
+        address: company?.address ?? "",
+        contact: company?.contact ?? "",
+        mail: company?.mail ?? "",
+        phone: company?.phone ?? "",
+        vatNumber: company?.vatNumber ?? "",
+        country: company?.country ?? ""
+      }))
+    : [];
+}
+
+export const initialFormTransporter: TransporterInput = {
+  mode: TransportMode.Road,
+  isExemptedOfReceipt: false,
+  company: {
+    siret: "",
+    name: "",
+    address: "",
+    contact: "",
+    mail: "",
+    phone: "",
+    vatNumber: "",
+    country: "",
+    omiNumber: ""
+  }
+};
+
+// Les données transporteurs du formulaire représente soit un transporteur BSDD
+// déjà crée en base de données qui dispose d'un identifiant, soit un transporteur
+// non encore crée en base ne disposant pas encore d'identifiant. Par ailleurs on a
+// besoin de connaitre la valeur de `takenOverAt` pour l'affichage des infos transporteur
+// en mode formulaire ou statique dans la liste.
+export type CreateOrUpdateTransporterInput = TransporterInput & {
+  id?: string | null;
+  takenOverAt?: string | null;
+};
+
+export type FormFormikValues = Omit<FormInput, "transporters"> & {
+  transporters: CreateOrUpdateTransporterInput[];
+} & { id?: string | null; isDuplicateOf?: string | null };
 
 /**
  * Computes initial values of Formik's form by merging
  * default values to the current draft form (if any)
  * @param f current BSD
  */
-export function getInitialState(f?: Form | null): FormInput {
+export function getInitialState(f?: Form | null): FormFormikValues {
+  const initialTransporters = f?.id ? f.transporters : [initialFormTransporter];
+
   return {
     id: f?.id ?? null,
     customId: f?.customId ?? "",
+    isDirectSupply: f?.isDirectSupply ?? false,
+    isDuplicateOf: f?.isDuplicateOf,
     emitter: {
       pickupSite: null, // deprecated
       type: f?.emitter?.type ?? EmitterType.Producer,
@@ -112,28 +153,22 @@ export function getInitialState(f?: Form | null): FormInput {
         ? getInitialEmitterWorkSite(f?.emitter?.workSite)
         : null,
       company: getInitialCompany(f?.emitter?.company),
+      isForeignShip: f?.emitter?.isForeignShip ?? false,
+      isPrivateIndividual: f?.emitter?.isPrivateIndividual ?? false
     },
     recipient: {
       cap: f?.recipient?.cap ?? "",
       processingOperation: f?.recipient?.processingOperation ?? "",
       isTempStorage: f?.recipient?.isTempStorage ?? false,
-      company: getInitialCompany(f?.recipient?.company),
+      company: getInitialCompany(f?.recipient?.company)
     },
-    transporter: {
-      isExemptedOfReceipt: f?.transporter?.isExemptedOfReceipt ?? false,
-      receipt: f?.transporter?.receipt ?? "",
-      department: f?.transporter?.department ?? "",
-      validityLimit: f?.transporter?.validityLimit ?? null,
-      numberPlate: f?.transporter?.numberPlate ?? "",
-      customInfo: f?.transporter?.customInfo ?? null,
-      company: getInitialCompany(f?.transporter?.company),
-    },
+    transporters: initialTransporters,
     trader: f?.trader
       ? {
           receipt: f?.trader?.receipt ?? "",
           department: f?.trader?.department ?? "",
           validityLimit: f?.trader?.validityLimit ?? null,
-          company: getInitialCompany(f?.trader?.company),
+          company: getInitialCompany(f?.trader?.company)
         }
       : null,
     broker: f?.broker
@@ -141,28 +176,38 @@ export function getInitialState(f?: Form | null): FormInput {
           receipt: f?.broker?.receipt ?? "",
           department: f?.broker?.department ?? "",
           validityLimit: f?.broker?.validityLimit ?? null,
-          company: getInitialCompany(f?.broker?.company),
+          company: getInitialCompany(f?.broker?.company)
         }
       : null,
     wasteDetails: {
       code: f?.wasteDetails?.code ?? "",
       name: f?.wasteDetails?.name ?? "",
+      isSubjectToADR: f?.wasteDetails?.isSubjectToADR ?? false,
       onuCode: f?.wasteDetails?.onuCode ?? "",
-      packagingInfos: f?.wasteDetails?.packagingInfos ?? [],
+      nonRoadRegulationMention:
+        f?.wasteDetails?.nonRoadRegulationMention ?? null,
+      packagingInfos: f?.wasteDetails?.packagingInfos?.length
+        ? f.wasteDetails.packagingInfos
+        : [emptyBsddPackaging],
       quantity: f?.wasteDetails?.quantity ?? null,
       quantityType: f?.wasteDetails?.quantityType ?? QuantityType.Estimated,
       consistence: f?.wasteDetails?.consistence ?? Consistence.Solid,
       pop: f?.wasteDetails?.pop ?? false,
+      isDangerous: f?.wasteDetails?.isDangerous ?? false,
+      parcelNumbers: f?.wasteDetails?.parcelNumbers ?? [],
+      analysisReferences: f?.wasteDetails?.analysisReferences ?? [],
+      landIdentifiers: f?.wasteDetails?.landIdentifiers ?? [],
       packagings: null, // deprecated
       otherPackaging: null, // deprecated
-      numberOfPackages: null, // deprecated
+      numberOfPackages: null // deprecated
     },
-    appendix2Forms: f?.appendix2Forms ?? [],
+    grouping: f?.grouping ?? [],
     ecoOrganisme: f?.ecoOrganisme
       ? getInitialEcoOrganisme(f?.ecoOrganisme)
       : null,
     temporaryStorageDetail: f?.temporaryStorageDetail
       ? getInitialTemporaryStorageDetail(f?.temporaryStorageDetail)
       : null,
+    intermediaries: getInitialIntermediaries(f?.intermediaries)
   };
 }

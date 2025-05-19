@@ -1,4 +1,4 @@
-import { QueryResolvers } from "../../../generated/graphql/types";
+import type { QueryResolvers } from "@td/codegen-back";
 import { getUserAccountHashOrNotFound } from "../../database";
 
 /**
@@ -10,7 +10,10 @@ const invitationResolver: QueryResolvers["invitation"] = async (
   parent,
   { hash }
 ) => {
-  return getUserAccountHashOrNotFound({ hash });
+  const h = await getUserAccountHashOrNotFound({ hash });
+  // type casting is necessary here as long as we
+  // do not expose READER and DRIVER role in the API
+  return { ...h, role: h.role };
 };
 
 export default invitationResolver;

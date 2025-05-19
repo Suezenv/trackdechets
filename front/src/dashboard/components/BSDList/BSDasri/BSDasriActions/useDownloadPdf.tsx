@@ -1,8 +1,8 @@
 import { gql, LazyQueryHookOptions, useLazyQuery } from "@apollo/client";
-import { Query, QueryBsdasriPdfArgs } from "generated/graphql/types";
+import { Query, QueryBsdasriPdfArgs } from "@td/codegen-ui";
 
 export const BSDASRI_PDF = gql`
-  query Bsdasridf($id: ID) {
+  query Bsdasridf($id: ID!) {
     bsdasriPdf(id: $id) {
       downloadLink
       token
@@ -23,7 +23,7 @@ export function useDownloadPdf(
           return;
         }
         window.open(bsdasriPdf.downloadLink, "_blank");
-      },
+      }
     }
   );
 }

@@ -1,22 +1,61 @@
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import prisma from "../../../../prisma";
-import { companyFactory } from "../../../../__tests__/factories";
+import { prisma } from "@td/prisma";
+import {
+  companyFactory,
+  siretify,
+  userFactory
+} from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
-import * as sirene from "../../../sirene";
+import { searchCompanies } from "../../../search";
+import { AuthType } from "../../../../auth";
 
-const searchCompanySpy = jest.spyOn(sirene, "searchCompanies");
+jest.mock("../../../search");
 
 describe("query { searchCompanies(clue, department) }", () => {
-  afterEach(async () => {
-    await resetDatabase();
-    searchCompanySpy.mockReset();
+  let query: ReturnType<typeof makeClient>["query"];
+  beforeAll(async () => {
+    const user = await userFactory();
+    const client = makeClient({
+      ...user,
+      auth: AuthType.Session
+    });
+    query = client.query;
   });
 
-  const { query } = makeClient(null);
+  afterEach(async () => {
+    await resetDatabase();
+    (searchCompanies as jest.Mock).mockReset();
+  });
+
+  it("should deny access to unauthenticated requests", async () => {
+    const unauthenticatedClient = makeClient();
+    const gqlQuery = `
+      query {
+        searchCompanies(clue: "Code en Stock"){
+          siret
+          address
+          name
+        }
+      }
+    `;
+    const { errors } = await unauthenticatedClient.query<any>(gqlQuery);
+
+    expect(errors).toEqual([
+      expect.objectContaining({
+        extensions: expect.objectContaining({
+          code: "UNAUTHENTICATED"
+        })
+      })
+    ]);
+  });
+
   it("should return list of companies based on clue", async () => {
-    searchCompanySpy.mockResolvedValueOnce([
+    const siret = siretify(1);
+
+    (searchCompanies as jest.Mock).mockResolvedValueOnce([
       {
-        siret: "85001946400013",
+        siret,
+        orgId: siret,
         address: "4 Boulevard Longchamp 13001 Marseille",
         name: "CODE EN STOCK",
         naf: "6201Z",
@@ -47,9 +86,12 @@ describe("query { searchCompanies(clue, department) }", () => {
   });
 
   it("should merge info from SIRENE and ICPE", async () => {
-    searchCompanySpy.mockResolvedValueOnce([
+    const siret = siretify(1);
+
+    (searchCompanies as jest.Mock).mockResolvedValueOnce([
       {
-        siret: "85001946400013",
+        siret,
+        orgId: siret,
         address: "4 Boulevard Longchamp 13001 Marseille",
         name: "CODE EN STOCK",
         naf: "6201Z",
@@ -76,7 +118,7 @@ describe("query { searchCompanies(clue, department) }", () => {
     `;
 
     const icpe = {
-      s3icNumeroSiret: "85001946400013",
+      s3icNumeroSiret: siret,
       codeS3ic: "0064.00001"
     };
 
@@ -88,9 +130,12 @@ describe("query { searchCompanies(clue, department) }", () => {
   });
 
   it("should fetch transporter and trader receipt info", async () => {
-    searchCompanySpy.mockResolvedValueOnce([
+    const siret = siretify(1);
+
+    (searchCompanies as jest.Mock).mockResolvedValueOnce([
       {
-        siret: "85001946400013",
+        siret,
+        orgId: siret,
         address: "4 Boulevard Longchamp 13001 Marseille",
         name: "CODE EN STOCK",
         naf: "6201Z",
@@ -114,7 +159,7 @@ describe("query { searchCompanies(clue, department) }", () => {
     };
 
     await companyFactory({
-      siret: "85001946400013",
+      siret,
       name: "Code en Stock",
       securityCode: 1234,
       contactEmail: "john.snow@trackdechets.fr",

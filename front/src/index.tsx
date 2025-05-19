@@ -1,28 +1,36 @@
 import "react-app-polyfill/ie11";
 import "react-app-polyfill/stable";
 
-import * as React from "react";
-import * as ReactDOM from "react-dom";
+// setup sentry just after polyfills to be able to capture all exceptions
+import "./setupSentry";
+import "./setupPlausible";
 
+import * as React from "react";
+import { createRoot, hydrateRoot } from "react-dom/client";
+
+import "@codegouvfr/react-dsfr/main.css";
 import "./scss/index.scss";
+
 import App from "./App";
 import * as serviceWorker from "./serviceWorker";
 import * as Sentry from "@sentry/browser";
-import "@reach/tooltip/styles.css";
+import { startReactDsfr } from "@codegouvfr/react-dsfr/spa";
 
-if (process.env.REACT_APP_SENTRY_DSN) {
-  Sentry.init({
-    dsn: process.env.REACT_APP_SENTRY_DSN,
-    environment: process.env.REACT_APP_SENTRY_ENVIRONMENT,
+startReactDsfr({ defaultColorScheme: "light" });
+
+try {
+  const rootElement = document.getElementById("root");
+  if (rootElement && rootElement.hasChildNodes()) {
+    hydrateRoot(rootElement, <App />);
+  } else {
+    const root = createRoot(rootElement!);
+    root.render(<App />);
+  }
+} catch (error) {
+  Sentry.addBreadcrumb({
+    message: "Blank screen"
   });
-}
-
-const rootElement = document.getElementById("root");
-
-if (rootElement && rootElement.hasChildNodes()) {
-  ReactDOM.hydrate(<App />, rootElement);
-} else {
-  ReactDOM.render(<App />, rootElement);
+  Sentry.captureException(error);
 }
 
 // If you want your app to work offline and load faster, you can change

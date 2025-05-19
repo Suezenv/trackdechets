@@ -1,11 +1,24 @@
-import CompanySelector from "form/common/components/company/CompanySelector";
 import { useFormikContext } from "formik";
-import { Bsda } from "generated/graphql/types";
+import { BsdType, Bsda, BsdaType } from "@td/codegen-ui";
 import React from "react";
-import { Transport } from "./Transport";
+import { TransporterList } from "../../../../Apps/Forms/Components/TransporterList/TransporterList";
+import { useParams } from "react-router-dom";
 
 export function Transporter({ disabled }) {
-  const { setFieldValue } = useFormikContext<Bsda>();
+  const { values } = useFormikContext<Bsda>();
+
+  const { siret } = useParams<{ siret: string }>();
+
+  const isDechetterie = values?.type === BsdaType.Collection_2710;
+
+  if (isDechetterie) {
+    return (
+      <div className="notification">
+        Vous effectuez une collecte en déchèterie. Il n'y a pas de transporteur
+        à saisir.
+      </div>
+    );
+  }
 
   return (
     <>
@@ -16,34 +29,11 @@ export function Transporter({ disabled }) {
         </div>
       )}
 
-      <CompanySelector
-        disabled={disabled}
-        name="transporter.company"
-        heading="Entreprise de transport"
-        allowForeignCompanies={true}
-        onCompanySelected={transporter => {
-          if (transporter.transporterReceipt) {
-            setFieldValue(
-              "transporter.recepisse.number",
-              transporter.transporterReceipt.receiptNumber
-            );
-            setFieldValue(
-              "transporter.recepisse.validityLimit",
-              transporter.transporterReceipt.validityLimit
-            );
-            setFieldValue(
-              "transporter.recepisse.department",
-              transporter.transporterReceipt.department
-            );
-          } else {
-            setFieldValue("transporter.recepisse.number", "");
-            setFieldValue("transporter.recepisse.validityLimit", null);
-            setFieldValue("transporter.recepisse.department", "");
-          }
-        }}
+      <TransporterList
+        orgId={siret}
+        fieldName="transporters"
+        bsdType={BsdType.Bsda}
       />
-
-      <Transport disabled={disabled} />
     </>
   );
 }

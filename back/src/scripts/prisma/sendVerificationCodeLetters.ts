@@ -1,7 +1,7 @@
 import { CompanyVerificationStatus } from "@prisma/client";
 import { sendVerificationCodeLetter } from "../../common/post";
-import * as COMPANY_TYPES from "../../common/constants/COMPANY_TYPES";
-import prisma from "../../prisma";
+import * as COMPANY_CONSTANTS from "@td/constants";
+import { prisma } from "@td/prisma";
 import { CompanyType } from "@prisma/client";
 
 const { VERIFY_COMPANY } = process.env;
@@ -11,7 +11,9 @@ export default async function sendVerificationCodeLetters() {
     const companies = await prisma.company.findMany({
       where: {
         verificationStatus: CompanyVerificationStatus.TO_BE_VERIFIED,
-        companyTypes: { hasSome: COMPANY_TYPES.PROFESSIONALS as CompanyType[] }
+        companyTypes: {
+          hasSome: COMPANY_CONSTANTS.PROFESSIONALS as CompanyType[]
+        }
       }
     });
 
@@ -23,7 +25,7 @@ export default async function sendVerificationCodeLetters() {
           where: { id: company.id }
         });
         console.log(`Successfully sent letter to company ${company.siret}`);
-      } catch (err) {
+      } catch (_) {
         console.log(
           `Error sending verification code letter to company ${company.siret}`
         );

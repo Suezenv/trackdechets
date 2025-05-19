@@ -1,4 +1,4 @@
-@import "src/scss/Breakpoints";
+@import "../../scss/Breakpoints";
 @include phone {
   .recipient {
     &Department {
@@ -15,6 +15,9 @@
     }
     &TextQuote {
       margin: 10px 0;
+    }
+    &Select {
+      width: 100%;
     }
   }
 }

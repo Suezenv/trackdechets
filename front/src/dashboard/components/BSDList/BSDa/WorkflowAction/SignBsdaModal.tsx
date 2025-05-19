@@ -1,7 +1,8 @@
 import { useQuery } from "@apollo/client";
-import { Loader, Modal } from "common/components";
-import { GET_BSDA } from "form/bsda/stepper/queries";
-import { Query, QueryBsdaArgs } from "generated/graphql/types";
+import { Loader } from "../../../../../Apps/common/Components";
+import { Modal } from "../../../../../common/components";
+import { GET_BSDA } from "../../../../../Apps/common/queries/bsda/queries";
+import { Query, QueryBsdaArgs } from "@td/codegen-ui";
 import React from "react";
 import { BsdaSummary } from "./BsdaSummary";
 
@@ -15,8 +16,9 @@ type Props = {
 export function SignBsdaModal({ title, bsdaId, children, onClose }: Props) {
   const { data } = useQuery<Pick<Query, "bsda">, QueryBsdaArgs>(GET_BSDA, {
     variables: {
-      id: bsdaId,
+      id: bsdaId
     },
+    fetchPolicy: "network-only"
   });
 
   if (data == null) {
@@ -26,7 +28,7 @@ export function SignBsdaModal({ title, bsdaId, children, onClose }: Props) {
   const { bsda } = data;
 
   return (
-    <Modal onClose={onClose} ariaLabel={title} isOpen>
+    <Modal onClose={onClose} ariaLabel={title} isOpen size="L">
       <h2 className="td-modal-title">{title}</h2>
       <BsdaSummary bsda={bsda} />
       {children({ bsda, onClose })}

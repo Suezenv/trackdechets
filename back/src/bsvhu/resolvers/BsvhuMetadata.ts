@@ -1,64 +1,73 @@
-import {
+import { getTransporterReceipt } from "../../companies/recipify";
+import type {
+  BsvhuError,
+  BsvhuMetadataFields,
   BsvhuMetadata,
-  BsvhuMetadataResolvers,
-  BsvhuStatus
-} from "../../generated/graphql/types";
-import { getFormOrFormNotFound } from "../database";
-import { validateBsvhu } from "../validation";
+  BsvhuMetadataResolvers
+} from "@td/codegen-back";
+import { parseBsvhu } from "../validation";
+import {
+  getCurrentSignatureType,
+  getNextSignatureType,
+  getSignatureAncestors,
+  prismaToZodBsvhu
+} from "../validation/helpers";
+import { ZodIssue } from "zod";
+import { getRequiredAndSealedFieldPaths } from "../validation/rules";
 
 const bsvhuMetadataResolvers: BsvhuMetadataResolvers = {
   errors: async (
-    metadata: BsvhuMetadata & { id: string; status: BsvhuStatus }
-  ) => {
-    const prismaForm = await getFormOrFormNotFound(metadata.id);
+    metadata: BsvhuMetadata & { id: string },
+    _,
+    context
+  ): Promise<BsvhuError[]> => {
+    const bsvhu = await context.dataloaders.bsvhus.load(metadata.id);
+    // import transporterReceipt that will be completed after transporter signature
+    const transporterReceipt = await getTransporterReceipt(bsvhu);
+    const zodBsvhu = prismaToZodBsvhu({
+      ...bsvhu,
+      ...transporterReceipt
+    });
+    const currentSignature = getCurrentSignatureType(zodBsvhu);
+    const nextSignature = getNextSignatureType(currentSignature);
 
-    const validationMatrix = [
-      {
-        skip: metadata.status !== "INITIAL",
-        requiredFor: "EMISSION",
-        context: {
-          emissionSignature: true,
-          transportSignature: false,
-          operationSignature: false
-        }
-      },
-      {
-        skip: ["PROCESSED", "REFUSED", "SENT"].includes(metadata.status),
-        requiredFor: "TRANSPORT",
-        context: {
-          emissionSignature: true,
-          transportSignature: true,
-          operationSignature: false
-        }
-      },
-      {
-        skip: ["PROCESSED", "REFUSED"].includes(metadata.status),
-        requiredFor: "OPERATION",
-        context: {
-          emissionSignature: true,
-          transportSignature: true,
-          operationSignature: true
-        }
-      }
-    ];
-
-    const filteredValidationMatrix = validationMatrix.filter(
-      matrix => !matrix.skip
-    );
-    for (const { context, requiredFor } of filteredValidationMatrix) {
-      try {
-        await validateBsvhu(prismaForm, context);
-        return [];
-      } catch (errors) {
-        return errors.inner?.map(e => {
+    try {
+      parseBsvhu(zodBsvhu, {
+        currentSignatureType: nextSignature
+      });
+      return [];
+    } catch (errors) {
+      return (
+        errors.issues?.map((e: ZodIssue) => {
           return {
             message: e.message,
             path: e.path,
-            requiredFor
+            requiredFor: nextSignature
           };
-        });
-      }
+        }) ?? []
+      );
     }
+  },
+  fields: async (
+    metadata: BsvhuMetadata & { id: string },
+    _,
+    context
+  ): Promise<BsvhuMetadataFields> => {
+    const bsvhu = await context.dataloaders.bsvhus.load(metadata.id);
+
+    // import transporterReceipt that will be completed after transporter signature
+    const transporterReceipt = await getTransporterReceipt(bsvhu);
+    const zodBsvhu = prismaToZodBsvhu({
+      ...bsvhu,
+      ...transporterReceipt
+    });
+    const currentSignature = getCurrentSignatureType(zodBsvhu);
+    const currentSignatureAncestors = getSignatureAncestors(currentSignature);
+    return getRequiredAndSealedFieldPaths(
+      zodBsvhu,
+      currentSignatureAncestors,
+      context.user ?? undefined
+    );
   }
 };
 

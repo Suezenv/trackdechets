@@ -2,8 +2,13 @@ import { resetDatabase } from "../../../../../integration-tests/helper";
 import { ErrorCode } from "../../../../common/errors";
 import { userWithCompanyFactory } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
-import { bsdasriFactory, initialData } from "../../../__tests__/factories";
-import { Mutation } from "../../../../generated/graphql/types";
+import {
+  bsdasriFactory,
+  initialData,
+  readyToPublishData
+} from "../../../__tests__/factories";
+import type { Mutation } from "@td/codegen-back";
+
 const PUBLISH_DASRI = `
 mutation PublishDasri($id: ID!){
   publishBsdasri(id: $id)  {
@@ -43,13 +48,45 @@ describe("Mutation.publishBsdasri", () => {
     ]);
   });
 
-  it("should publish a draft dasri", async () => {
+  it("should publish a draft dasri without emitterWastePackagings", async () => {
+    // Test new rule: `emitterWastePackagings` is not required for publication anymore
     const { user, company } = await userWithCompanyFactory("MEMBER");
+    const { company: destination } = await userWithCompanyFactory("MEMBER");
 
     const dasri = await bsdasriFactory({
+      userId: user.id,
       opt: {
         isDraft: true,
-        ...initialData(company)
+        ...initialData(company),
+        ...readyToPublishData(destination),
+        emitterWastePackagings: []
+      }
+    });
+
+    const { mutate } = makeClient(user); // emitter
+
+    const { data } = await mutate<Pick<Mutation, "publishBsdasri">>(
+      PUBLISH_DASRI,
+      {
+        variables: {
+          id: dasri.id
+        }
+      }
+    );
+    expect(data.publishBsdasri.status).toBe("INITIAL");
+    expect(data.publishBsdasri.isDraft).toBe(false);
+  });
+
+  it("should publish a draft dasri", async () => {
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+    const { company: destination } = await userWithCompanyFactory("MEMBER");
+
+    const dasri = await bsdasriFactory({
+      userId: user.id,
+      opt: {
+        isDraft: true,
+        ...initialData(company),
+        ...readyToPublishData(destination)
       }
     });
 
@@ -70,10 +107,12 @@ describe("Mutation.publishBsdasri", () => {
 
   it("should not publish an already published dasri", async () => {
     const { user, company } = await userWithCompanyFactory("MEMBER");
+    const { company: destination } = await userWithCompanyFactory("MEMBER");
 
     const dasri = await bsdasriFactory({
       opt: {
-        ...initialData(company)
+        ...initialData(company),
+        ...readyToPublishData(destination)
       }
     });
 
@@ -100,11 +139,15 @@ describe("Mutation.publishBsdasri", () => {
 
   it("should not publish a draft dasri if mandatory fields are not filled", async () => {
     const { user, company } = await userWithCompanyFactory("MEMBER");
+    const { company: destination } = await userWithCompanyFactory("MEMBER");
     const dasri = await bsdasriFactory({
+      userId: user.id,
       opt: {
         isDraft: true,
         ...initialData(company),
-        emitterCompanyName: null // missing field
+        ...readyToPublishData(destination),
+        emitterCompanyName: null, // missing field
+        destinationCompanyName: null // missing field
       }
     });
     const { mutate } = makeClient(user); // emitter
@@ -120,7 +163,8 @@ describe("Mutation.publishBsdasri", () => {
 
     expect(errors).toEqual([
       expect.objectContaining({
-        message: "Émetteur: Le nom de l'entreprise est obligatoire",
+        message: `Destinataire: Le nom de l'entreprise est obligatoire
+Émetteur: Le nom de l'entreprise est obligatoire`,
         extensions: expect.objectContaining({
           code: ErrorCode.BAD_USER_INPUT
         })

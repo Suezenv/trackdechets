@@ -1,35 +1,23 @@
-import { Request, Response } from "express";
-import {
-  QueryBsdasriPdfArgs,
-  QueryResolvers
-} from "../../../generated/graphql/types";
-import {
-  getFileDownloadToken,
-  registerFileDownloader
-} from "../../../common/file-download";
+import type { QueryBsdasriPdfArgs, QueryResolvers } from "@td/codegen-back";
+import { getFileDownload } from "../../../common/fileDownload";
 import { checkIsAuthenticated } from "../../../common/permissions";
 import { getBsdasriOrNotFound } from "../../database";
-import { isDasriContributor } from "../../permissions";
 import { buildPdf } from "../../pdf/generator";
 import { createPDFResponse } from "../../../common/pdf";
+import { DownloadHandler } from "../../../routers/downloadRouter";
+import { checkCanRead } from "../../permissions";
+import { hasGovernmentReadAllBsdsPermOrThrow } from "../../../permissions";
 
-const TYPE = "bsdasri_pdf";
+export const bsdasriPdfDownloadHandler: DownloadHandler<QueryBsdasriPdfArgs> = {
+  name: "bsdasriPdf",
+  handler: async (_, res, { id }) => {
+    const bsdasri = await getBsdasriOrNotFound({ id });
+    const readableStream = await buildPdf(bsdasri);
+    readableStream.pipe(createPDFResponse(res, bsdasri.id));
+  }
+};
 
-// TODO: it would be better to declare the handlers directly in the download route
-registerFileDownloader(TYPE, sendBsdasriPdf);
-
-async function sendBsdasriPdf(
-  req: Request,
-  res: Response,
-  { id }: { id: string }
-) {
-  const bsdasri = await getBsdasriOrNotFound({ id });
-  const readableStream = await buildPdf(bsdasri);
-
-  readableStream.pipe(createPDFResponse(res, bsdasri.id));
-}
-
-const bsdasriPdfResolver: QueryResolvers["formPdf"] = async (
+const bsdasriPdfResolver: QueryResolvers["bsdasriPdf"] = async (
   _,
   { id }: QueryBsdasriPdfArgs,
   context
@@ -37,9 +25,17 @@ const bsdasriPdfResolver: QueryResolvers["formPdf"] = async (
   const user = checkIsAuthenticated(context);
   const dasri = await getBsdasriOrNotFound({ id });
 
-  await isDasriContributor(user, dasri);
+  if (!user.isAdmin && !user.governmentAccountId) {
+    await checkCanRead(user, dasri);
+  }
+  if (user.governmentAccountId) {
+    await hasGovernmentReadAllBsdsPermOrThrow(user);
+  }
 
-  return getFileDownloadToken({ type: TYPE, params: { id } }, sendBsdasriPdf);
+  return getFileDownload({
+    handler: bsdasriPdfDownloadHandler.name,
+    params: { id }
+  });
 };
 
 export default bsdasriPdfResolver;

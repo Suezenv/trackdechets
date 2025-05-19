@@ -1,62 +1,10 @@
-import { isObject, isArray, arraysEqual, objectDiff } from "../diff";
-
-describe("isObject", () => {
-  test("object is object", () => {
-    expect(isObject({ a: "a" })).toEqual(true);
-  });
-
-  test("array is not object", () => {
-    expect(isObject(["a", "b"])).toEqual(false);
-  });
-
-  test("date is not object", () => {
-    expect(isObject(new Date())).toEqual(false);
-  });
-
-  test("scalars are not objects", () => {
-    expect(isObject(1)).toEqual(false);
-    expect(isObject("a")).toEqual(false);
-  });
-
-  test("null is not object", () => {
-    expect(isObject(null)).toEqual(false);
-  });
-
-  test("undefined is not object", () => {
-    expect(isObject(undefined)).toEqual(false);
-  });
-});
-
-describe("isArray", () => {
-  test("array is array", () => {
-    expect(isArray(["a", "b"])).toEqual(true);
-  });
-
-  test("object not array", () => {
-    expect(isArray({ a: "a" })).toEqual(false);
-  });
-
-  test("date is not array", () => {
-    expect(isArray(new Date())).toEqual(false);
-  });
-
-  test("scalars are not arrays", () => {
-    expect(isArray(1)).toEqual(false);
-    expect(isArray("a")).toEqual(false);
-  });
-
-  test("null is not array", () => {
-    expect(isArray(null)).toEqual(false);
-  });
-
-  test("undefined is not array", () => {
-    expect(isArray(undefined)).toEqual(false);
-  });
-});
+import Decimal from "decimal.js";
+import { arraysEqual, numberEqual, objectDiff, stringEqual } from "../diff";
 
 describe("arrayEquals", () => {
   test("arrays are equal", () => {
     expect(arraysEqual([1, 2], [1, 2])).toEqual(true);
+    expect(arraysEqual([1, 2], [2, 1])).toEqual(true);
     expect(arraysEqual([], [])).toEqual(true);
     expect(arraysEqual(null, null)).toEqual(true);
     expect(arraysEqual(undefined, undefined)).toEqual(true);
@@ -69,6 +17,61 @@ describe("arrayEquals", () => {
     expect(arraysEqual([1, 2], null)).toEqual(false);
     expect(arraysEqual(undefined, [2, 3])).toEqual(false);
     expect(arraysEqual([1, 2], undefined)).toEqual(false);
+  });
+
+  test("arrays of objects are equal", () => {
+    expect(
+      arraysEqual(
+        [
+          { a: "a", b: "b" },
+          { c: "c", d: "d" }
+        ],
+        [
+          { a: "a", b: "b" },
+          { c: "c", d: "d" }
+        ]
+      )
+    ).toEqual(true);
+  });
+
+  test.skip("arrays of objects in different order are equal", () => {
+    // waiting for fix - using default Array.sort on array of objects does not work
+    expect(
+      arraysEqual(
+        [
+          { a: "a", b: "b" },
+          { c: "c", d: "d" }
+        ],
+        [
+          { c: "c", d: "d" },
+          { a: "a", b: "b" }
+        ]
+      )
+    ).toEqual(true);
+  });
+
+  test("arrays of [Object: null prototype] are equals", () => {
+    const a = Object.create(null);
+    const b = Object.create(null);
+    a.b = b;
+    expect(arraysEqual([a, a], [a, a])).toEqual(true);
+  });
+});
+
+describe("stringEqual", () => {
+  test("strings are equal", () => {
+    expect(stringEqual("", null)).toBe(true);
+    expect(stringEqual(null, "")).toBe(true);
+    expect(stringEqual("", undefined)).toBe(true);
+    expect(stringEqual(undefined, "")).toBe(true);
+    expect(stringEqual("", "")).toBe(true);
+    expect(stringEqual("a", "a")).toBe(true);
+  });
+
+  test("strings are not equal", () => {
+    expect(stringEqual("a", "b")).toBe(false);
+    expect(stringEqual("a", "")).toBe(false);
+    expect(stringEqual("a", null)).toBe(false);
   });
 });
 
@@ -190,5 +193,36 @@ describe("dateDiff", () => {
 
     const diff = objectDiff(o1, o2);
     expect(diff).toEqual({ a: date2 });
+  });
+
+  test("diff with empty string", () => {
+    const string1 = "";
+    const string2 = null;
+
+    const o1 = {
+      a: string1
+    };
+
+    const o2 = {
+      a: string2
+    };
+
+    expect(objectDiff(o1, o2)).toEqual({});
+    expect(objectDiff(o2, o1)).toEqual({});
+    expect(objectDiff(o1, { a: "another" })).toEqual({ a: "another" });
+  });
+});
+
+describe("numberEqual", () => {
+  test("numbers with ridiculous number of decimals shoud be rounded and equal", () => {
+    // Given
+    const number1 = new Decimal("9.604");
+    const number2 = new Decimal("9.6039999999999990");
+
+    // When
+    const areEqual = numberEqual(number1, number2);
+
+    // Then
+    expect(areEqual).toBeTruthy();
   });
 });

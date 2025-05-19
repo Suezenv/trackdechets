@@ -1,0 +1,23 @@
+.myExportsForm {
+  max-width: 30rem;
+}
+
+.dateButtons {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.prewrap {
+  white-space: pre-wrap;
+}
+
+.badge {
+  word-break: normal;
+}
+
+.delegationHint {
+  font-size: 0.875rem;
+  color: var(--text-mention-grey);
+}

@@ -1,5 +1,5 @@
 import { CompanyType, Status, UserRole } from "@prisma/client";
-import { gql } from "apollo-server-express";
+import type { Query } from "@td/codegen-back";
 import { resetDatabase } from "../../../../integration-tests/helper";
 import {
   companyFactory,
@@ -8,7 +8,7 @@ import {
 } from "../../../__tests__/factories";
 import makeClient from "../../../__tests__/testClient";
 
-const FORM = gql`
+const FORM = `
   query Form($id: ID!) {
     form(id: $id) {
       appendix2Forms {
@@ -20,58 +20,57 @@ const FORM = gql`
         }
       }
     }
-  }
-`;
+  }`;
 
 describe("Appendix2Form", () => {
   afterAll(resetDatabase);
 
   it("should deny access to `emitter` field is user is not form contributor", async () => {
-    const {
-      user: emitterUser,
-      company: emitter
-    } = await userWithCompanyFactory(UserRole.MEMBER, {
-      companyTypes: { set: [CompanyType.PRODUCER] }
-    });
+    const { user: emitterUser, company: emitter } =
+      await userWithCompanyFactory(UserRole.MEMBER, {
+        companyTypes: { set: [CompanyType.PRODUCER] }
+      });
 
     const collector = await companyFactory({
       companyTypes: { set: [CompanyType.COLLECTOR] }
     });
 
-    const {
-      user: destinationUser,
-      company: destination
-    } = await userWithCompanyFactory(UserRole.MEMBER, {
-      companyTypes: { set: [CompanyType.WASTEPROCESSOR] }
-    });
+    const { user: destinationUser, company: destination } =
+      await userWithCompanyFactory(UserRole.MEMBER, {
+        companyTypes: { set: [CompanyType.WASTEPROCESSOR] }
+      });
 
     const appendix2 = await formFactory({
       ownerId: emitterUser.id,
       opt: {
         status: Status.AWAITING_GROUP,
         emitterCompanySiret: emitter.siret,
-        recipientCompanySiret: collector.siret
+        recipientCompanySiret: collector.siret,
+        quantityReceived: 1
       }
     });
 
     const regroupement = await formFactory({
       ownerId: emitterUser.id,
       opt: {
-        appendix2Forms: { connect: { id: appendix2.id } },
-        recipientCompanySiret: destination.siret
+        emitterType: "APPENDIX2",
+        recipientCompanySiret: destination.siret,
+        grouping: {
+          create: {
+            initialFormId: appendix2.id,
+            quantity: appendix2.quantityReceived!
+          }
+        }
       }
     });
 
     // destination cannot access appendix2.emitter
     const { query } = makeClient(destinationUser);
-    const { errors } = await query(FORM, {
-      variables: { id: regroupement.id }
+    const { data } = await query<Pick<Query, "form">>(FORM, {
+      variables: {
+        id: regroupement.id
+      }
     });
-    expect(errors).toEqual([
-      expect.objectContaining({
-        message:
-          "Vous ne pouvez pas accéder au champ `emitter` de cette annexe 2 car votre SIRET apparait uniquement sur le bordereau de regroupement"
-      })
-    ]);
+    expect(data.form.appendix2Forms![0]).toMatchObject({ emitter: null });
   });
 });

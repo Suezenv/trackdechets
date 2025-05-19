@@ -1,26 +1,22 @@
-import { IconClose } from "common/components/Icons";
-import RedErrorMessage from "common/components/RedErrorMessage";
-import NumberInput from "form/common/components/custom-inputs/NumberInput";
+import { IconClose } from "../../../../Apps/common/Components/Icons/Icons";
+import RedErrorMessage from "../../../../common/components/RedErrorMessage";
+import NumberInput from "../../../common/components/custom-inputs/NumberInput";
 import { Field, FieldArray, FieldProps, useFormikContext } from "formik";
-import {
-  BsdasriPackaging,
-  BsdasriPackagingType,
-} from "generated/graphql/types";
+import { BsdasriPackaging, BsdasriPackagingType } from "@td/codegen-ui";
 import {
   PACKAGINGS_NAMES,
-  getDasriPackagingInfosSummary,
-} from "form/bsdasri/utils/packagings";
+  getDasriPackagingInfosSummary
+} from "../../../../Apps/common/utils/packagingsDasriSummary";
 import React, { InputHTMLAttributes } from "react";
 import "./Packagings.scss";
 
 export default function DasriPackagings({
   field: { name, value },
-  form,
-  id,
   disabled,
-  ...props
-}: FieldProps<BsdasriPackaging[] | null> &
-  InputHTMLAttributes<HTMLInputElement>) {
+  summaryHint
+}: FieldProps<BsdasriPackaging[] | null> & {
+  summaryHint?: string;
+} & InputHTMLAttributes<HTMLInputElement>) {
   const { setFieldValue } = useFormikContext();
 
   if (!value) {
@@ -46,7 +42,7 @@ export default function DasriPackagings({
                 >
                   <div className="tw-flex tw-mb-4 tw-items-end">
                     <div className="tw-w-11/12 tw-flex">
-                      <div className="tw-w-1/3 tw-px-2">
+                      <div className="tw-w-1/3 tw-px-2 tw-flex tw-items-end">
                         <Field
                           label="Nombre de colis"
                           component={NumberInput}
@@ -54,11 +50,19 @@ export default function DasriPackagings({
                           name={`${name}.${idx}.quantity`}
                           placeholder="Nombre de colis"
                           min="1"
-                          max={10}
                           disabled={disabled}
+                          validate={value => {
+                            if (value === null) {
+                              return "Champ requis";
+                            }
+                            if (value < 1) {
+                              return "Le nombre de colis doit être supérieur ou égal à 1";
+                            }
+                          }}
                         />
+                        <RedErrorMessage name={`${name}.${idx}.quantity`} />
                       </div>
-                      <div className="tw-w-1/3 tw-pr-2">
+                      <div className="tw-w-1/3 tw-pr-2 tw-flex tw-items-end">
                         <label>
                           Type
                           <select
@@ -75,13 +79,15 @@ export default function DasriPackagings({
                                     ? p.other
                                     : "",
                                 quantity: p.quantity,
-                                volume: p.volume || 0,
+                                volume: p.volume || 0
                               });
                             }}
                           >
-                            {(Object.entries(PACKAGINGS_NAMES) as Array<
-                              [keyof typeof PACKAGINGS_NAMES, string]
-                            >).map(([optionValue, optionLabel]) => (
+                            {(
+                              Object.entries(PACKAGINGS_NAMES) as Array<
+                                [keyof typeof PACKAGINGS_NAMES, string]
+                              >
+                            ).map(([optionValue, optionLabel]) => (
                               <option
                                 key={optionValue}
                                 value={optionValue}
@@ -92,8 +98,9 @@ export default function DasriPackagings({
                             ))}
                           </select>
                         </label>
+                        <RedErrorMessage name={`${name}.${idx}.type`} />
                       </div>
-                      <div className="tw-w-1/3 tw-px-2">
+                      <div className="tw-w-1/3 tw-px-2 tw-flex tw-items-end">
                         {p.type === "AUTRE" && (
                           <label>
                             Précisez
@@ -102,26 +109,33 @@ export default function DasriPackagings({
                               name={`${name}.${idx}.other`}
                               placeholder="..."
                               disabled={disabled}
+                              validate={value => {
+                                if (value === null || value === "") {
+                                  return "Champ requis";
+                                }
+                              }}
                             />
+                            <RedErrorMessage name={`${name}.${idx}.other`} />
                           </label>
                         )}
                       </div>
 
-                      <div className="tw-w-1/3 tw-px-2">
+                      <div className="tw-w-1/3 tw-px-2 tw-flex tw-items-end">
                         <Field
-                          label="Volume"
+                          label="Volume unitaire (l)"
                           component={NumberInput}
                           className="td-input"
                           name={`${name}.${idx}.volume`}
-                          placeholder="Volume en litres"
+                          placeholder="Volume unitaire (l)"
                           min="1"
                           disabled={disabled}
                         />
+                        <RedErrorMessage name={`${name}.${idx}.volume`} />
                       </div>
                     </div>
                     {!disabled && (
                       <div
-                        className="tw-px-2"
+                        className="tw-px-2 tw-mb-2"
                         onClick={() => arrayHelpers.remove(idx)}
                       >
                         <button type="button">
@@ -130,10 +144,6 @@ export default function DasriPackagings({
                       </div>
                     )}
                   </div>
-                  <RedErrorMessage name={`${name}.${idx}.type`} />
-                  <RedErrorMessage name={`${name}.${idx}.other`} />
-                  <RedErrorMessage name={`${name}.${idx}.quantity`} />
-                  <RedErrorMessage name={`${name}.${idx}.volume`} />
                 </div>
               );
             })}
@@ -147,7 +157,7 @@ export default function DasriPackagings({
                     type: BsdasriPackagingType.Autre,
                     other: "",
                     quantity: 1,
-                    volume: 0,
+                    volume: 1
                   })
                 }
               >
@@ -158,7 +168,10 @@ export default function DasriPackagings({
         )}
       />
       {value?.length > 0 && (
-        <div className="tw-mt-4">{getDasriPackagingInfosSummary(value)}</div>
+        <div className="tw-mt-4">
+          {getDasriPackagingInfosSummary(value)}{" "}
+          {!!summaryHint && <span>{summaryHint}</span>}
+        </div>
       )}
     </div>
   );

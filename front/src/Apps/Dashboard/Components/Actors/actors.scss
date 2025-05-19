@@ -1,0 +1,63 @@
+@import "../../../../scss/Breakpoints.scss";
+
+.actors {
+  min-width: 0;
+  padding-right: 10px;
+
+  &__item {
+    display: flex;
+    align-items: center;
+    max-width: 100%;
+  }
+  position: relative;
+
+  &__label {
+    font-size: 0.875rem;
+    text-transform: lowercase;
+    margin: 0 0 0 5px;
+    color: #3a3a3a;
+    height: auto;
+    display: flex;
+    min-width: 0;
+
+    &--first {
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+
+    &--second {
+      flex-shrink: 0;
+    }
+  }
+  &__label:first-letter {
+    text-transform: capitalize;
+  }
+
+  &__label:first-letter {
+    text-transform: capitalize;
+  }
+
+  &__emitter-icon {
+    flex-shrink: 0;
+    width: 19px;
+    height: 17px;
+  }
+
+  &__transporter-icon {
+    flex-shrink: 0;
+    width: 19px;
+    height: 19px;
+  }
+
+  &__destination-icon {
+    flex-shrink: 0;
+    width: 19px;
+    height: 19px;
+  }
+  &__worker-icon {
+    flex-shrink: 0;
+    width: 19px;
+    height: 19px;
+  }
+}

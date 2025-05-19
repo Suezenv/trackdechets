@@ -1,25 +1,66 @@
 type Mutation {
   """
-  Mutation permettant de créer un nouveau bordereau de suivi de fluides frigorigènes.
+  Mutation permettant de créer un nouveau BSFF.
 
   Ces champs sont requis :
-  - emitter.company.name
-  - emitter.company.siret
-  - emitter.company.address
-  - emitter.company.contact
-  - emitter.company.phone
-  - emitter.company.mail
-  - waste.code
-  - waste.adr
-  - weight.value
+
+  ```
+  type
+  emitter {
+    company {
+      name
+      siret
+      address
+      contact
+      phone
+      mail
+    }
+  }
+  transporter {
+    company {
+      name
+      siret
+      address
+      contact
+      phone
+      mail
+    }
+  }
+  destination {
+    company {
+      name
+      siret
+      address
+      contact
+      phone
+      mail
+    }
+    plannedOperationCode
+  }
+  waste {
+    code
+    adr
+    description
+  }
+  weight {
+    value
+    isEstimate
+  }
+  packagings {
+    name
+    numero
+    volume
+    weight
+  }
+  ```
 
   Si vous souhaitez créer un BSFF sans ces informations, utilisez createDraftBsff.
   """
   createBsff(input: BsffInput!): Bsff!
 
   """
-  Mutation permettant de créer un nouveau bordereau de suivi de fluides frigorigènes, à l'état de brouillon.
-  Un brouillon n'a pas de champs requis, la validation se fait au moment de le publier.
+  Mutation permettant de créer un nouveau BSFF à l'état de brouillon.
+  Les seuls champs requis sont le type du BSFF et le n°SIRET de l'émetteur, du transporteur ou du destinataire.
   """
   createDraftBsff(input: BsffInput!): Bsff!
 
@@ -27,6 +68,12 @@ type Mutation {
   Mutation permettant de modifier un bordereau existant de suivi de fluides frigorigènes.
   """
   updateBsff(id: ID!, input: BsffInput!): Bsff!
+
+  """
+  Mutation permettant de modifier les informations de réception
+  et traitement par contenant
+  """
+  updateBsffPackaging(id: ID!, input: UpdateBsffPackagingInput!): BsffPackaging!
 
   """
   Mutation permettant de publier un brouillon.
@@ -40,26 +87,132 @@ type Mutation {
   deleteBsff(id: ID!): Bsff!
 
   """
-  Mutation permettant d'apposer une signature sur le bordereau.
+  Mutation permettant de dupliquer les informations de base d'un BSFF.
+  Renvoie un nouveau BSFF à l'état brouillon.
+  """
+  duplicateBsff(id: ID!): Bsff!
+
+  """
+  Mutation permettant de signer un `BSFF` lors des différentes étapes : émission, transport, réception,
+  acceptation, opération. Chaque mutation verrouille les informations et fait passer le BSFF d'un statut
+  à un autre.
+
+  **Champs requis pour `EMISSION` :**
+
+  ```
+  type
+  emitter {
+    company {
+      name
+      siret
+      address
+      contact
+      phone
+      mail
+    }
+  }
+  transporter {
+    company {
+      name
+      siret
+      address
+      contact
+      phone
+      mail
+    }
+  }
+  destination {
+    company {
+      name
+      siret
+      address
+      contact
+      phone
+      mail
+    }
+    plannedOperationCode
+  }
+  waste {
+    code
+    adr
+    description
+  }
+  weight {
+    value
+    isEstimate
+  }
+  packagings {
+    name
+    numero
+    volume
+    weight
+  }
+  ```
+
+  **Champs additionnels requis pour `TRANSPORT` :**
+
+  ```
+  transporter {
+    transport {
+      mode
+      takenOverAt
+    }
+  }
+  ```
+
+  **Champs additionnels requis pour `RECEPTION` :**
+
+  ```
+  destination {
+    reception {
+      date
+    }
+  }
+  ```
+
+  **Champs additionnels requis pour `ACCEPTATION` :**
+
+  À mettre à jour via la mutation `updateBsffPackaging`. L'acceptation de chaque contenant peut être signée séparement
+  en précisant un identifiant de contenant.
+
+  ```
+  packagings {
+    acceptation {
+      date
+      status
+      weight
+    }
+  }
+  ```
+
+  **Champs additionnels requis pour `OPERATION` :**
+
+  À mettre à jour via la mutation `updateBsffPackaging`. L'opération de chaque contenant peut être signée séparement
+  en précisant un identifiant de contenant.
+
+  ```
+  packagings {
+    operation {
+      date
+      code
+      mode
+      description
+    }
+  }
+  ```
   """
   signBsff(
     "Identifiant du BSFF à signer."
     id: ID!
-    "Type de signature à apposer, voir l'enum pour plus de détails."
-    type: BsffSignatureType!
-    "Informations à propos de la personne signant le BSFF."
-    signature: SignatureInput!
-    """
-    Code de signature de l'auteur de la signature.
 
-    Ce paramètre est optionnel, il n'est utile que dans le cas où vous souhaitez signer pour un tiers sans moyen de vous authentifier à sa place.
-    Ce tiers peut alors saisir son code de signature dans votre outil.
-    """
-    securityCode: Int
+    input: BsffSignatureInput!
   ): Bsff!
 
   """
-  Mutation permettant de créer une fiche d'intervention.
+  Mutation permettant de créer une fiche d'intervention dans Trackdéchets.
+  Permet de reporter une partie des infos d'une fiche d'intervention papier
+  et d'identifier un détenteur d'équipement. Une fois créee, la fiche d'intervention
+  peut être jointe à un BSFF.
   """
   createFicheInterventionBsff(
     input: BsffFicheInterventionInput!
@@ -72,4 +225,19 @@ type Mutation {
     id: ID!
     input: BsffFicheInterventionInput!
   ): BsffFicheIntervention!
+
+  """
+  Crée un transporteur BSFF
+  """
+  createBsffTransporter(input: BsffTransporterInput!): BsffTransporter
+
+  """
+  Modifie un transporteur BSFF
+  """
+  updateBsffTransporter(id: ID!, input: BsffTransporterInput!): BsffTransporter
+
+  """
+  Supprime un transporteur BSFF
+  """
+  deleteBsffTransporter("Identifiant du transporteur" id: ID!): ID!
 }

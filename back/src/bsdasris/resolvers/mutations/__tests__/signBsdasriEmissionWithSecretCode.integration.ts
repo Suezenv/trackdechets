@@ -1,11 +1,18 @@
 import { resetDatabase } from "../../../../../integration-tests/helper";
 import { ErrorCode } from "../../../../common/errors";
-import { userWithCompanyFactory } from "../../../../__tests__/factories";
+import {
+  companyFactory,
+  userWithCompanyFactory
+} from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
 import { BsdasriStatus } from "@prisma/client";
-import { bsdasriFactory, initialData } from "../../../__tests__/factories";
-import prisma from "../../../../prisma";
-import { Mutation } from "../../../../generated/graphql/types";
+import {
+  bsdasriFactory,
+  initialData,
+  readyToPublishData
+} from "../../../__tests__/factories";
+import { prisma } from "@td/prisma";
+import type { Mutation } from "@td/codegen-back";
 import { SIGN_DASRI_WITH_CODE } from "./signUtils";
 
 describe("Mutation.signBsdasri emission with secret code", () => {
@@ -13,10 +20,8 @@ describe("Mutation.signBsdasri emission with secret code", () => {
 
   it("should deny emission signature if secret code is incorrect", async () => {
     const { company } = await userWithCompanyFactory("MEMBER");
-    const {
-      user: transporter,
-      company: transporterCompany
-    } = await userWithCompanyFactory("MEMBER");
+    const { user: transporter, company: transporterCompany } =
+      await userWithCompanyFactory("MEMBER");
 
     let dasri = await bsdasriFactory({
       opt: {
@@ -41,13 +46,13 @@ describe("Mutation.signBsdasri emission with secret code", () => {
 
     expect(errors).toEqual([
       expect.objectContaining({
-        message: "Erreur, le code de sécurité est manquant ou invalide",
+        message: "Le code de signature est invalide.",
         extensions: expect.objectContaining({
-          code: ErrorCode.BAD_USER_INPUT
+          code: ErrorCode.FORBIDDEN
         })
       })
     ]);
-    dasri = await prisma.bsdasri.findUnique({
+    dasri = await prisma.bsdasri.findUniqueOrThrow({
       where: { id: dasri.id }
     });
     expect(dasri.status).toEqual("INITIAL");
@@ -55,14 +60,14 @@ describe("Mutation.signBsdasri emission with secret code", () => {
 
   it("should put emission signature on a dasri when correct code is provided", async () => {
     const { company } = await userWithCompanyFactory("MEMBER");
-    const {
-      user: transporter,
-      company: transporterCompany
-    } = await userWithCompanyFactory("MEMBER");
+    const { user: transporter, company: transporterCompany } =
+      await userWithCompanyFactory("MEMBER");
+    const destination = await companyFactory();
 
     const dasri = await bsdasriFactory({
       opt: {
         ...initialData(company),
+        ...readyToPublishData(destination),
         status: BsdasriStatus.INITIAL,
         transporterCompanySiret: transporterCompany.siret
       }
@@ -82,7 +87,7 @@ describe("Mutation.signBsdasri emission with secret code", () => {
       }
     );
 
-    const readyTotakeOverDasri = await prisma.bsdasri.findUnique({
+    const readyTotakeOverDasri = await prisma.bsdasri.findUniqueOrThrow({
       where: { id: dasri.id }
     });
     expect(readyTotakeOverDasri.status).toEqual("SIGNED_BY_PRODUCER");
@@ -94,5 +99,6 @@ describe("Mutation.signBsdasri emission with secret code", () => {
     expect(readyTotakeOverDasri.isEmissionTakenOverWithSecretCode).toEqual(
       true
     );
+    expect(readyTotakeOverDasri.emittedByEcoOrganisme).toEqual(false);
   });
 });

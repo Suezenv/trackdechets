@@ -1,41 +1,44 @@
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { MutationResolvers } from "../../../generated/graphql/types";
-import prisma from "../../../prisma";
+import type { MutationResolvers } from "@td/codegen-back";
 import {
   flattenFicheInterventionBsffInput,
-  unflattenFicheInterventionBsff
+  expandFicheInterventionBsffFromDB
 } from "../../converter";
 import { validateFicheIntervention } from "../../validation";
 import { getFicheInterventionBsffOrNotFound } from "../../database";
-import { isFicheInterventionOperateur } from "../../permissions";
+import { checkCanUpdateFicheIntervention } from "../../permissions";
+import { getBsffFicheInterventionRepository } from "../../repository";
 
-const updateFicheInterventionBsff: MutationResolvers["updateFicheInterventionBsff"] = async (
-  _,
-  { id, input },
-  context
-) => {
-  const user = checkIsAuthenticated(context);
-  const ficheInterventionData = flattenFicheInterventionBsffInput(input);
+const updateFicheInterventionBsff: MutationResolvers["updateFicheInterventionBsff"] =
+  async (_, { id, input }, context) => {
+    const user = checkIsAuthenticated(context);
+    const ficheInterventionData = flattenFicheInterventionBsffInput(input);
 
-  const existingFicheIntervention = await getFicheInterventionBsffOrNotFound({
-    id
-  });
-  await isFicheInterventionOperateur(user, existingFicheIntervention);
+    const existingFicheIntervention = await getFicheInterventionBsffOrNotFound({
+      id
+    });
+    await checkCanUpdateFicheIntervention(
+      user,
+      existingFicheIntervention,
+      input
+    );
 
-  const futureFicheIntervention = {
-    ...existingFicheIntervention,
-    ...ficheInterventionData
+    const futureFicheIntervention = {
+      ...existingFicheIntervention,
+      ...ficheInterventionData
+    };
+
+    await validateFicheIntervention(futureFicheIntervention);
+
+    const { update: updateBsffFicheIntervention } =
+      getBsffFicheInterventionRepository(user);
+
+    const updatedFicheIntervention = await updateBsffFicheIntervention({
+      data: ficheInterventionData,
+      where: { id: existingFicheIntervention.id }
+    });
+
+    return expandFicheInterventionBsffFromDB(updatedFicheIntervention);
   };
-  await isFicheInterventionOperateur(user, futureFicheIntervention);
-
-  await validateFicheIntervention(futureFicheIntervention);
-
-  const updatedFicheIntervention = await prisma.bsffFicheIntervention.update({
-    data: ficheInterventionData,
-    where: { id: existingFicheIntervention.id }
-  });
-
-  return unflattenFicheInterventionBsff(updatedFicheIntervention);
-};
 
 export default updateFicheInterventionBsff;

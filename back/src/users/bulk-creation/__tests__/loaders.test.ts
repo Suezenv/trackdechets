@@ -6,21 +6,29 @@ describe("loaders", () => {
     expect(companies).toHaveLength(2);
     expect(companies).toEqual([
       {
-        siret: "85001946400013",
+        siret: "85001946400021",
         gerepId: "1234",
         companyTypes: ["PRODUCER"],
+        collectorTypes: [],
+        wasteProcessorTypes: [],
+        wasteVehiclesTypes: [],
         givenName: "Code en Stock",
         contactEmail: "codeenstock@trackdechets.fr",
         contactPhone: "0600000000",
+        contact: "Marcel Machin",
         website: "https://codeenstock.trackdechets.fr"
       },
       {
         siret: "81343950200028",
         gerepId: "2345",
         companyTypes: ["PRODUCER", "WASTEPROCESSOR"],
+        collectorTypes: [],
+        wasteProcessorTypes: ["OTHER_DANGEROUS_WASTES"],
+        wasteVehiclesTypes: [],
         givenName: "Frontier SAS",
         contactEmail: "frontier@trackdechets.fr",
         contactPhone: "0700000000",
+        contact: "",
         website: "https://frontier.trackdechets.fr"
       }
     ]);
@@ -31,7 +39,7 @@ describe("loaders", () => {
     expect(roles).toHaveLength(4);
     expect(roles).toEqual([
       {
-        siret: "85001946400013",
+        siret: "85001946400021",
         email: "john.snow@trackdechets.fr",
         role: "ADMIN"
       },
@@ -41,7 +49,7 @@ describe("loaders", () => {
         role: "ADMIN"
       },
       {
-        siret: "85001946400013",
+        siret: "85001946400021",
         email: "tyrion.lannister@trackdechets.fr",
         role: "MEMBER"
       },

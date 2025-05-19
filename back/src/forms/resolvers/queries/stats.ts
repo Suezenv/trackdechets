@@ -1,6 +1,6 @@
-import prisma from "../../../prisma";
+import { prisma } from "@td/prisma";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { QueryResolvers } from "../../../generated/graphql/types";
+import type { QueryResolvers } from "@td/codegen-back";
 import { getUserCompanies } from "../../../users/database";
 
 const statsResolver: QueryResolvers["stats"] = async (
@@ -11,6 +11,12 @@ const statsResolver: QueryResolvers["stats"] = async (
   const user = checkIsAuthenticated(context);
 
   const userCompanies = await getUserCompanies(user.id);
+
+  // safe guard to prevent timeout because this query
+  // is not optimized at all
+  if (userCompanies.length > 5) {
+    return [];
+  }
 
   return userCompanies.map(async userCompany => {
     const queriedForms = await prisma.form.findMany({
@@ -26,14 +32,21 @@ const statsResolver: QueryResolvers["stats"] = async (
     });
 
     const stats = queriedForms.reduce((prev, cur) => {
+      if (!cur.wasteDetailsCode) {
+        return prev;
+      }
+
       prev[cur.wasteDetailsCode] = prev[cur.wasteDetailsCode] || {
         wasteCode: cur.wasteDetailsCode,
         incoming: 0,
         outgoing: 0
       };
-      cur.recipientCompanySiret === userCompany.siret
-        ? (prev[cur.wasteDetailsCode].incoming += cur.quantityReceived)
-        : (prev[cur.wasteDetailsCode].outgoing += cur.quantityReceived);
+
+      if (cur.recipientCompanySiret === userCompany.siret) {
+        prev[cur.wasteDetailsCode].incoming += cur.quantityReceived;
+      } else {
+        prev[cur.wasteDetailsCode].outgoing += cur.quantityReceived;
+      }
 
       prev[cur.wasteDetailsCode].incoming =
         Math.round(prev[cur.wasteDetailsCode].incoming * 100) / 100;

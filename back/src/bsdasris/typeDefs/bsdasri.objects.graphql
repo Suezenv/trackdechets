@@ -7,6 +7,8 @@ type BsdasriSignature {
 type BsdasriEcoOrganisme {
   name: String!
   siret: String!
+  "Indique si l'enlèvement a été signé par l'éco-organisme en charge du déchet."
+  emittedByEcoOrganisme: Boolean
 }
 
 "Émetteur du Bsdasri, Personne responsable de l'émimination des déchets (PRED)"
@@ -34,6 +36,8 @@ type BsdasriDestination {
 }
 
 type BsdasriRecepisse {
+  "Exemption de récépissé"
+  isExempted: Boolean
   "Numéro de récépissé"
   number: String
   "Département"
@@ -46,7 +50,7 @@ type BsdasriRecepisse {
 Collecteur transporteur
 """
 type BsdasriTransporter {
-  "Établissement de destination"
+  "Établissement transporteur"
   company: FormCompany
 
   "Récépissé"
@@ -69,7 +73,8 @@ type BsdasriPackaging {
   "Nombre de colis associés à ce conditionnement"
   quantity: Int!
 
-  volume: Int!
+  "Volume de chaque colis associé à ce conditionnement"
+  volume: Float!
 }
 
 "Informations sur un poids de déchet estimé ou pesé"
@@ -79,6 +84,7 @@ type BsdasriWeight {
   "Le poids est-il estimé (pesé si false)"
   isEstimate: Boolean!
 }
+
 "Informations sur un poids reçu (toujours pesé)"
 type BsdasriOperationWeight {
   "Pois en kg (pesé)"
@@ -88,15 +94,16 @@ type BsdasriOperationWeight {
 "Informations relatives au déchet"
 type BsdasriWaste {
   "Code adr"
-  adr: String!
+  adr: String
   "Code déchet"
-  code: String!
+  code: String
 }
 
 "Informations relatives à l'acceptation ou au refus du déchet (Bsdasri)"
 type BsdasriWasteAcceptation {
-  status: String
+  status: WasteAcceptationStatus
   refusalReason: String
+  "Poids refusé en kilogrammes"
   refusedWeight: Float
 }
 
@@ -105,14 +112,14 @@ type BsdasriTransport {
   "Quantité transportée"
   weight: BsdasriWeight
   "Volume transporté"
-  volume: Int
+  volume: Float
   "Conditionnement"
   packagings: [BsdasriPackaging!]
   acceptation: BsdasriWasteAcceptation
   handedOverAt: DateTime
   takenOverAt: DateTime
   signature: BsdasriSignature
-  mode: TransportMode!
+  mode: TransportMode
   "Plaque(s) d'immatriculation"
   plates: [String!]
 }
@@ -122,20 +129,20 @@ type BsdasriEmission {
   "Quantité émise"
   weight: BsdasriWeight
   "Volume en litres"
-  volume: Int
+  volume: Float
   "Conditionnement"
   packagings: [BsdasriPackaging!]
   signature: BsdasriSignature
   "Emporté sans signature PRED avec son autorisation prélalable"
   isTakenOverWithoutEmitterSignature: Boolean
-  "Signature PRED avec code de sécurité"
+  "Signature émetteur avec code de sécurité: PRED ou éco-organisme si ecoOrganisme.emittedByEcoOrganisme vaut true"
   isTakenOverWithSecretCode: Boolean
 }
 
 "Informations relatives à la réception du Bsdasri"
 type BsdasriReception {
-  "Volume reçu"
-  volume: Int
+  "Volume reçu calculé en effectuant la somme des volumes de packagings"
+  volume: Float
   "Conditionnement"
   packagings: [BsdasriPackaging!]
   acceptation: BsdasriWasteAcceptation
@@ -148,8 +155,10 @@ type BsdasriReception {
 type BsdasriOperation {
   "Quantité traitée"
   weight: BsdasriOperationWeight
-  "Code de l'opération de traitement"
+  "Code de l'opération de traitement - Les codes R12 et D13 sont interdits pour les bsds de synthèse."
   code: String
+  "Qualification du traitement final"
+  mode: OperationMode
   "Date de l'opération de traitement"
   date: DateTime
   signature: BsdasriSignature
@@ -160,9 +169,9 @@ type InitialBsdasri {
   id: ID!
   "Nombre de contenants reçus"
   quantity: Int
-  "Volume associé"
-  volume: Int
-  "Poids de déchets (en kg) traités"
+  "Volume reçu dans le cas d'un groupement, émis dans le cas d'une synthèse"
+  volume: Float
+  "Poids de déchets (en kg) traités dans le cas d'un groupement, émis (si renseigné) dans le cas d'une synthèse"
   weight: Float
   "Date de collecte initiale"
   takenOverAt: DateTime
@@ -178,6 +187,12 @@ type Bsdasri {
   updatedAt: DateTime
   isDraft: Boolean!
 
+  """
+  Identifiant du bordereau à partir duquel ce celui-ci a été dupliqué.
+  Est égal à `null` si le bordereau n'est pas issue d'une duplication.
+  """
+  isDuplicateOf: String
+
   waste: BsdasriWaste
 
   emitter: BsdasriEmitter
@@ -188,15 +203,35 @@ type Bsdasri {
 
   destination: BsdasriDestination
 
-  "Bordereaux regroupés"
+  """
+  Liste des identifiants des conteneurs concernés. Modifiable par tous les acteurs du bsd, ce champ mis
+  à disposition des utilisateurs permet de retrouver aisément des Bsdasris grâce à un identifiant de conteneur
+  """
+  identification: BsdasriIdentification
+
+  "Bordereaux groupés par une opération de groupement"
   grouping: [InitialBsdasri!]
 
-  "Regroupé dans le bordereau"
+  "Groupé dans le bordereau par une opération de groupement"
   groupedIn: Bsdasri
+
+  "Bordereaux regroupés par une opération de synthèse"
+  synthesizing: [InitialBsdasri!]
+
+  "Groupé dans le bordereau par une opération de synthèse"
+  synthesizedIn: Bsdasri
 
   metadata: BsdasriMetadata!
 
+  "DEPRECATED - renvoie null - usage interne pour les requêtes dashboard"
   allowDirectTakeOver: Boolean
+    @deprecated(
+      reason: "utiliser le champ `allowBsdasriTakeOverWithoutSignature` dans la réponse de la query `companyInfos` en passant le SIRET de l'émetteur en paramètre"
+    )
+}
+
+type BsdasriIdentification {
+  numbers: [String!]
 }
 
 type BsdasriError {
@@ -204,8 +239,11 @@ type BsdasriError {
   path: String!
   requiredFor: [BsdasriSignatureType!]!
 }
+
 type BsdasriMetadata {
-  errors: [BsdasriError]!
+  errors: [BsdasriError]
+  "EXPERIMENTAL, ne pas utiliser - Dernière révision du bordereau"
+  latestRevision: BsdasriRevisionRequest
 }
 
 type BsdasriConnection {
@@ -213,7 +251,106 @@ type BsdasriConnection {
   pageInfo: PageInfo!
   edges: [BsdasriEdge!]!
 }
+
 type BsdasriEdge {
   cursor: String!
   node: Bsdasri!
+}
+
+"Demande de révision Bsdasri"
+type BsdasriRevisionRequest {
+  "Identifiant de la demande de révison"
+  id: ID!
+
+  "Aperçu du bordereau concerné au moment de la création de la demande de révision. Il ne reflète pas le bordereau actuel."
+  bsdasri: Bsdasri!
+
+  "Date de création de la demande"
+  createdAt: DateTime!
+
+  "Entreprise à l'origine de la demande de révision"
+  authoringCompany: FormCompany!
+
+  "Liste des approbations apposées sur la révision"
+  approvals: [BsdasriRevisionRequestApproval!]!
+
+  "Contenu de la révision"
+  content: BsdasriRevisionRequestContent!
+
+  "Commentaire explicatif, saisi par l'auteur de la demande de révision"
+  comment: String!
+
+  "Statut d'acceptation de la révision"
+  status: RevisionRequestStatus!
+}
+
+"Approbation d'une demande de révision"
+type BsdasriRevisionRequestApproval {
+  "Siret de l'entreprise responsable de cette approbation"
+  approverSiret: String!
+
+  "Commentaire explicatif, saisi par l'approbateur"
+  comment: String
+
+  "Statut d'acceptation de l'approbation"
+  status: RevisionRequestApprovalStatus!
+}
+
+"Payload de révision d'un bordereau. Disponible sur une liste restreinte de champs."
+type BsdasriRevisionRequestContent {
+  "Maitre d'ouvrage ou détenteur du déchet"
+  emitter: BsdasriRevisionRequestEmitter
+
+  "Installation de destination"
+  destination: BsdasriRevisionRequestDestination
+
+  "Description du déchet"
+  waste: BsdasriRevisionRequestWaste
+
+  "Demande d'annulation du bordereau"
+  isCanceled: Boolean
+}
+
+type BsdasriRevisionRequestEmitter {
+  "Informations site d'enlèvement"
+  pickupSite: PickupSite
+}
+
+type BsdasriRevisionRequestDestination {
+  "Réception"
+  reception: BsdasriRevisionRequestReception
+  "Réalisation de l'opération"
+  operation: BsdasriRevisionRequestOperation
+}
+
+type BsdasriRevisionRequestReception {
+  "Conditionnement"
+  packagings: [BsdasriPackaging!]
+}
+
+type BsdasriRevisionRequestOperation {
+  "Poids de déchets traité"
+  weight: Float
+
+  "Code de traitement"
+  code: String
+
+  "Mode de traitement"
+  mode: OperationMode
+}
+
+type BsdasriRevisionRequestWaste {
+  "Rubrique Déchet"
+  code: String
+}
+
+type BsdasriRevisionRequestConnection {
+  totalCount: Int!
+  pageInfo: PageInfo!
+  edges: [BsdasriRevisionRequestEdge!]!
+}
+
+type BsdasriRevisionRequestEdge {
+  cursor: String!
+  node: BsdasriRevisionRequest!
 }

@@ -1,4 +1,4 @@
-import { BsffStatus } from "generated/graphql/types";
+import { BsffStatus } from "@td/codegen-ui";
 
 export interface BsffFragment {
   id: string;
@@ -12,8 +12,13 @@ export interface BsffFragment {
   };
   bsffTransporter?: {
     company?: {
+      orgId: string;
       siret?: string;
       name?: string;
+    };
+    customInfo?: string;
+    transport?: {
+      plates?: string[];
     };
   };
   bsffDestination?: {
@@ -26,4 +31,5 @@ export interface BsffFragment {
     code?: string;
     description?: string;
   };
+  packagings?: { id: string; numero: string }[];
 }

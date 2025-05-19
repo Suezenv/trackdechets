@@ -3,24 +3,26 @@ import React, {
   createContext,
   HTMLAttributes,
   ReactNode,
-  useContext,
+  useContext
 } from "react";
 import styles from "./ActionButton.module.scss";
 import { Link } from "react-router-dom";
 export const ActionButtonContext = createContext<{
   size: "normal" | "small";
 }>({
-  size: "normal",
+  size: "normal"
 });
 
 interface ActionButtonProps extends HTMLAttributes<HTMLButtonElement> {
   icon: ReactNode;
   children: ReactNode;
+  secondary?: boolean;
 }
 
 export default function ActionButton({
   icon,
   children,
+  secondary,
   ...props
 }: ActionButtonProps) {
   const { size } = useContext(ActionButtonContext);
@@ -28,9 +30,13 @@ export default function ActionButton({
   return (
     <button
       {...props}
-      className={classNames("btn btn--primary", styles.ActionButton, {
-        [styles.ActionButtonSmall]: size === "small",
-      })}
+      className={classNames(
+        `${secondary ? "btn--outline-primary" : "btn--primary"}`,
+        {
+          [styles.ActionButtonSmall]: size === "small",
+          [styles.ActionButton]: size === "normal"
+        }
+      )}
     >
       <span className={styles.ActionButtonIcon}>{icon}</span>
       <span className={styles.ActionButtonContent}>{children}</span>
@@ -49,8 +55,9 @@ export function ActionLink({ icon, children, to }: ActionLinkProps) {
   return (
     <Link
       to={to}
-      className={classNames("btn btn--primary", styles.ActionButton, {
+      className={classNames("btn--primary", {
         [styles.ActionButtonSmall]: size === "small",
+        [styles.ActionButton]: size === "normal"
       })}
     >
       <span className={styles.ActionButtonIcon}>{icon}</span>

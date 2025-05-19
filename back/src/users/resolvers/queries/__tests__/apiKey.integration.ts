@@ -1,10 +1,10 @@
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import prisma from "../../../../prisma";
+import { prisma } from "@td/prisma";
 import { AuthType } from "../../../../auth";
 import { userFactory } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
 import { hashToken } from "../../../../utils";
-import { Query } from "../../../../generated/graphql/types";
+import type { Query } from "@td/codegen-back";
 
 describe("{ query { apiKey } }", () => {
   afterAll(() => resetDatabase());

@@ -1,19 +1,18 @@
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import prisma from "../../../../prisma";
+import { prisma } from "@td/prisma";
 import {
   userFactory,
   userWithCompanyFactory
 } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
-import * as mailsHelper from "../../../../mailer/mailing";
+import { sendMail } from "../../../../mailer/mailing";
 import { AuthType } from "../../../../auth";
-import { renderMail } from "../../../../mailer/templates/renderers";
-import { membershipRequestRefused } from "../../../../mailer/templates";
-import { Mutation } from "../../../../generated/graphql/types";
+import { renderMail, membershipRequestRefused } from "@td/mail";
+import type { Mutation } from "@td/codegen-back";
 
 // No mails
-const sendMailSpy = jest.spyOn(mailsHelper, "sendMail");
-sendMailSpy.mockImplementation(() => Promise.resolve());
+jest.mock("../../../../mailer/mailing");
+(sendMail as jest.Mock).mockImplementation(() => Promise.resolve());
 
 const REFUSE_MEMBERSHIP_REQUEST = `
   mutation RefuseMembershipRequest($id: ID!){
@@ -30,7 +29,7 @@ const REFUSE_MEMBERSHIP_REQUEST = `
 describe("mutation refuseMembershipRequest", () => {
   afterAll(resetDatabase);
 
-  afterEach(sendMailSpy.mockClear);
+  afterEach((sendMail as jest.Mock).mockClear);
 
   it("should deny access to unauthenticated users", async () => {
     const { mutate } = makeClient();
@@ -131,11 +130,12 @@ describe("mutation refuseMembershipRequest", () => {
       }
     );
     expect(data.refuseMembershipRequest.users).toHaveLength(1);
-    const refusedMembershipRequest = await prisma.membershipRequest.findUnique({
-      where: {
-        id: membershipRequest.id
-      }
-    });
+    const refusedMembershipRequest =
+      await prisma.membershipRequest.findUniqueOrThrow({
+        where: {
+          id: membershipRequest.id
+        }
+      });
     expect(refusedMembershipRequest.status).toEqual("REFUSED");
     expect(refusedMembershipRequest.statusUpdatedBy).toEqual(user.email);
     const associationExists =
@@ -146,7 +146,7 @@ describe("mutation refuseMembershipRequest", () => {
         }
       })) != null;
     expect(associationExists).toEqual(false);
-    expect(sendMailSpy).toHaveBeenCalledWith(
+    expect(sendMail as jest.Mock).toHaveBeenCalledWith(
       renderMail(membershipRequestRefused, {
         to: [{ email: requester.email, name: requester.name }],
         variables: { companyName: company.name, companySiret: company.siret }

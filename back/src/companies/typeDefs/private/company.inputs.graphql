@@ -1,49 +1,4 @@
 """
-Payload de création d'un récépissé transporteur
-"""
-input CreateTransporterReceiptInput {
-  """
-  Numéro de récépissé transporteur
-  """
-  receiptNumber: String!
-
-  """
-  Limite de validité du récépissé
-  """
-  validityLimit: DateTime!
-
-  """
-  Département ayant enregistré la déclaration
-  """
-  department: String!
-}
-
-"""
-Payload d'édition d'un récépissé transporteur
-"""
-input UpdateTransporterReceiptInput {
-  """
-  The id of the transporter receipt to modify
-  """
-  id: ID!
-
-  """
-  Numéro de récépissé transporteur
-  """
-  receiptNumber: String
-
-  """
-  Limite de validité du récépissé
-  """
-  validityLimit: DateTime
-
-  """
-  Département ayant enregistré la déclaration
-  """
-  department: String
-}
-
-"""
 Payload de suppression d'un récépissé transporteur
 """
 input DeleteTransporterReceiptInput {
@@ -198,6 +153,74 @@ input DeleteBrokerReceiptInput {
   id: ID!
 }
 
+input CreateWorkerCertificationInput {
+  """
+  Indique si l'entreprise réalise des travaux relevant de la sous-section 4
+  """
+  hasSubSectionFour: Boolean!
+
+  """
+  Indique si l'entreprise réalise des travaux relevant de la sous-section 3
+  """
+  hasSubSectionThree: Boolean!
+
+  """
+  Numéro de certification (sous-section 3 uniquement)
+  """
+  certificationNumber: String
+
+  """
+  Limite de validité de la certification (sous-section 3 uniquement)
+  """
+  validityLimit: DateTime
+
+  """
+  Organisation qui a décerné la certification (sous-section 3 uniquement)
+  Peut prendre uniquement les valeurs suivantes: AFNOR Certification, GLOBAL CERTIFICATION, QUALIBAT
+  """
+  organisation: String
+}
+
+input UpdateWorkerCertificationInput {
+  """
+  The id of the worker certification to update
+  """
+  id: ID!
+
+  """
+  Indique si l'entreprise réalise des travaux relevant de la sous-section 4
+  """
+  hasSubSectionFour: Boolean
+
+  """
+  Indique si l'entreprise réalise des travaux relevant de la sous-section 3
+  """
+  hasSubSectionThree: Boolean
+
+  """
+  Numéro de certification (sous-section 3 uniquement)
+  """
+  certificationNumber: String
+
+  """
+  Limite de validité de la certification (sous-section 3 uniquement)
+  """
+  validityLimit: DateTime
+
+  """
+  Organisation qui a décerné la certification (sous-section 3 uniquement)
+  Peut prendre uniquement les valeurs suivantes: AFNOR Certification, GLOBAL CERTIFICATION, QUALIBAT
+  """
+  organisation: String
+}
+
+input DeleteWorkerCertificationInput {
+  """
+  The id of the worker certification to delete
+  """
+  id: ID!
+}
+
 input VerifyCompanyInput {
   "Le SIRET de l'établissement à vérifier"
   siret: String!
@@ -218,7 +241,10 @@ input DeleteVhuAgrementInput {
 "Payload permettant le rattachement d'un établissement à un utilisateur"
 input PrivateCompanyInput {
   "SIRET de l'établissement"
-  siret: String!
+  siret: String
+
+  "TVA de l'établissement"
+  vatNumber: String
 
   "Identifiant GEREP de l'établissement"
   gerepId: String
@@ -226,17 +252,26 @@ input PrivateCompanyInput {
   "Profil de l'établissement"
   companyTypes: [CompanyType!]!
 
+  "Sous-types pour les Installation de Tri, Transit Regroupement de déchets"
+  collectorTypes: [CollectorType!]
+
+  "Sous-types d'entreprises pour les installation de traitement de déchets"
+  wasteProcessorTypes: [WasteProcessorType!]
+
+  "Sous-type d'installation de traitement VHU"
+  wasteVehiclesTypes: [WasteVehiclesType!]
+
   "Code NAF"
   codeNaf: String
 
   "Nom de l'établissement"
-  companyName: String
+  companyName: String!
 
   "Nom d'usage de l'établissement"
   givenName: String
 
   "Adresse de l'établissement"
-  address: String
+  address: String!
 
   """
   Récipissé transporteur (le cas échéant, pour les profils transporteur)
@@ -252,6 +287,11 @@ input PrivateCompanyInput {
   Récipissé courtier (le cas échéant, pour les profils courtier)
   """
   brokerReceiptId: String
+
+  """
+  Certification d'entreprise de travaux amiante (le cas échéant, pour les profils entreprises de travaux amiante)
+  """
+  workerCertificationId: String
 
   """
   Agrément VHU démolisseur (le cas échéant, pour les profils VHU)
@@ -272,10 +312,27 @@ input PrivateCompanyInput {
   L'entreprise autorise l'enlèvement d'un Dasri sans sa signature
   """
   allowBsdasriTakeOverWithoutSignature: Boolean
+
+  """
+  L'entreprise autorise la signature automatique de l'annexe 1 pour les entreprises saisies
+  """
+  allowAppendix1SignatureAutomation: Boolean
+
+  "Prénom et nom du contact dans l'entreprise"
+  contact: String
+
+  "Email de contact"
+  contactEmail: String
+
+  "Numéro de téléphone de contact"
+  contactPhone: String
+
+  "Site web"
+  website: String
 }
 
 input CompanyForVerificationWhere {
-  verificationStatus: CompanyVerificationStatus
+  verificationStatus: CompanyVerificationStatus!
 }
 
 input VerifyCompanyByAdminInput {
@@ -283,6 +340,58 @@ input VerifyCompanyByAdminInput {
   verificationComment: String
 }
 
+input StandbyCompanyByAdminInput {
+  orgId: String!
+  standby: Boolean!
+}
+
 input SendVerificationCodeLetterInput {
   siret: String!
+}
+
+input AnonymousCompanyInput {
+  siret: String
+  vatNumber: String
+  name: String!
+  codeNaf: String!
+  address: String!
+  codeCommune: String!
+}
+
+"""
+Payload pour permettre à une entreprise de ne pas avoir à signer la collecte de ses annexes 1.
+Si l'entreprise ciblée collecte l'annexe 1, Trackdéchets signera automatiquement pour l'entreprise émettrice.
+"""
+input SignatureAutomationInput {
+  "ID de l'entreprise qui donne délégation"
+  from: ID!
+  "ID de l'entreprise qui a délégation"
+  to: ID!
+}
+
+input companyUpdateRow {
+  orgId: String!
+  companyTypes: [CompanyType!]!
+  collectorTypes: [CollectorType]!
+  wasteProcessorTypes: [WasteProcessorType]!
+  wasteVehiclesTypes: [WasteVehiclesType]!
+}
+
+input BulkUpdateCompaniesProfilesInput {
+  adminEmail: String!
+  companyUpdateRows: [companyUpdateRow!]!
+}
+
+input CreateAdministrativeTransferInput {
+  "ID de l'établissement source"
+  from: ID!
+  "ID de l'établissement cible"
+  to: ID!
+}
+
+input SubmitAdministrativeTransferApprovalInput {
+  "ID du transfert administratif"
+  id: ID!
+  "Approuvé ou non"
+  isApproved: Boolean!
 }

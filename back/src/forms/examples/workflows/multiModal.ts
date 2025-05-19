@@ -3,10 +3,12 @@ import { markAsSealed } from "../steps/markAsSealed";
 import { markSegmentAsReadyToTakeOver } from "../steps/markSegmentAsReadyToTakeOver";
 import { prepareSegment } from "../steps/prepareSegment";
 import { takeOverSegment } from "../steps/takeOverSegment";
-import { signedByTransporter } from "../steps/signedByTransporter";
 import { markAsReceived } from "../steps/markAsReceived";
 import { markAsProcessed } from "../steps/markAsProcessed";
 import { Workflow } from "../../../common/workflow";
+import { signEmissionForm } from "../steps/signEmissionForm";
+import { signTransportForm } from "../steps/signTransportForm";
+import { WasteProcessorType } from "@prisma/client";
 
 const workflow: Workflow = {
   title: "Transport multi-modal",
@@ -19,12 +21,17 @@ mis à jour au fur et mesure de la prise en charge du déchet sur les différent
     { name: "producteur", companyTypes: ["PRODUCER"] },
     { name: "transporteur1", companyTypes: ["TRANSPORTER"] },
     { name: "transporteur2", companyTypes: ["TRANSPORTER"] },
-    { name: "traiteur", companyTypes: ["WASTEPROCESSOR"] }
+    {
+      name: "traiteur",
+      companyTypes: ["WASTEPROCESSOR"],
+      wasteProcessorTypes: [WasteProcessorType.DANGEROUS_WASTES_INCINERATION]
+    }
   ],
   steps: [
     createFormMultiModal("producteur"),
     markAsSealed("producteur"),
-    signedByTransporter("transporteur1"),
+    signEmissionForm("producteur"),
+    signTransportForm("transporteur1"),
     prepareSegment("transporteur1"),
     markSegmentAsReadyToTakeOver("transporteur1"),
     takeOverSegment("transporteur2"),
@@ -41,14 +48,15 @@ mis à jour au fur et mesure de la prise en charge du déchet sur les différent
   },
   chart: `
 graph LR
-AO(NO STATE) -->|createForm| A
-A(DRAFT) -->|markAsSealed| B(SEALED)
-B -->|signedByTransporter| C(SENT)
-C -->|prepareSegment| C2(SENT)
-C3(SENT) -->|markSegmentAsReadyToTakeOver| C4(SENT)
-C4 -->|takeOverSegment| C5(SENT)
-C5 --> |markAsReceived| D(ACCEPTED)
-D --> |markAsProcessed| E(PROCESSED)`
+NO_STATE(NO STATE) --> |createForm| DRAFT
+DRAFT --> |markAsSealed| SEALED
+SEALED --> |signEmissionForm| SIGNED_BY_PRODUCER
+SIGNED_BY_PRODUCER --> |signTransportForm| SENT
+SENT --> |prepareSegment| SENT2(SENT)
+SENT3(SENT) --> |markSegmentAsReadyToTakeOver| SENT4(SENT)
+SENT4 --> |takeOverSegment| SENT5(SENT)
+SENT5 --> |markAsReceived| ACCEPTED
+ACCEPTED --> |markAsProcessed| PROCESSED`
 };
 
 export default workflow;

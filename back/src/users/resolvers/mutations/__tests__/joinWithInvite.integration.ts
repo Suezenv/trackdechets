@@ -1,11 +1,11 @@
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import { createTestClient } from "apollo-server-integration-testing";
-import { server } from "../../../../server";
-import prisma from "../../../../prisma";
+import { prisma } from "@td/prisma";
 import { companyFactory } from "../../../../__tests__/factories";
 import { getUserCompanies } from "../../../database";
 import makeClient from "../../../../__tests__/testClient";
-import { Mutation } from "../../../../generated/graphql/types";
+import type { Mutation } from "@td/codegen-back";
+import { UserRole } from "@prisma/client";
+import { getDefaultNotifications } from "../../../notifications";
 
 const JOIN_WITH_INVITE = `
   mutation JoinWithInvite($inviteHash: String!, $name: String!, $password: String!){
@@ -16,8 +16,12 @@ const JOIN_WITH_INVITE = `
 `;
 
 describe("joinWithInvite mutation", () => {
+  let mutate: ReturnType<typeof makeClient>["mutate"];
+  beforeAll(() => {
+    const testClient = makeClient();
+    mutate = testClient.mutate;
+  });
   afterEach(resetDatabase);
-  const { mutate } = makeClient();
 
   it("should raise exception if invitation does not exist", async () => {
     const { errors } = await mutate(JOIN_WITH_INVITE, {
@@ -32,15 +36,13 @@ describe("joinWithInvite mutation", () => {
   });
 
   it("should raise exception if invitation was already accepted", async () => {
-    const { mutate } = createTestClient({ apolloServer: server });
-
     const company = await companyFactory();
     const invitee = "john.snow@trackdechets.fr";
 
     const invitation = await prisma.userAccountHash.create({
       data: {
         email: invitee,
-        companySiret: company.siret,
+        companySiret: company.siret!,
         role: "MEMBER",
         hash: "hash",
         acceptedAt: new Date()
@@ -57,56 +59,64 @@ describe("joinWithInvite mutation", () => {
     expect(errors[0].message).toEqual("Cette invitation a déjà été acceptée");
   });
 
-  it("should create user, associate it to company and mark invitation as joined", async () => {
-    const company = await companyFactory();
-    const invitee = "john.snow@trackdechets.fr";
+  it.each([UserRole.ADMIN, UserRole.MEMBER, UserRole.READER, UserRole.DRIVER])(
+    "should create user, associate it to company with role %p and mark invitation as joined",
+    async role => {
+      const company = await companyFactory();
+      const invitee = "john.snow@trackdechets.fr";
 
-    const invitation = await prisma.userAccountHash.create({
-      data: {
-        email: invitee,
-        companySiret: company.siret,
-        role: "MEMBER",
-        hash: "hash"
-      }
-    });
-
-    const { data } = await mutate<Pick<Mutation, "joinWithInvite">>(
-      JOIN_WITH_INVITE,
-      {
-        variables: {
-          inviteHash: invitation.hash,
-          name: "John Snow",
-          password: "password"
+      const invitation = await prisma.userAccountHash.create({
+        data: {
+          email: invitee,
+          companySiret: company.siret!,
+          role,
+          hash: "hash"
         }
-      }
-    );
+      });
 
-    expect(data.joinWithInvite.email).toEqual(invitee);
+      const { data } = await mutate<Pick<Mutation, "joinWithInvite">>(
+        JOIN_WITH_INVITE,
+        {
+          variables: {
+            inviteHash: invitation.hash,
+            name: "John Snow",
+            password: "password"
+          }
+        }
+      );
 
-    // should mark invitation as joined
-    const updatedInvitation = await prisma.userAccountHash.findUnique({
-      where: {
-        id: invitation.id
-      }
-    });
-    expect(updatedInvitation.acceptedAt).not.toBeNull();
+      expect(data.joinWithInvite.email).toEqual(invitee);
 
-    // check invitee is company member
-    const isCompanyMember =
-      (await prisma.companyAssociation.findFirst({
+      // should mark invitation as joined
+      const updatedInvitation = await prisma.userAccountHash.findUniqueOrThrow({
+        where: {
+          id: invitation.id
+        }
+      });
+      expect(updatedInvitation.acceptedAt).not.toBeNull();
+
+      const companyAssociation = await prisma.companyAssociation.findFirst({
         where: {
           user: { email: invitee },
           company: { siret: company.siret }
         }
-      })) != null;
-    expect(isCompanyMember).toEqual(true);
+      });
 
-    const createdUser = await prisma.user.findUnique({
-      where: { email: invitee }
-    });
-    expect(createdUser.activatedAt).toBeTruthy();
-    expect(createdUser.firstAssociationDate).toBeTruthy();
-  });
+      // check invitee is company member
+      expect(companyAssociation).not.toBeNull();
+      expect(companyAssociation?.role).toEqual(role);
+
+      const expectedNotifications = getDefaultNotifications(role);
+
+      expect(companyAssociation).toMatchObject(expectedNotifications);
+
+      const createdUser = await prisma.user.findUniqueOrThrow({
+        where: { email: invitee }
+      });
+      expect(createdUser.activatedAt).toBeTruthy();
+      expect(createdUser.firstAssociationDate).toBeTruthy();
+    }
+  );
 
   it("should accept other pending invitations", async () => {
     const company1 = await companyFactory();
@@ -116,7 +126,7 @@ describe("joinWithInvite mutation", () => {
     const invitation1 = await prisma.userAccountHash.create({
       data: {
         email: invitee,
-        companySiret: company1.siret,
+        companySiret: company1.siret!,
         role: "MEMBER",
         hash: "hash1"
       }
@@ -125,7 +135,7 @@ describe("joinWithInvite mutation", () => {
     const invitation2 = await prisma.userAccountHash.create({
       data: {
         email: invitee,
-        companySiret: company2.siret,
+        companySiret: company2.siret!,
         role: "MEMBER",
         hash: "hash2"
       }
@@ -139,33 +149,32 @@ describe("joinWithInvite mutation", () => {
       }
     });
 
-    const updatedInvitation2 = await prisma.userAccountHash.findUnique({
+    const updatedInvitation2 = await prisma.userAccountHash.findUniqueOrThrow({
       where: {
         id: invitation2.id
       }
     });
     expect(updatedInvitation2.acceptedAt).not.toBeNull();
 
-    const user = await prisma.user.findUnique({ where: { email: invitee } });
+    const user = await prisma.user.findUniqueOrThrow({
+      where: { email: invitee }
+    });
     const companies = await getUserCompanies(user.id);
 
     expect(companies.length).toEqual(2);
-    expect(companies.map(c => c.siret)).toEqual([
-      company1.siret,
-      company2.siret
-    ]);
+    expect(companies.map(c => c.siret).sort()).toEqual(
+      [company1.siret, company2.siret].sort()
+    );
   });
 
   it("should return an error if name is empty or password less than 8 characters", async () => {
-    const { mutate } = createTestClient({ apolloServer: server });
-
     const company = await companyFactory();
     const invitee = "john.snow@trackdechets.fr";
 
     const invitation = await prisma.userAccountHash.create({
       data: {
         email: invitee,
-        companySiret: company.siret,
+        companySiret: company.siret!,
         role: "MEMBER",
         hash: "hash"
       }

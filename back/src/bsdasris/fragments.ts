@@ -1,9 +1,11 @@
-import { gql } from "apollo-server-express";
+import { gql } from "graphql-tag";
 
 export const companyFragment = gql`
   fragment CompanyFragment on FormCompany {
     name
+    orgId
     siret
+    vatNumber
     address
     contact
     country
@@ -32,6 +34,9 @@ export const fullBsdasriFragment = gql`
     type
     createdAt
     updatedAt
+    identification {
+      numbers
+    }
     ecoOrganisme {
       name
       siret
@@ -75,6 +80,7 @@ export const fullBsdasriFragment = gql`
         number
         department
         validityLimit
+        isExempted
       }
       transport {
         handedOverAt
@@ -148,6 +154,12 @@ export const fullGroupingBsdasriFragment = gql`
       ...InitialBsdasriFragment
     }
     groupedIn {
+      id
+    }
+    synthesizing {
+      ...InitialBsdasriFragment
+    }
+    synthesizedIn {
       id
     }
   }

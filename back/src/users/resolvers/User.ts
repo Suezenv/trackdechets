@@ -1,28 +1,37 @@
-import { convertUrls, getInstallation } from "../../companies/database";
-import { UserResolvers, CompanyPrivate } from "../../generated/graphql/types";
-import { getUserCompanies } from "../database";
-import { nafCodes } from "../../common/constants/NAF";
+import { libelleFromCodeNaf } from "../../companies/sirene/utils";
+import type { UserResolvers, CompanyPrivate } from "@td/codegen-back";
+import { prisma } from "@td/prisma";
+import { toGqlCompanyPrivate } from "../../companies/converters";
 
 const userResolvers: UserResolvers = {
   // Returns the list of companies a user belongs to
-  // Information from TD and s3ic are merged
+  // Information from TD and s3ic are merged in a separate resolver (CompanyPrivate.installation)
   // to make up an instance of CompanyPrivate
   companies: async parent => {
-    const companies = await getUserCompanies(parent.id);
-    return Promise.all(
-      companies.map(async company => {
-        let companyPrivate: CompanyPrivate = convertUrls(company);
+    const companyAssociations = await prisma.companyAssociation.findMany({
+      where: { userId: parent.id },
+      include: { company: true }
+    });
+    const companies = companyAssociations.map(association => ({
+      ...association.company,
+      userRole: association.role
+    }));
 
-        const { codeNaf: naf, address } = company;
-        const libelleNaf = naf in nafCodes ? nafCodes[naf] : "";
+    return companies.map(async company => {
+      const companyPrivate: CompanyPrivate = toGqlCompanyPrivate(company);
 
-        companyPrivate = { ...companyPrivate, naf, libelleNaf, address };
+      const { codeNaf: naf, address } = company;
+      const libelleNaf = libelleFromCodeNaf(naf!);
 
-        // retrieves associated ICPE
-        const installation = await getInstallation(company.siret);
-        return { ...companyPrivate, installation };
-      })
-    );
+      return { ...companyPrivate, naf, libelleNaf, address };
+    });
+  },
+  featureFlags: async ({ id }) => {
+    const featureFlags = await prisma.user
+      .findUnique({ where: { id } })
+      .featureFlags({ where: { enabled: true } });
+
+    return featureFlags?.map(ff => ff.name) ?? [];
   }
 };
 

@@ -1,56 +1,9 @@
-"""
-Information sur établissement accessible dans la liste des favoris
-La liste des favoris est constituée à partir de l'historique des
-BSD édités
-"""
-type CompanyFavorite {
-  "Nom de l'établissement"
-  name: String
-
-  "SIRET de l'établissement"
-  siret: String
-
-  "Adresse de l'établissement"
-  address: String
-
-  "Nom du contact"
-  contact: String
-
-  "Numéro de téléphone"
-  phone: String
-
-  "Email de contact"
-  mail: String
-
-  """
-  Récépissé transporteur associé à cet établissement (le cas échéant)
-  """
-  transporterReceipt: TransporterReceipt
-
-  """
-  Récépissé négociant associé à cet établissement (le cas échant)
-  """
-  traderReceipt: TraderReceipt
-
-  """
-  Récépissé courtier associé à cet établissement (le cas échant)
-  """
-  brokerReceipt: BrokerReceipt
-
-  """
-  Agrément VHU démolisseur (le cas échéant, pour les profils VHU)
-  """
-  vhuAgrementDemolisseur: VhuAgrement
-
-  """
-  Agrément VHU broyeur (le cas échéant, pour les profils VHU)
-  """
-  vhuAgrementBroyeur: VhuAgrement
-}
-
 type CompanyForVerification {
   id: ID!
-  siret: String!
+  "SIRET ou TVA de l'établissement"
+  orgId: String!
+  siret: String
+  vatNumber: String
   name: String!
   companyTypes: [CompanyType!]!
   createdAt: DateTime!
@@ -70,4 +23,186 @@ type AdminForVerification {
 type CompanyForVerificationConnection {
   totalCount: Int!
   companies: [CompanyForVerification!]!
+}
+
+type AnonymousCompany {
+  id: String!
+  orgId: String!
+  address: String!
+  codeCommune: String!
+  codeNaf: String!
+  libelleNaf: String!
+  name: String!
+  siret: String
+  vatNumber: String
+}
+
+"Information sur un établissement recherché par le frontend"
+type CompanySearchPrivate implements CompanySearchPrivateCommon {
+  "Profil de l'établissement"
+  companyTypes: [CompanyType!]!
+
+  "Sous-types d'entreprises pour les installation de Tri, Transit Regroupement de déchets"
+  collectorTypes: [CollectorType!]
+
+  "Sous-types d'entreprises pour les installation de traitement de déchets"
+  wasteProcessorTypes: [WasteProcessorType!]
+
+  "Sous-types d'installation de traitement VHU"
+  wasteVehiclesTypes: [WasteVehiclesType!]
+
+  "SIRET ou TVA de l'établissement"
+  orgId: String!
+
+  """
+  Identifiant de l'entreprise sur la plateforme Trackdéchets. N'a une valeur que si l'entreprise est inscrite sur Trackdéchets (`isRegistered=true`)
+  """
+  trackdechetsId: ID
+
+  "Identifiant GEREP"
+  gerepId: String
+
+  "Code de signature permettant de signer les BSD"
+  securityCode: Int
+
+  "État du processus de vérification de l'établissement"
+  verificationStatus: CompanyVerificationStatus!
+
+  "Email de contact (visible sur la fiche entreprise)"
+  contactEmail: String
+
+  "Numéro de téléphone de contact (visible sur la fiche entreprise)"
+  contactPhone: String
+
+  "Site web (visible sur la fiche entreprise)"
+  website: String
+
+  "Liste des utilisateurs appartenant à cet établissement"
+  users: [CompanyMember!]
+
+  "Rôle de l'utilisateur authentifié au sein de cet établissement"
+  userRole: UserRole
+
+  """
+  Nom d'usage de l'entreprise qui permet de différencier
+  différents établissements ayant le même nom
+  """
+  givenName: String
+
+  "SIRET de l'établissement"
+  siret: String
+
+  "Numéro de TVA de l'établissement"
+  vatNumber: String
+
+  "Adresse de l'établissement"
+  address: String
+
+  "Nom de l'établissement"
+  name: String
+
+  "Code NAF de l'établissement"
+  naf: String
+
+  "Libellé NAF de l'établissement"
+  libelleNaf: String
+
+  """
+  Installation classée pour la protection de l'environnement (ICPE)
+  associé à cet établissement (le cas échéant)
+  """
+  installation: Installation
+
+  """
+  Récépissé transporteur (le cas échéant, pour les profils transporteur)
+  """
+  transporterReceipt: TransporterReceipt
+
+  """
+  Récépissé négociant (le cas échéant, pour les profils négociant)
+  """
+  traderReceipt: TraderReceipt
+
+  """
+  Récépissé courtier (le cas échéant, pour les profils courtier)
+  """
+  brokerReceipt: BrokerReceipt
+
+  """
+  Agrément démolisseur (le cas échéant, pour les profils VHU)
+  """
+  vhuAgrementDemolisseur: VhuAgrement
+
+  """
+  Agrément broyeur (le cas échéant, pour les profils VHU)
+  """
+  vhuAgrementBroyeur: VhuAgrement
+
+  """
+  Liste des agréments de l'éco-organisme
+  """
+  ecoOrganismeAgreements: [URL!]
+
+  "L'entreprise autorise l'enlèvement d'un Dasri sans sa signature"
+  allowBsdasriTakeOverWithoutSignature: Boolean
+
+  """
+  L'entreprise autorise la signature automatique de l'annexe 1 pour les entreprises saisies
+  """
+  allowAppendix1SignatureAutomation: Boolean
+
+  "Code pays de l'établissement"
+  codePaysEtrangerEtablissement: String
+
+  "État administratif de l'établissement. A = Actif, F = Fermé"
+  etatAdministratif: String
+
+  "Statut de diffusion de l'établissement selon l'INSEE. O = Oui, P = Non ou Partiel"
+  statutDiffusionEtablissement: StatutDiffusionEtablissement
+
+  """
+  Si oui on non cet établissement est inscrit sur la plateforme Trackdéchets
+  """
+  isRegistered: Boolean!
+
+  """
+  Si oui on non cet établissement est inscrit sur TD comme AnonymousCompany
+  """
+  isAnonymousCompany: Boolean
+
+  "Nom du contact"
+  contact: String
+
+  """
+  Liste des automatisations de signature reçues par l'entreprise
+  """
+  receivedSignatureAutomations: [SignatureAutomation!]!
+
+  """
+  Certification entreprise de travaux
+  """
+  workerCertification: WorkerCertification
+
+  """
+  Indique si l'entreprise est en sommeil sur Trackdéchets
+  """
+  isDormant: Boolean!
+}
+
+type CompanyExhaustiveInfo {
+  siret: String
+  name: String
+  contact: String
+  address: String
+  createdAt: DateTime
+  etatAdministratif: String
+  statutDiffusion: String
+  codeNaf: String
+}
+
+type CompanyExhaustive {
+  anonymousCompany: CompanyExhaustiveInfo!
+  dbCompany: CompanyExhaustiveInfo!
+  esCompany: CompanyExhaustiveInfo!
+  sireneCompany: CompanyExhaustiveInfo!
 }

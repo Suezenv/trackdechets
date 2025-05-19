@@ -1,0 +1,55 @@
+@import "../../../../scss/Constants.scss";
+
+.dashboard-tabs {
+  width: 95%;
+  margin: 0 auto;
+
+  .company-select {
+    margin: 16px 0px;
+
+    h3 {
+      font-size: 1.2em;
+    }
+
+    p {
+      font-size: 0.9em;
+    }
+
+    & select {
+      width: 100%;
+
+      @media (min-width: 749px) {
+        max-width: 280px;
+      }
+    }
+
+    p,
+    h3 {
+      font-weight: 400;
+      margin: 0;
+    }
+  }
+
+  .company-title {
+    margin: 1rem 1rem;
+    font-weight: bold;
+    overflow-wrap: break-word;
+  }
+
+  ul {
+    li {
+      position: relative;
+    }
+  }
+
+  .dashboard-tabs-notifications {
+    pointer-events: none;
+    background-color: #000091;
+    color: white;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 14px;
+    padding: 5px 8px;
+    border-radius: 20px;
+  }
+}

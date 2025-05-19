@@ -1,6 +1,7 @@
+import { User } from "@prisma/client";
 import axios from "axios";
 import { addContact } from "../../src/mailer/mailing";
-import prisma from "../../src/prisma";
+import { prisma } from "@td/prisma";
 import { Updater, registerUpdater } from "./helper/helper";
 
 type Contact = { Email: string; Name?: string };
@@ -22,7 +23,7 @@ export class SetContactsUpdater implements Updater {
             "http://td-mail/contact"
           );
 
-          const contactsToCreate = [];
+          const contactsToCreate: User[] = [];
           for (const user of users) {
             // As soon as one of the user is in the 10 latest contacts, stop picking users
             if (
@@ -36,9 +37,7 @@ export class SetContactsUpdater implements Updater {
 
           return Promise.all(
             contactsToCreate.map(c =>
-              addContact({ email: c.email, name: c.name }).catch(err =>
-                console.error(`Error for email ${c.email}`, err)
-              )
+              addContact({ email: c.email, name: c.name })
             )
           );
         });

@@ -1,24 +1,24 @@
 import { useQuery, gql } from "@apollo/client";
 import { useField, useFormikContext } from "formik";
-import React, { useState } from "react";
+import React from "react";
 import CompanyResults from "../../../common/components/company/CompanyResults";
 import styles from "./EcoOrganismes.module.scss";
-import SearchInput from "common/components/SearchInput";
 import {
   Query,
   EcoOrganisme,
   Bsdasri,
-  BsdasriEcoOrganisme,
-} from "../../../../generated/graphql/types";
-import TdSwitch from "common/components/Switch";
+  BsdasriEcoOrganisme
+} from "@td/codegen-ui";
+import TdSwitch from "../../../../common/components/Switch";
 
 const GET_ECO_ORGANISMES = gql`
   {
-    ecoOrganismes {
+    ecoOrganismes(handleBsdasri: true) {
       id
       name
       siret
       address
+      handleBsdasri
     }
   }
 `;
@@ -28,13 +28,17 @@ export function getInitialEcoOrganisme(
 ) {
   return {
     siret: ecoOrganisme?.siret ?? "",
-    name: ecoOrganisme?.name ?? "",
+    name: ecoOrganisme?.name ?? ""
   };
 }
 
 interface EcoOrganismesProps {
   name: string;
 }
+
+type EcoOrganismeWithOrgId = EcoOrganisme & {
+  orgId: string;
+};
 /**
  * First implementation of ecoOrganisme field
  * This will evole in the next future because ecoOrganisme expected behaviour on dasri slightly differs from bsd.
@@ -42,10 +46,9 @@ interface EcoOrganismesProps {
 export default function BsdasriEcoOrganismes(props: EcoOrganismesProps) {
   const [field] = useField<Bsdasri["ecoOrganisme"]>(props);
   const { setFieldValue } = useFormikContext<Bsdasri>();
-  const [clue, setClue] = useState("");
-  const { loading, error, data } = useQuery<Pick<Query, "ecoOrganismes">>(
-    GET_ECO_ORGANISMES
-  );
+
+  const { loading, error, data } =
+    useQuery<Pick<Query, "ecoOrganismes">>(GET_ECO_ORGANISMES);
 
   const hasEcoOrganisme = !!field.value;
   function handleEcoOrganismeToggle() {
@@ -55,14 +58,13 @@ export default function BsdasriEcoOrganismes(props: EcoOrganismesProps) {
       setFieldValue(field.name, getInitialEcoOrganisme(), false);
     }
   }
-
   return (
     <>
       <div className="form__row">
         <TdSwitch
           checked={hasEcoOrganisme}
           onChange={handleEcoOrganismeToggle}
-          label="Agit pour le compte de l'éco organisme agréé"
+          label="Un éco-organisme est responsable de la prise en charge des déchets"
         />
       </div>
 
@@ -73,30 +75,30 @@ export default function BsdasriEcoOrganismes(props: EcoOrganismesProps) {
           {data && (
             <>
               <div className="form__row notification notification--info">
-                Veuillez sélectionner ci-dessous un des éco-organismes
-                enregistrés dans Trackdéchets.
+                Veuillez sélectionner ci-dessous l'éco-organisme agréé pour la
+                gestion des dasris.
               </div>
-              <SearchInput
-                id="eco-search"
-                placeholder="Filtrer les éco-organismes par nom..."
-                className={styles.ecoorganismeSearchInput}
-                onChange={event => setClue(event.target.value)}
-              />
+
               <div className={styles.list}>
-                <CompanyResults<EcoOrganisme>
+                <CompanyResults<EcoOrganismeWithOrgId>
                   onSelect={eo =>
                     setFieldValue(field.name, {
                       name: eo.name,
                       siret: eo.siret,
+                      orgId: eo.orgId
                     })
                   }
-                  results={data.ecoOrganismes.filter(eo =>
-                    eo.name.toLowerCase().includes(clue.toLowerCase())
-                  )}
+                  results={data.ecoOrganismes.map(eo => ({
+                    ...eo,
+                    orgId: eo.siret
+                  }))}
                   selectedItem={
-                    data.ecoOrganismes.find(
-                      eo => eo.siret === field.value?.siret
-                    ) || null
+                    data.ecoOrganismes
+                      .map(eo => ({
+                        ...eo,
+                        orgId: eo.siret
+                      }))
+                      .find(eo => eo.siret === field.value?.siret) || null
                   }
                 />
               </div>

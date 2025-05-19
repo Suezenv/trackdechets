@@ -1,0 +1,79 @@
+type Mutation {
+  """
+  Édite les informations d'un établissement
+
+  Seul le champ `transporterReceiptId` est modifiable
+  par API. Pour les autres champs, il faut passer par
+  l'interface Trackdéchets.
+  """
+  updateCompany(
+    "ID de l'établissement"
+    id: String!
+    "Identifiant GEREP"
+    gerepId: String
+    "Prénom et nom du contact dans l'entreprise"
+    contact: String
+    "Email de contact"
+    contactEmail: String
+    "Numéro de téléphone de contact"
+    contactPhone: String
+    "Site web"
+    website: String
+    "Profil de l'établissement"
+    companyTypes: [CompanyType!]
+    "Sous-types pour les Installation de Tri, Transit Regroupement de déchets"
+    collectorTypes: [CollectorType!]
+    "Sous-types d'entreprises pour les installation de traitement de déchets"
+    wasteProcessorTypes: [WasteProcessorType!]
+    "Sous-types d'installation de traitement VHU"
+    wasteVehiclesTypes: [WasteVehiclesType!]
+    "Nom d'usage de l'établissement"
+    givenName: String
+    "Identifiant d'un récépissé transporteur"
+    transporterReceiptId: String
+    "Identifiant d'un récépissé négociant"
+    traderReceiptId: String
+    "Identifiant d'un récépissé courtier"
+    brokerReceiptId: String
+    "Identifiant d'un agrément VHU démolisseur"
+    vhuAgrementDemolisseurId: String
+    "Identifiant d'un agrément VHU broyeur"
+    vhuAgrementBroyeurId: String
+    "Identifiant des informations de certification de l'entreprise de travaux"
+    workerCertificationId: String
+    "Agréments de l'éco-organisme"
+    ecoOrganismeAgreements: [URL!]
+    "L'entreprise autorise l'enlèvement d'un Dasri sans sa signature"
+    allowBsdasriTakeOverWithoutSignature: Boolean
+    "L'entreprise autorise la signature automatique de l'annexe 1 pour les entreprises saisies"
+    allowAppendix1SignatureAutomation: Boolean
+  ): CompanyPrivate!
+
+  """
+  Crée un récépissé transporteur
+  """
+  createTransporterReceipt(
+    input: CreateTransporterReceiptInput!
+  ): TransporterReceipt!
+
+  """
+  Édite les informations d'un récépissé transporteur
+  """
+  updateTransporterReceipt(
+    input: UpdateTransporterReceiptInput!
+  ): TransporterReceipt!
+
+  """
+  Permet de créer une entreprise anonyme
+  Prend un PDF d'avis de répertoire SIRENE de moins de 3 mois en entrée, en base64.
+  """
+  createAnonymousCompanyFromPDF(
+    input: CreateAnonymousCompanyFromPDFInput!
+  ): Boolean
+
+  """
+  Permet d'activer la prise en compte des BSDs de déchet non dangereux dans les exports de registre
+  ATTENTION: CETTE ACTION EST NON RÉVERSIBLE
+  """
+  enableRegistryDndFromBsd(id: String!): CompanyPrivate!
+}

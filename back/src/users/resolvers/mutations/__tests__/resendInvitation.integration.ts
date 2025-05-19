@@ -1,15 +1,19 @@
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import { userWithCompanyFactory } from "../../../../__tests__/factories";
+import {
+  companyFactory,
+  userFactory,
+  userWithCompanyFactory
+} from "../../../../__tests__/factories";
 import { createUserAccountHash } from "../../../database";
 import { AuthType } from "../../../../auth";
 import makeClient from "../../../../__tests__/testClient";
-import * as mailsHelper from "../../../../mailer/mailing";
-import { inviteUserToJoin } from "../../../../mailer/templates";
-import { renderMail } from "../../../../mailer/templates/renderers";
+import { sendMail } from "../../../../mailer/mailing";
+import { renderMail, inviteUserToJoin } from "@td/mail";
+import { ErrorCode, NotCompanyAdminErrorMsg } from "../../../../common/errors";
 
 // No mails
-const sendMailSpy = jest.spyOn(mailsHelper, "sendMail");
-sendMailSpy.mockImplementation(() => Promise.resolve());
+jest.mock("../../../../mailer/mailing");
+(sendMail as jest.Mock).mockImplementation(() => Promise.resolve());
 
 const RESEND_INVITATION = `
   mutation ResendInvitation($email: String!, $siret: String!){
@@ -27,7 +31,7 @@ describe("mutation resendInvitation", () => {
     const invitation = await createUserAccountHash(
       usrToInvite,
       "MEMBER",
-      company.siret
+      company.siret!
     );
 
     const { mutate } = makeClient({ ...admin, auth: AuthType.Session });
@@ -39,12 +43,54 @@ describe("mutation resendInvitation", () => {
 
     expect(res).toEqual({ data: { resendInvitation: true } });
 
-    expect(sendMailSpy).toHaveBeenCalledTimes(1);
-    expect(sendMailSpy.mock.calls[0][0]).toEqual(
+    expect(sendMail as jest.Mock).toHaveBeenCalledTimes(1);
+    expect((sendMail as jest.Mock).mock.calls[0][0]).toEqual(
       renderMail(inviteUserToJoin, {
         to: [{ name: usrToInvite, email: usrToInvite }],
-        variables: { companyName: company.name, hash: invitation.hash }
+        variables: {
+          companyName: company.name,
+          hash: invitation.hash,
+          companyOrgId: company.siret
+        }
       })
     );
+  });
+  test("TD admin user can resend a pending invitation", async () => {
+    const company = await companyFactory();
+    const usrToInvite = "john.snow@trackdechets.fr";
+    await createUserAccountHash(usrToInvite, "MEMBER", company.siret!);
+    const tdAdminUser = await userFactory({
+      isAdmin: true
+    });
+    const { mutate } = makeClient({ ...tdAdminUser, auth: AuthType.Session });
+    // Call the mutation to resend the invitation
+    const res = await mutate(RESEND_INVITATION, {
+      variables: { email: usrToInvite, siret: company.siret }
+    });
+
+    expect(res).toEqual({ data: { resendInvitation: true } });
+  });
+
+  test("user who isn't an admin of a company can't resend a pending invitation", async () => {
+    const company = await companyFactory();
+    const usrToInvite = "john.snow@trackdechets.fr";
+    await createUserAccountHash(usrToInvite, "MEMBER", company.siret!);
+    const notAdminUser = await userFactory({
+      isAdmin: false
+    });
+    const { mutate } = makeClient({ ...notAdminUser, auth: AuthType.Session });
+
+    // Call the mutation to resend the invitation
+    const { errors } = await mutate(RESEND_INVITATION, {
+      variables: { email: usrToInvite, siret: company.siret }
+    });
+    expect(errors).toEqual([
+      expect.objectContaining({
+        message: NotCompanyAdminErrorMsg(company.orgId),
+        extensions: expect.objectContaining({
+          code: ErrorCode.FORBIDDEN
+        })
+      })
+    ]);
   });
 });

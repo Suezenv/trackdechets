@@ -18,6 +18,12 @@ input BsdaWhere {
   transporter: BsdaTransporterWhere
   "Filtre sur le champ destination."
   destination: BsdaDestinationWhere
+  "Filtre sur le champ broker."
+  broker: BsdaBrokerWhere
+  "Filtre sur le champ groupedIn."
+  groupedIn: IdFilter
+  "Filtre sur le champ forwardedIn."
+  forwardedIn: IdFilter
   "ET logique"
   _and: [BsdaWhere!]
   "OU logique"
@@ -36,6 +42,7 @@ input BsdaStatusFilter {
 input BsdaEmitterWhere {
   company: CompanyWhere
   emission: BsdaEmissionWhere
+  customInfo: StringFilter
 }
 
 "Champs possibles pour le filtre sur l'émission"
@@ -47,11 +54,13 @@ input BsdaEmissionWhere {
 input BsdaTransporterWhere {
   company: CompanyWhere
   transport: BsdaTransportWhere
+  customInfo: StringFilter
 }
 
 "Champs possible pour le filtre sur le transport."
 input BsdaTransportWhere {
   signature: SignatureWhere
+  plates: StringNullableListFilter
 }
 
 "Champs possible pour le filtre sur la destination."
@@ -59,6 +68,12 @@ input BsdaDestinationWhere {
   company: CompanyWhere
   reception: BsdaReceptionWhere
   operation: BsdaOperationWhere
+  customInfo: StringFilter
+}
+
+"Champs possible pour le filtre sur le courtier."
+input BsdaBrokerWhere {
+  company: CompanyWhere
 }
 
 "Champs possibles pour le filtre sur la réception"
@@ -103,7 +118,11 @@ input BsdaInput {
   waste: BsdaWasteInput
   "Conditionnement"
   packagings: [BsdaPackagingInput!]
-  "Quantité"
+  """
+  Poids en tonnes, réel ou estimé.
+
+  Doit être inférieur à 40T en cas de transport routier et inférieur à 50 000 T tout type de transport confondu.
+  """
   weight: BsdaWeightInput
 
   "Installation de destination"
@@ -111,14 +130,32 @@ input BsdaInput {
 
   "Entreprise de travaux"
   worker: BsdaWorkerInput
-  "Entreprise de transport"
+
+  "Entreprise de transport - Premier transporteur (en cas de transport multi-modal)"
   transporter: BsdaTransporterInput
+
+  """
+  Liste des différents transporteurs, dans l'ordre de prise en charge du déchet.
+  Contient un seul identifiant en cas d'acheminement direct. Peut contenir au maximum
+  5 identifiants en cas de transport multi-modal. Les transporteurs peuvent être crées, modifiés,
+  supprimés à l'aide des mutations createBsdaTransporter, updateBsdaTransporter, deleteBsdaTransporter.
+  """
+  transporters: [ID!]
 
   "Bordereau que celui-ci reéxpédie"
   forwarding: ID
 
   "Liste des bordereaux que celui-ci groupe"
   grouping: [ID!]
+
+  """
+  Liste d'entreprises intermédiaires. Un intermédiaire est une entreprise qui prend part à la gestion du déchet,
+  mais pas à la responsabilité de la traçabilité (entreprise de travaux, bureau d'étude, maitre d'oeuvre,
+  collectivité, etc.) Il pourra lire ce bordereau, sans étape de signature.
+
+  Le nombre maximal d'intermédiaires sur un bordereau est de 3.
+  """
+  intermediaries: [CompanyInput!]
 }
 
 input BsdaEmitterInput {
@@ -149,11 +186,11 @@ input BsdaPickupSiteInput {
 input BsdaWasteInput {
   "Rubrique Déchet"
   code: String
-  "Dénomination usuelle"
-  name: String
+  "DEPRECATED - Dénomination usuelle"
+  name: String @deprecated(reason: "Utiliser materialName")
   "Code famille"
   familyCode: String
-  "Nom du matériau"
+  "Nom usuel du matériau"
   materialName: String
   "Consistence"
   consistence: BsdaConsistence
@@ -161,21 +198,31 @@ input BsdaWasteInput {
   sealNumbers: [String!]
   "Mention ADR"
   adr: String
+  "Contient des Polluants Organiques Persistants (POP) oui / non"
+  pop: Boolean
 }
 
 input BsdaPackagingInput {
   "Type de conditionnement"
-  type: BsdaPackagingType
+  type: BsdaPackagingType!
   "Description du conditionnement dans le cas où le type de conditionnement est `AUTRE`"
   other: String
   "Nombre de colis associés à ce conditionnement"
   quantity: Int!
+  "Volume du conditionnement en litre(s)"
+  volume: Float
+  "Numéros des contenants"
+  identificationNumbers: [String!]
 }
 
 input BsdaWeightInput {
   "Type de quantité (réelle ou estimé)"
   isEstimate: Boolean
-  "Quantité en tonne"
+  """
+  Poids en tonne.
+
+  Doit être inférieur à 40T en cas de transport routier et inférieur à 50 000 T tout type de transport confondu.
+  """
   value: Float
 }
 
@@ -197,10 +244,17 @@ input BsdaDestinationInput {
 input BsdaReceptionInput {
   "Date de présentation sur site"
   date: DateTime
-  "Quantité présentée"
+  """
+  Quantité présentée en tonnes
+
+  Doit être renseigné pour la signature OPERATION.
+  Doit être strictement supérieur à 0 lorsque le déchet est accepté ou partiellement refusé.
+
+  Doit être inférieure à 40T en cas de transport routier et inférieure à 50 000 T tout type de transport confondu.
+  """
   weight: Float
   "Lot accepté, accepté partiellement ou refusé"
-  acceptationStatus: BsdaAcceptationStatus
+  acceptationStatus: WasteAcceptationStatus
   "Motif de refus"
   refusalReason: String
 }
@@ -208,6 +262,10 @@ input BsdaReceptionInput {
 input BsdaOperationInput {
   "Code D/R"
   code: String
+  "Qualification du traitement final"
+  mode: OperationMode
+  "Description de l'opération"
+  description: String
   "Date de réalisation de l'opération"
   date: DateTime
   "Exutoire final (si la destination ne l'est pas)"
@@ -224,10 +282,42 @@ input BsdaNextDestinationInput {
 }
 
 input BsdaWorkerInput {
+  "Indique si une entreprise de travaux est présente sur le BSDA (pour le cas d'un émetteur qui démonte lui même son amiante par ex)"
+  isDisabled: Boolean
   "Entreprise de travaux"
   company: CompanyInput
+  "Informations de certification"
+  certification: BsdaWorkerCertificationInput
   "Déclaration générale"
   work: BsdaWorkInput
+}
+
+input BsdaWorkerCertificationInput {
+  """
+  Indique si l'entreprise réalise des travaux relevant de la sous-section 4
+  """
+  hasSubSectionFour: Boolean!
+
+  """
+  Indique si l'entreprise réalise des travaux relevant de la sous-section 3
+  """
+  hasSubSectionThree: Boolean!
+
+  """
+  Numéro de certification (sous-section 3 uniquement)
+  """
+  certificationNumber: String
+
+  """
+  Limite de validité de la certification (sous-section 3 uniquement)
+  """
+  validityLimit: DateTime
+
+  """
+  Organisation qui a décerné la certification (sous-section 3 uniquement)
+  Peut prendre uniquement les valeurs suivantes: AFNOR Certification, GLOBAL CERTIFICATION, QUALIBAT
+  """
+  organisation: String
 }
 
 input BsdaWorkInput {
@@ -252,16 +342,45 @@ input BsdaRecepisseInput {
   isExempted: Boolean
   "Numéro de récépissé"
   number: String
+    @deprecated(
+      reason: "Ignoré - Complété par Trackdéchets en fonction des informations renseignées par l'entreprise de transport "
+    )
   "Département"
   department: String
+    @deprecated(
+      reason: "Ignoré - Complété par Trackdéchets en fonction des informations renseignées par l'entreprise de transport "
+    )
   "Date limite de validité"
   validityLimit: DateTime
+    @deprecated(
+      reason: "Ignoré - Complété par Trackdéchets en fonction des informations renseignées par l'entreprise de transport "
+    )
+}
+
+input BsdaBrokerRecepisseInput {
+  "Exemption de récépissé (conformément aux dispositions de l'article R.541-50 du code de l'environnement)"
+  isExempted: Boolean
+  "Numéro de récépissé"
+  number: String
+    @deprecated(
+      reason: "Ignoré - Complété par Trackdéchets en fonction des informations renseignées par le courtier"
+    )
+  "Département"
+  department: String
+    @deprecated(
+      reason: "Ignoré - Complété par Trackdéchets en fonction des informations renseignées par le courtier"
+    )
+  "Date limite de validité"
+  validityLimit: DateTime
+    @deprecated(
+      reason: "Ignoré - Complété par Trackdéchets en fonction des informations renseignées par le courtier"
+    )
 }
 
 input BsdaTransportInput {
   "Mode de transport"
   mode: TransportMode
-  "Plaque(s) d'immatriculation"
+  "Plaque(s) d'immatriculation - maximum 2 - 4 à 12 caractères."
   plates: [String!]
   "Date de prise en charge"
   takenOverAt: DateTime
@@ -271,7 +390,7 @@ input BsdaBrokerInput {
   "Coordonnées de l'entreprise courtier"
   company: CompanyInput
   "Récépissé courtier"
-  recepisse: BsdaRecepisseInput
+  recepisse: BsdaBrokerRecepisseInput
 }
 
 input BsdaSignatureInput {
@@ -283,4 +402,90 @@ input BsdaSignatureInput {
   author: String!
   "Code de sécurité de l'entreprise pour laquelle on signe. Permet de signer en tant que. Optionnel"
   securityCode: Int
+}
+
+"Payload de révision d'un bordereau."
+input CreateBsdaRevisionRequestInput {
+  "Identifiant du bordereau à réviser"
+  bsdaId: ID!
+  "Numéro SIRET du demandeur"
+  authoringCompanySiret: String!
+  "Contenu de la révision"
+  content: BsdaRevisionRequestContentInput!
+  "Commentaire pour expliquer la demande de révision"
+  comment: String!
+}
+
+"Payload de révision d'un bordereau. Disponible sur une liste restreinte de champs."
+input BsdaRevisionRequestContentInput {
+  "Maitre d'ouvrage ou détenteur du déchet"
+  emitter: BsdaRevisionRequestEmitterInput
+
+  "Courtier"
+  broker: BsdaBrokerInput
+
+  "Installation de destination"
+  destination: BsdaRevisionRequestDestinationInput
+
+  "Description du déchet"
+  waste: BsdaRevisionRequestWasteInput
+
+  "Conditionnement"
+  packagings: [BsdaPackagingInput!]
+
+  "Annuler le bordereau. Exclusif des autres opérations"
+  isCanceled: Boolean
+}
+
+input BsdaRevisionRequestEmitterInput {
+  "Informations chantier (si différente de l'adresse de l'entreprise)"
+  pickupSite: BsdaPickupSiteInput
+}
+
+input BsdaRevisionRequestDestinationInput {
+  "N° de CAP (le cas échéant). Modifie le CAP de l'exutoire même en cas de TTR"
+  cap: String
+
+  "Expédition reçue à l'installation de destination"
+  reception: BsdaRevisionRequestReceptionInput
+
+  "Réalisation de l'opération (case 11)"
+  operation: BsdaRevisionRequestOperationInput
+}
+
+input BsdaRevisionRequestReceptionInput {
+  "Poids présenté"
+  weight: Float
+}
+
+input BsdaRevisionRequestOperationInput {
+  "Code D/R"
+  code: String
+
+  "Mode de traitement"
+  mode: OperationMode
+
+  "Description de l'opération"
+  description: String
+}
+
+input BsdaRevisionRequestWasteInput {
+  "Rubrique Déchet"
+  code: String
+
+  "Nom usuel du matériau"
+  materialName: String
+
+  "Numéros de scellés"
+  sealNumbers: [String!]
+
+  "Contient des Polluants Organiques Persistants (POP) oui / non"
+  pop: Boolean
+}
+
+input BsdaRevisionRequestWhere {
+  "Permet de filtrer sur un statut de demande de révision"
+  status: RevisionRequestStatus
+  "Permet de filtrer sur un numéro de bordereau"
+  bsdaId: StringFilter
 }

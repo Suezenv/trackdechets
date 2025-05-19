@@ -1,19 +1,19 @@
 import { CompanyVerificationStatus, UserRole } from "@prisma/client";
-import { gql } from "apollo-server-express";
+import { gql } from "graphql-tag";
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import * as post from "../../../../common/post";
-import prisma from "../../../../prisma";
+import { sendVerificationCodeLetter } from "../../../../common/post";
+import { prisma } from "@td/prisma";
 import {
+  siretify,
   userFactory,
   userWithCompanyFactory
 } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
 
-const sendVerificationCodeLetterSpy = jest.spyOn(
-  post,
-  "sendVerificationCodeLetter"
+jest.mock("../../../../common/post");
+(sendVerificationCodeLetter as jest.Mock).mockResolvedValueOnce(
+  Promise.resolve()
 );
-sendVerificationCodeLetterSpy.mockResolvedValueOnce(Promise.resolve());
 
 const SEND_VERIFICATION_CODE_LETTER = gql`
   mutation SendVerificationCodeLetter(
@@ -51,7 +51,7 @@ describe("mutation sendVerificationCodeLetter", () => {
 
     const { mutate } = makeClient(admin);
     const { errors } = await mutate(SEND_VERIFICATION_CODE_LETTER, {
-      variables: { input: { siret: "11111111111111" } }
+      variables: { input: { siret: siretify(3) } }
     });
     expect(errors).toEqual([
       expect.objectContaining({
@@ -69,9 +69,11 @@ describe("mutation sendVerificationCodeLetter", () => {
     await mutate(SEND_VERIFICATION_CODE_LETTER, {
       variables: { input: { siret: company.siret } }
     });
-    expect(sendVerificationCodeLetterSpy).toHaveBeenCalledWith(company);
-    const updatedCompany = await prisma.company.findUnique({
-      where: { siret: company.siret }
+    expect(sendVerificationCodeLetter as jest.Mock).toHaveBeenCalledWith(
+      company
+    );
+    const updatedCompany = await prisma.company.findUniqueOrThrow({
+      where: { siret: company.siret! }
     });
     expect(updatedCompany.verificationStatus).toEqual(
       CompanyVerificationStatus.LETTER_SENT

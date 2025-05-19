@@ -1,13 +1,14 @@
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import prisma from "../../../../prisma";
+import { prisma } from "@td/prisma";
 import { ErrorCode } from "../../../../common/errors";
 import {
   companyFactory,
+  siretify,
   userFactory,
   userWithCompanyFactory
 } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
-import { Query } from "../../../../generated/graphql/types";
+import type { Query } from "@td/codegen-back";
 
 const MEMBERSHIP_REQUEST = `
   query MembershipRequest($id: ID, $siret: String) {
@@ -17,6 +18,7 @@ const MEMBERSHIP_REQUEST = `
       siret
       name
       status
+      sentTo
     }
   }
 `;
@@ -30,7 +32,7 @@ describe("query membershipRequest", () => {
       MEMBERSHIP_REQUEST
     );
     expect(errors).toHaveLength(1);
-    expect(errors[0].extensions.code).toEqual(ErrorCode.UNAUTHENTICATED);
+    expect(errors[0].extensions?.code).toEqual(ErrorCode.UNAUTHENTICATED);
   });
 
   it("should return an error when trying to pass both id and siret", async () => {
@@ -39,7 +41,7 @@ describe("query membershipRequest", () => {
     const { errors } = await query<Pick<Query, "membershipRequest">>(
       MEMBERSHIP_REQUEST,
       {
-        variables: { id: "id", siret: "siret" }
+        variables: { id: "id", siret: siretify(7) }
       }
     );
     expect(errors).toHaveLength(1);
@@ -63,17 +65,18 @@ describe("query membershipRequest", () => {
     );
   });
 
-  it("should return null when no request found for authenticated user and siret", async () => {
+  it("should throw when no request found for authenticated user and siret", async () => {
     const user = await userFactory();
     const company = await companyFactory();
     const { query } = makeClient(user);
-    const { data } = await query<Pick<Query, "membershipRequest">>(
+    const { errors } = await query<Pick<Query, "membershipRequest">>(
       MEMBERSHIP_REQUEST,
       {
         variables: { siret: company.siret }
       }
     );
-    expect(data.membershipRequest).toBeNull();
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toBe("Demande de rattachement non trouvée");
   });
 
   it("should return an invitation request by id", async () => {
@@ -82,7 +85,8 @@ describe("query membershipRequest", () => {
     const membershipRequest = await prisma.membershipRequest.create({
       data: {
         user: { connect: { id: requester.id } },
-        company: { connect: { id: company.id } }
+        company: { connect: { id: company.id } },
+        sentTo: [admin.email, "someotheradmin@test.fr"]
       }
     });
     const { query } = makeClient(admin);
@@ -97,7 +101,8 @@ describe("query membershipRequest", () => {
       status: "PENDING",
       email: requester.email,
       siret: company.siret,
-      name: company.name
+      name: requester.name,
+      sentTo: [admin.email, "so****@test.fr"] // emails not belonging to user email domain are partially redacted
     });
   });
 
@@ -122,7 +127,37 @@ describe("query membershipRequest", () => {
       status: "PENDING",
       email: requester.email,
       siret: company.siret,
-      name: company.name
+      name: requester.name
+    });
+  });
+
+  it("should return a membership request by id when company is a foreign transporter", async () => {
+    const { user: admin, company } = await userWithCompanyFactory("ADMIN", {
+      siret: null,
+      orgId: "IT13029381004",
+      vatNumber: "IT13029381004"
+    });
+    const requester = await userFactory();
+    const membershipRequest = await prisma.membershipRequest.create({
+      data: {
+        user: { connect: { id: requester.id } },
+        company: { connect: { id: company.id } }
+      }
+    });
+    const { query } = makeClient(admin);
+    const { data, errors } = await query<Pick<Query, "membershipRequest">>(
+      MEMBERSHIP_REQUEST,
+      {
+        variables: { id: membershipRequest.id }
+      }
+    );
+    expect(errors).toBeUndefined();
+    expect(data.membershipRequest).toMatchObject({
+      id: membershipRequest.id,
+      status: "PENDING",
+      email: requester.email,
+      siret: company.orgId,
+      name: requester.name
     });
   });
 });

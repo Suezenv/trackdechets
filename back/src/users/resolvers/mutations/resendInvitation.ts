@@ -1,12 +1,18 @@
-import { UserInputError } from "apollo-server-express";
-import { MutationResolvers } from "../../../generated/graphql/types";
-import prisma from "../../../prisma";
+import type { MutationResolvers } from "@td/codegen-back";
+import { prisma } from "@td/prisma";
 import { sendMail } from "../../../mailer/mailing";
 import { applyAuthStrategies, AuthType } from "../../../auth";
 import { checkIsAuthenticated } from "../../../common/permissions";
 import { getCompanyOrCompanyNotFound } from "../../../companies/database";
-import { renderMail } from "../../../mailer/templates/renderers";
-import { inviteUserToJoin } from "../../../mailer/templates";
+import { renderMail, inviteUserToJoin } from "@td/mail";
+import {
+  checkUserIsAdminOrPermissions,
+  Permission
+} from "../../../permissions";
+import {
+  NotCompanyAdminErrorMsg,
+  UserInputError
+} from "../../../common/errors";
 
 const resendInvitationResolver: MutationResolvers["resendInvitation"] = async (
   parent,
@@ -14,8 +20,14 @@ const resendInvitationResolver: MutationResolvers["resendInvitation"] = async (
   context
 ) => {
   applyAuthStrategies(context, [AuthType.Session]);
-  checkIsAuthenticated(context);
-  const company = await getCompanyOrCompanyNotFound({ siret });
+  const user = checkIsAuthenticated(context);
+  const company = await getCompanyOrCompanyNotFound({ orgId: siret });
+  await checkUserIsAdminOrPermissions(
+    user,
+    company.orgId,
+    Permission.CompanyCanManageMembers,
+    NotCompanyAdminErrorMsg(company.orgId)
+  );
 
   const invitations = await prisma.userAccountHash.findMany({
     where: { email, companySiret: siret }
@@ -29,7 +41,11 @@ const resendInvitationResolver: MutationResolvers["resendInvitation"] = async (
 
   const mail = renderMail(inviteUserToJoin, {
     to: [{ email, name: email }],
-    variables: { hash: invitation.hash, companyName: company.name }
+    variables: {
+      hash: invitation.hash,
+      companyName: company.name,
+      companyOrgId: siret
+    }
   });
   await sendMail(mail);
   return true;

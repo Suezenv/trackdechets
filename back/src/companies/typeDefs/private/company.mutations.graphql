@@ -7,41 +7,6 @@ type Mutation {
 
   """
   USAGE INTERNE
-  Édite les informations d'un établissement
-  """
-  updateCompany(
-    "SIRET de l'établissement"
-    siret: String!
-    "Identifiant GEREP"
-    gerepId: String
-    "Email de contact"
-    contactEmail: String
-    "Numéro de téléphone de contact"
-    contactPhone: String
-    "Site web"
-    website: String
-    "Profil de l'établissement"
-    companyTypes: [CompanyType]
-    "Nom d'usage de l'établissement"
-    givenName: String
-    "Identifiant d'un récépissé transporteur"
-    transporterReceiptId: String
-    "Identifiant d'un récépissé négociant"
-    traderReceiptId: String
-    "Identifiant d'un récépissé courtier"
-    brokerReceiptId: String
-    "Identifiant d'un agrément VHU démolisseur"
-    vhuAgrementDemolisseurId: String
-    "Identifiant d'un agrément VHU broyeur"
-    vhuAgrementBroyeurId: String
-    "Agréments de l'éco-organisme"
-    ecoOrganismeAgreements: [URL!]
-    "L'entreprise autorise l'enlèvement d'un Dasri sans sa signature"
-    allowBsdasriTakeOverWithoutSignature: Boolean
-  ): CompanyPrivate!
-
-  """
-  USAGE INTERNE
   Permet de vérifier un établissement à partir du code de vérification
   envoyé par courrier à l'adresse de l'établissement renseigné au
   registre du commerce et des sociétés
@@ -50,81 +15,89 @@ type Mutation {
 
   """
   USAGE INTERNE
-  Crée un récépissé transporteur
-  """
-  createTransporterReceipt(
-    input: CreateTransporterReceiptInput!
-  ): TransporterReceipt
-
-  """
-  USAGE INTERNE
-  Édite les informations d'un récépissé transporteur
-  """
-  updateTransporterReceipt(
-    input: UpdateTransporterReceiptInput!
-  ): TransporterReceipt
-
-  """
-  USAGE INTERNE
   Supprime un récépissé transporteur
   """
   deleteTransporterReceipt(
     input: DeleteTransporterReceiptInput!
-  ): TransporterReceipt
+  ): TransporterReceipt!
 
   """
   USAGE INTERNE
   Crée un récépissé négociant
   """
-  createTraderReceipt(input: CreateTraderReceiptInput!): TraderReceipt
+  createTraderReceipt(input: CreateTraderReceiptInput!): TraderReceipt!
 
   """
   USAGE INTERNE
   Édite les informations d'un récépissé négociant
   """
-  updateTraderReceipt(input: UpdateTraderReceiptInput!): TraderReceipt
+  updateTraderReceipt(input: UpdateTraderReceiptInput!): TraderReceipt!
 
   """
   USAGE INTERNE
   Supprime un récépissé négociant
   """
-  deleteTraderReceipt(input: DeleteTraderReceiptInput!): TraderReceipt
+  deleteTraderReceipt(input: DeleteTraderReceiptInput!): TraderReceipt!
 
   """
   USAGE INTERNE
   Crée un récépissé courtier
   """
-  createBrokerReceipt(input: CreateBrokerReceiptInput!): BrokerReceipt
+  createBrokerReceipt(input: CreateBrokerReceiptInput!): BrokerReceipt!
 
   """
   USAGE INTERNE
   Édite les informations d'un récépissé courtier
   """
-  updateBrokerReceipt(input: UpdateBrokerReceiptInput!): BrokerReceipt
+  updateBrokerReceipt(input: UpdateBrokerReceiptInput!): BrokerReceipt!
 
   """
   USAGE INTERNE
   Supprime un récépissé courtier
   """
-  deleteBrokerReceipt(input: DeleteBrokerReceiptInput!): BrokerReceipt
+  deleteBrokerReceipt(input: DeleteBrokerReceiptInput!): BrokerReceipt!
 
   """
   USAGE INTERNE
   Crée un agrément VHU
   """
-  createVhuAgrement(input: CreateVhuAgrementInput!): VhuAgrement
+  createVhuAgrement(input: CreateVhuAgrementInput!): VhuAgrement!
 
   """
   USAGE INTERNE
   Édite un agrément VHU
   """
-  updateVhuAgrement(input: UpdateVhuAgrementInput!): VhuAgrement
+  updateVhuAgrement(input: UpdateVhuAgrementInput!): VhuAgrement!
 
   """
   USAGE INTERNE
   Supprime un agrément VHU
   """
-  deleteVhuAgrement(input: DeleteVhuAgrementInput!): VhuAgrement
+  deleteVhuAgrement(input: DeleteVhuAgrementInput!): VhuAgrement!
+
+  """
+  USAGE INTERNE
+  Crée une certification d'entreprise de travaux
+  """
+  createWorkerCertification(
+    input: CreateWorkerCertificationInput!
+  ): WorkerCertification!
+
+  """
+  USAGE INTERNE
+  Édite une certification d'entreprise de travaux
+  """
+  updateWorkerCertification(
+    input: UpdateWorkerCertificationInput!
+  ): WorkerCertification!
+
+  """
+  USAGE INTERNE
+  Supprime une certification d'entreprise de travaux
+  """
+  deleteWorkerCertification(
+    input: DeleteWorkerCertificationInput!
+  ): WorkerCertification!
 
   """
   USAGE INTERNE
@@ -141,10 +114,39 @@ type Mutation {
     input: SendVerificationCodeLetterInput!
   ): CompanyForVerification!
 
+  standbyCompanyByAdmin(
+    input: StandbyCompanyByAdminInput!
+  ): CompanyForVerification!
+
   """
   USAGE INTERNE
   Génère un N°SIRET factice pouvant être utilisé pour le
   rattachement d'un établissement de test
   """
   createTestCompany: String!
+
+  deleteCompany(id: ID!): CompanyPrivate!
+
+  createAnonymousCompany(input: AnonymousCompanyInput!): AnonymousCompany!
+
+  addSignatureAutomation(input: SignatureAutomationInput!): SignatureAutomation!
+
+  removeSignatureAutomation(id: ID!): SignatureAutomation!
+
+  """
+  USAGE INTERNE
+  Mise à jour en masse de profils et sous profils depuis l'admin TD.
+  """
+  bulkUpdateCompaniesProfiles(
+    input: BulkUpdateCompaniesProfilesInput!
+  ): [CompanyPrivate]!
+
+  toggleDormantCompany(id: ID!): Boolean!
+  createAdministrativeTransfer(
+    input: CreateAdministrativeTransferInput!
+  ): AdministrativeTransfer!
+  cancelAdministrativeTransfer(id: ID!): Boolean!
+  submitAdministrativeTransferApproval(
+    input: SubmitAdministrativeTransferApprovalInput!
+  ): AdministrativeTransfer!
 }

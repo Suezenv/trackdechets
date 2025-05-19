@@ -1,9 +1,9 @@
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { QueryBsdaArgs } from "../../../generated/graphql/types";
+import type { QueryBsdaArgs } from "@td/codegen-back";
 import { GraphQLContext } from "../../../types";
 import { expandBsdaFromDb } from "../../converter";
 import { getBsdaOrNotFound } from "../../database";
-import { checkIsBsdaContributor } from "../../permissions";
+import { checkCanRead } from "../../permissions";
 
 export default async function bsda(
   _,
@@ -12,12 +12,9 @@ export default async function bsda(
 ) {
   const user = checkIsAuthenticated(context);
 
-  const form = await getBsdaOrNotFound(id);
-  await checkIsBsdaContributor(
-    user,
-    form,
-    "Vous n'êtes pas autorisé à accéder à ce bordereau"
-  );
+  const bsda = await getBsdaOrNotFound(id, { include: { transporters: true } });
 
-  return expandBsdaFromDb(form);
+  await checkCanRead(user, bsda);
+
+  return expandBsdaFromDb(bsda);
 }

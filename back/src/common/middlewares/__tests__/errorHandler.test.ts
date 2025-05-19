@@ -1,6 +1,5 @@
-import express from "express";
+import express, { json } from "express";
 import supertest from "supertest";
-import { json } from "body-parser";
 
 const originalConsole = global.console;
 global.console = { error: jest.fn() } as any;
@@ -12,7 +11,7 @@ afterAll(() => {
 describe("errorHandler", () => {
   const OLD_ENV = process.env;
 
-  let request = null;
+  let request;
 
   function setup() {
     const app = express();
@@ -36,7 +35,7 @@ describe("errorHandler", () => {
 
   beforeEach(() => {
     jest.resetModules();
-    delete process.env.NODE_ENV;
+    process.env.NODE_ENV = "test";
   });
 
   afterEach(() => {

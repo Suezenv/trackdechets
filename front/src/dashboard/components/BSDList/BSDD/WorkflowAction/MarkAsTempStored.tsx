@@ -1,37 +1,24 @@
 import React from "react";
-import {
-  Mutation,
-  MutationMarkAsTempStoredArgs,
-  QuantityType,
-  WasteAcceptationStatusInput,
-} from "generated/graphql/types";
-import { gql, useMutation } from "@apollo/client";
-import { statusChangeFragment } from "common/fragments";
+import { Query, QueryFormArgs } from "@td/codegen-ui";
+import { useLazyQuery } from "@apollo/client";
 import { WorkflowActionProps } from "./WorkflowAction";
-import { TdModalTrigger } from "common/components/Modal";
-import { ActionButton, Loader } from "common/components";
-import { IconWarehouseStorage } from "common/components/Icons";
+import { TdModalTrigger } from "../../../../../Apps/common/Components/Modal/Modal";
+import { ActionButton } from "../../../../../common/components";
+import { Loader } from "../../../../../Apps/common/Components";
+import { IconWarehouseStorage } from "../../../../../Apps/common/Components/Icons/Icons";
 import ReceivedInfo from "./ReceivedInfo";
-import { NotificationError } from "common/components/Error";
-import { GET_BSDS } from "common/queries";
-
-const MARK_AS_TEMP_STORED = gql`
-  mutation MarkAsTempStored($id: ID!, $tempStoredInfos: TempStoredFormInput!) {
-    markAsTempStored(id: $id, tempStoredInfos: $tempStoredInfos) {
-      ...StatusChange
-    }
-  }
-  ${statusChangeFragment}
-`;
+import { NotificationError } from "../../../../../Apps/common/Components/Error/Error";
+import { GET_FORM } from "../../../../../Apps/common/queries/bsdd/queries";
 
 export default function MarkAsTempStored({ form }: WorkflowActionProps) {
-  const [markAsTempStored, { loading, error }] = useMutation<
-    Pick<Mutation, "markAsTempStored">,
-    MutationMarkAsTempStoredArgs
-  >(MARK_AS_TEMP_STORED, {
-    refetchQueries: [GET_BSDS],
-    awaitRefetchQueries: true,
-  });
+  const [getBsdd, { error: bsddGetError, data, loading: bsddGetLoading }] =
+    useLazyQuery<Pick<Query, "form">, QueryFormArgs>(GET_FORM, {
+      variables: {
+        id: form.id,
+        readableId: null
+      },
+      fetchPolicy: "network-only"
+    });
 
   const actionLabel = "Valider l'entreposage provisoire";
 
@@ -42,38 +29,38 @@ export default function MarkAsTempStored({ form }: WorkflowActionProps) {
         trigger={open => (
           <ActionButton
             icon={<IconWarehouseStorage size="24px" />}
-            onClick={open}
+            onClick={() => {
+              getBsdd();
+              open();
+            }}
           >
             {actionLabel}
           </ActionButton>
         )}
-        modalContent={close => (
-          <div>
-            <ReceivedInfo
-              form={form}
-              close={close}
-              onSubmit={values => {
-                return markAsTempStored({
-                  variables: {
-                    id: form.id,
-                    tempStoredInfos: {
-                      ...values,
-                      quantityType: values.quantityType ?? QuantityType.Real,
-                      quantityReceived: values.quantityReceived ?? 0,
-                      wasteAcceptationStatus:
-                        values.wasteAcceptationStatus ??
-                        WasteAcceptationStatusInput.Accepted,
-                    },
-                  },
-                });
-              }}
-            />
-            {error && (
-              <NotificationError className="action-error" apolloError={error} />
-            )}
-            {loading && <Loader />}
-          </div>
-        )}
+        modalContent={close => {
+          if (!!bsddGetLoading) {
+            return <Loader />;
+          }
+          if (!!bsddGetError) {
+            return (
+              <NotificationError
+                className="action-error"
+                apolloError={bsddGetError}
+              />
+            );
+          }
+          if (!!data?.form) {
+            return (
+              <ReceivedInfo
+                form={data?.form}
+                close={close}
+                isTempStorage={true}
+              />
+            );
+          }
+
+          return null;
+        }}
       />
     </div>
   );

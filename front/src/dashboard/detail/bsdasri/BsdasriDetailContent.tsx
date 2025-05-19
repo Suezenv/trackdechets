@@ -1,14 +1,18 @@
 import React from "react";
-import { useBsdasriDuplicate } from "dashboard/components/BSDList/BSDasri/BSDasriActions/useDuplicate";
-import { generatePath, useHistory, useParams } from "react-router-dom";
-import { transportModeLabels, statusLabels } from "dashboard/constants";
+import { useBsdasriDuplicate } from "../../components/BSDList/BSDasri/BSDasriActions/useDuplicate";
+import { generatePath, useNavigate, useParams } from "react-router-dom";
+import { getTransportModeLabel } from "../../constants";
 import { Tab, Tabs, TabList, TabPanel } from "react-tabs";
 import {
   Bsdasri,
   FormCompany,
   BsdasriPackaging,
-} from "generated/graphql/types";
-import routes from "common/routes";
+  BsdasriType,
+  OperationMode,
+  UserPermission
+} from "@td/codegen-ui";
+import routes from "../../../Apps/routes";
+import { useDownloadPdf } from "../../components/BSDList/BSDasri/BSDasriActions/useDownloadPdf";
 
 import {
   IconWarehouseDelivery,
@@ -16,24 +20,32 @@ import {
   IconRenewableEnergyEarth,
   IconBSDasri,
   IconDuplicateFile,
-} from "common/components/Icons";
-
+  IconPdf
+} from "../../../Apps/common/Components/Icons/Icons";
+import { InitialDasris } from "./InitialDasris";
 import QRCodeIcon from "react-qr-code";
 
-import styles from "dashboard/detail/common/BSDDetailContent.module.scss";
+import styles from "../common/BSDDetailContent.module.scss";
 
 import {
   getVerboseWeightType,
-  getVerboseAcceptationStatus,
-} from "dashboard/detail/common/utils";
-import { DateRow, DetailRow } from "dashboard/detail/common/Components";
+  getVerboseAcceptationStatus
+} from "../common/utils";
+import {
+  DateRow,
+  DetailRow,
+  TransporterReceiptDetails
+} from "../common/Components";
 
 import classNames from "classnames";
+import { getOperationModeLabel } from "../../../Apps/common/operationModes";
+import { DASRI_VERBOSE_STATUSES } from "@td/constants";
+import { usePermissions } from "../../../common/contexts/PermissionsContext";
 
 const getVerboseWasteName = (code: string): string => {
   const desc = {
     "18 01 03*": "DASRI origine humaine ",
-    "18 01 02*": "DASRI origine animale",
+    "18 02 02*": "DASRI origine animale"
   }[code];
   return !!desc ? desc : "";
 };
@@ -45,6 +57,7 @@ const Company = ({ company, label }: CompanyProps) => (
   <>
     <dt>{label}</dt> <dd>{company?.name}</dd>
     <dt>Siret</dt> <dd>{company?.siret}</dd>
+    <dt>Numéro de TVA</dt> <dd>{company?.vatNumber}</dd>
     <dt>Adresse</dt> <dd>{company?.address}</dd>
     <dt>Tél</dt> <dd>{company?.phone}</dd>
     <dt>Mél</dt> <dd>{company?.mail}</dd>
@@ -65,13 +78,14 @@ const Emitter = ({ form }: { form: Bsdasri }) => {
       <div className={styles.detailGrid}>
         {form?.ecoOrganisme?.siret ? (
           <span className={classNames(styles.spanWidth, "tw-font-bold")}>
-            L'éco-organisme DASTRI est identifié pour assurer la prise en charge
-            et la traçabilité
+            L'éco-organisme {form?.ecoOrganisme?.name} (
+            {form?.ecoOrganisme?.siret}) est identifié pour assurer la prise en
+            charge et la traçabilité
           </span>
         ) : null}
         <Company label="Émetteur" company={emitter?.company} />
         <DetailRow value={emitter?.pickupSite?.name} label="Adresse collecte" />
-        <DetailRow value={emitter?.pickupSite?.name} label="Informations" />
+        <DetailRow value={emitter?.pickupSite?.infos} label="Informations" />
         {!!emitter?.pickupSite?.address && (
           <>
             <dt>Adresse</dt>
@@ -94,7 +108,9 @@ const Emitter = ({ form }: { form: Bsdasri }) => {
         />
         <DetailRow value={emitter?.emission?.volume} label="Volume" units="l" />
 
-        <Dasripackaging packagings={emitter?.emission?.packagings} />
+        {form.type !== BsdasriType.Synthesis && (
+          <Dasripackaging packagings={emitter?.emission?.packagings} />
+        )}
       </div>
       <div className={styles.detailGrid}>
         {emitter?.emission?.isTakenOverWithoutEmitterSignature && (
@@ -105,7 +121,12 @@ const Emitter = ({ form }: { form: Bsdasri }) => {
         )}
         {emitter?.emission?.isTakenOverWithSecretCode && (
           <>
-            <dt>Signature avec code secret PRED</dt>
+            <dt>
+              Signature avec code secret{" "}
+              {form?.ecoOrganisme?.emittedByEcoOrganisme
+                ? "Éco-organisme"
+                : "PRED"}{" "}
+            </dt>
             <dd>Oui</dd>
           </>
         )}
@@ -126,28 +147,19 @@ const Transporter = ({ form }: { form: Bsdasri }) => {
       <div className={styles.detailGrid}>
         <Company label="Transporteur" company={transporter?.company} />
       </div>
+      <TransporterReceiptDetails transporter={transporter} />
       <div className={styles.detailGrid}>
         <DetailRow
-          value={transporter?.recepisse?.number}
-          label="Numéro de récépissé"
+          value={getTransportModeLabel(transporter?.transport?.mode)}
+          label="Mode de transport"
         />
-        <DetailRow
-          value={transporter?.recepisse?.department}
-          label="Département"
-        />
-        <DateRow
-          value={transporter?.recepisse?.validityLimit}
-          label="Date de validité"
-        />
-      </div>
-      <div className={styles.detailGrid}>
         <DetailRow
           value={
-            transporter?.transport?.mode
-              ? transportModeLabels[transporter?.transport?.mode]
+            transporter?.transport?.plates
+              ? transporter.transport.plates.join(", ")
               : null
           }
-          label="Mode de transport"
+          label="Immatriculation"
         />
         <DetailRow
           value={transporter?.transport?.weight?.value}
@@ -259,6 +271,12 @@ const Recipient = ({ form }: { form: Bsdasri }) => {
           value={destination?.operation?.code}
           label="Opération de traitement"
         />
+        <DetailRow
+          value={getOperationModeLabel(
+            destination?.operation?.mode as OperationMode
+          )}
+          label={"Mode de traitement"}
+        />
         <DateRow
           value={destination?.operation?.date}
           label="Traitement effectué le"
@@ -281,34 +299,42 @@ const Recipient = ({ form }: { form: Bsdasri }) => {
   );
 };
 
-export default function BsdasriDetailContent({
-  form,
-  children = null,
-  refetch,
-}: SlipDetailContentProps) {
+export default function BsdasriDetailContent({ form }: SlipDetailContentProps) {
   const { siret } = useParams<{ siret: string }>();
-  const history = useHistory();
+  const navigate = useNavigate();
+  const { permissions } = usePermissions();
 
   const [duplicate] = useBsdasriDuplicate({
     variables: { id: form.id },
     onCompleted: () => {
-      history.push(
+      navigate(
         generatePath(routes.dashboard.bsds.drafts, {
-          siret,
+          siret
         })
       );
-    },
+    }
   });
+
   return (
     <div className={styles.detail}>
       <div className={styles.detailSummary}>
         <h4 className={styles.detailTitle}>
           <IconBSDasri className="tw-mr-2" />
+
           <span className={styles.detailStatus}>
-            [{form.isDraft ? "Brouillon" : statusLabels[form["bsdasriStatus"]]}]
+            [
+            {form.isDraft
+              ? "Brouillon"
+              : DASRI_VERBOSE_STATUSES[form["bsdasriStatus"]]}
+            ]
           </span>
           {!form.isDraft && <span>{form.id}</span>}
-          {!!form?.grouping?.length && <span>Bordereau de groupement</span>}
+          {form?.type === BsdasriType.Grouping && (
+            <span className="tw-ml-2">Bordereau de groupement</span>
+          )}
+          {form?.type === BsdasriType.Synthesis && (
+            <span className="tw-ml-2">Bordereau de synthèse</span>
+          )}
         </h4>
 
         <div className={styles.detailContent}>
@@ -321,6 +347,18 @@ export default function BsdasriDetailContent({
             )}
           </div>
           <div className={styles.detailGrid}>
+            {!!form?.synthesizedIn?.id && (
+              <AssociatedTo
+                formId={form?.synthesizedIn?.id}
+                label="Associé au"
+              />
+            )}
+            {!!form?.groupedIn && (
+              <AssociatedTo
+                formId={form?.groupedIn?.id}
+                label="Regroupé dans"
+              />
+            )}
             <DateRow
               value={form.updatedAt}
               label="Dernière action sur le BSD"
@@ -336,15 +374,6 @@ export default function BsdasriDetailContent({
           <div className={styles.detailGrid}>
             <dt>Code onu</dt>
             <dd>{form?.waste?.adr}</dd>
-          </div>
-
-          <div className={styles.detailGrid}>
-            {form?.grouping?.length && (
-              <>
-                <dt>Bordereau groupés:</dt>
-                <dd> {form?.grouping?.join(", ")}</dd>
-              </>
-            )}
           </div>
         </div>
       </div>
@@ -368,6 +397,18 @@ export default function BsdasriDetailContent({
             <IconRenewableEnergyEarth size="25px" />
             <span className={styles.detailTabCaption}>Destinataire</span>
           </Tab>
+          {[BsdasriType.Synthesis, BsdasriType.Grouping].includes(
+            form?.type
+          ) && (
+            <Tab className={styles.detailTab}>
+              <IconBSDasri style={{ fontSize: "24px" }} />
+              <span className={styles.detailTabCaption}>
+                {form?.type === BsdasriType.Grouping
+                  ? "Bsd groupés"
+                  : "Bsds associés"}
+              </span>
+            </Tab>
+          )}
         </TabList>
         {/* Tabs content */}
         <div className={styles.detailTabPanels}>
@@ -381,28 +422,57 @@ export default function BsdasriDetailContent({
             <Transporter form={form} />
           </TabPanel>
 
-          {/* Recipient  tab panel */}
+          {/* Recipient tab panel */}
           <TabPanel className={styles.detailTabPanel}>
             <div className={styles.detailColumns}>
               <Recipient form={form} />
             </div>
           </TabPanel>
+          {form?.type === BsdasriType.Grouping && (
+            <TabPanel className={styles.detailTabPanel}>
+              <div className={styles.detailColumns}>
+                <InitialDasris initialBsdasris={form?.grouping} />
+              </div>
+            </TabPanel>
+          )}
+          {form?.type === BsdasriType.Synthesis && (
+            <TabPanel className={styles.detailTabPanel}>
+              <div className={styles.detailColumns}>
+                <InitialDasris initialBsdasris={form?.synthesizing} />
+              </div>
+            </TabPanel>
+          )}
         </div>
       </Tabs>
+      <DasriIdentificationNumbers
+        identificationNumbers={form?.identification?.numbers}
+      />
       <div className={styles.detailActions}>
-        <button
-          className="btn btn--outline-primary"
-          onClick={() => duplicate()}
-        >
-          <IconDuplicateFile size="24px" color="blueLight" />
-          <span>Dupliquer</span>
-        </button>
+        {form.type === BsdasriType.Simple &&
+          permissions.includes(UserPermission.BsdCanCreate) && (
+            <button
+              className="btn btn--outline-primary"
+              onClick={() => duplicate()}
+            >
+              <IconDuplicateFile size="24px" color="blueLight" />
+              <span>Dupliquer</span>
+            </button>
+          )}
       </div>
     </div>
   );
 }
+
+const DasriIdentificationNumbers = ({ identificationNumbers }) =>
+  !!identificationNumbers ? (
+    <div className={styles.BsdasriIdentificationNumbersRow}>
+      <dt>Identifiants de containers : </dt>
+      <dd>{identificationNumbers ? identificationNumbers.join(", ") : null}</dd>
+    </div>
+  ) : null;
+
 const Dasripackaging = ({
-  packagings,
+  packagings
 }: {
   packagings: BsdasriPackaging[] | null | undefined;
 }) => {
@@ -410,50 +480,48 @@ const Dasripackaging = ({
     return null;
   }
   return (
-    <>
-      <div className={classNames(styles.spanWidth)}>
-        <table className={classNames(styles.WastePackaging)}>
-          <caption>Conditionnement</caption>
-          <thead>
-            <tr className="td-table__head-trs">
-              <th>Type</th>
-              <th>Qté.</th>
-              <th>Vol.</th>
-            </tr>
-          </thead>
-          <tbody>
-            {packagings.map((row, idx) => (
-              <tr className="td-table__tr" key={idx}>
-                <td>
-                  {`${getVerbosePackagingType(row.type)
-                    .substring(0, 20)
-                    .trim()}…`}
-                  {row.other}
-                </td>
+    <div className={classNames(styles.spanWidth)}>
+      <table className={classNames(styles.WastePackaging)}>
+        <caption>Conditionnement</caption>
+        <thead>
+          <tr className="td-table__head-trs">
+            <th>Type</th>
+            <th>Qté.</th>
+            <th>Vol.</th>
+          </tr>
+        </thead>
+        <tbody>
+          {packagings.map((row, idx) => (
+            <tr className="td-table__tr" key={idx}>
+              <td>
+                {`${getVerbosePackagingType(row.type)
+                  .substring(0, 20)
+                  .trim()}…`}
+                {row.other}
+              </td>
 
-                <td>{row.quantity}</td>
-                <td>{row.volume} l</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </>
+              <td>{row.quantity}</td>
+              <td className="tw-whitespace-no-wrap">{row.volume} l</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 };
 
-const verbosePackagings = {
+export const verbosePackagings = {
   BOITE_CARTON: "Caisse en carton avec sac en plastique",
   FUT: "Fûts ou jerrican à usage unique",
   BOITE_PERFORANTS: "Boîtes et Mini-collecteurs pour déchets perforants",
   GRAND_EMBALLAGE: "Grand emballage",
   GRV: "Grand récipient pour vrac",
-  AUTRE: "Autre",
+  AUTRE: "Autre"
 };
 const getVerbosePackagingType = (type: string) => verbosePackagings[type];
 
 const AcceptationStatusRow = ({
-  value = null,
+  value = null
 }: {
   value?: string | undefined | null;
 }) => {
@@ -462,5 +530,28 @@ const AcceptationStatusRow = ({
       <dt>Lot accepté :</dt>
       <dd>{value ? getVerboseAcceptationStatus(value) : ""}</dd>
     </>
+  );
+};
+
+const AssociatedTo = ({ formId, label }: { formId: string; label: string }) => {
+  const [downloadPdf] = useDownloadPdf({
+    variables: { id: formId }
+  });
+
+  return (
+    <DetailRow
+      value={
+        <span>
+          {formId}
+          <button className="link tw-flex" onClick={() => downloadPdf()}>
+            <IconPdf size="18px" color="blueLight" />
+            <span className={classNames(styles.downloadLink, "tw-ml-1")}>
+              Pdf
+            </span>
+          </button>
+        </span>
+      }
+      label={`${label} bordereau n°`}
+    />
   );
 };

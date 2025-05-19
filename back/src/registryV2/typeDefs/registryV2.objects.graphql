@@ -1,0 +1,142 @@
+type RegistryV2ExportConnection {
+  totalCount: Int!
+  pageInfo: PageInfo!
+  edges: [RegistryV2ExportEdge!]!
+}
+
+type RegistryV2ExportEdge {
+  cursor: String!
+  node: RegistryV2Export!
+}
+
+type RegistryV2Export {
+  id: ID!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  createdBy: User!
+  status: RegistryV2ExportStatus!
+  delegate: RegistryCompany
+  delegateSirets: String
+  sirets: [String!]!
+  companies: [RegistryCompany!]!
+  registryType: RegistryV2ExportType!
+  wasteTypes: [WasteType!]
+  wasteCodes: [String!]
+  declarationType: DeclarationType!
+  startDate: DateTime!
+  endDate: DateTime
+  format: FormsRegisterExportFormat!
+}
+
+type RegistryCompany {
+  "Raison sociale de l'établissement"
+  name: String
+  "Nom de l'établissement"
+  givenName: String
+  "SIRET de l'établissement"
+  siret: String
+  "SIRET ou num de TVA de l'établissement"
+  orgId: String
+}
+
+type RegistryImportConnection {
+  totalCount: Int!
+  pageInfo: PageInfo!
+  edges: [RegistryImportEdge!]!
+}
+
+type RegistryImportEdge {
+  cursor: String!
+  node: RegistryImport!
+}
+
+type RegistryImport {
+  id: ID!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  status: RegistryImportStatus!
+  type: RegistryImportType!
+  s3FileKey: String!
+  originalFileName: String!
+  numberOfErrors: Int!
+  numberOfInsertions: Int!
+  numberOfEdits: Int!
+  numberOfCancellations: Int!
+  numberOfSkipped: Int!
+  createdBy: User!
+  associations: [RegistryImportAssociation!]!
+}
+
+type RegistryImportAssociation {
+  reportedFor: RegistryCompany!
+  reportedAs: RegistryCompany!
+}
+
+type RegistryIssue {
+  code: String!
+  message: String!
+  path: String!
+}
+
+type RegistryLineError {
+  publicId: String!
+  message: String!
+  issues: [RegistryIssue!]!
+}
+
+type AddRegistryLinesStats {
+  errors: Int!
+  insertions: Int!
+  edits: Int!
+  cancellations: Int!
+  skipped: Int!
+}
+
+type AddRegistryLine {
+  publicId: ID!
+}
+
+type AddRegistryLinesResponse {
+  stats: AddRegistryLinesStats!
+  errors: [RegistryLineError!]
+  # Liste des identifiants (`publicId`) des déclarations qui ont été insérées
+  inserted: [AddRegistryLine!]!
+  # Liste des identifiants (`publicId`) des déclarations qui ont été modifiées
+  edited: [AddRegistryLine!]!
+  # Liste des identifiants (`publicId`) des déclarations qui ont été annulées
+  cancelled: [AddRegistryLine!]!
+  # Liste des identifiants (`publicId`) des déclarations qui ont été ignorées
+  skipped: [AddRegistryLine!]!
+}
+
+type CancelRegistryV2LineResponse {
+  publicIds: [ID!]!
+}
+
+type RegistryLookup {
+  publicId: ID!
+  type: RegistryImportType!
+  siret: String!
+  reportAsSiret: String
+  date: DateTime!
+  declaredAt: DateTime!
+  wasteCode: String
+
+  ssd: SsdLine
+  incomingWaste: IncomingWasteLine
+  incomingTexs: IncomingTexsLine
+  outgoingWaste: OutgoingWasteLine
+  outgoingTexs: OutgoingTexsLine
+  managedWaste: ManagedLine
+  transportedWaste: TransportedLine
+}
+
+type RegistryLookupConnection {
+  pageInfo: PageInfo!
+  edges: [RegistryLookupEdge!]!
+}
+
+type RegistryLookupEdge {
+  cursor: String!
+  node: RegistryLookup!
+}

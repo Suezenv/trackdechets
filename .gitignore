@@ -1,3 +1,23 @@
 .env
+.env.integration
+.envrc
 .vscode
 .idea
+*.pgsql
+logs/
+.data
+docker-compose.override.yml
+.nvmrc
+/node_modules
+/tmp
+/dist
+/out-tsc
+.nx/cache
+.nx/workspace-data
+generated
+.DS_Store
+.nx
+
+# Generated Docusaurus files
+.docusaurus/
+.cache-loader/

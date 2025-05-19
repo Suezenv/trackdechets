@@ -1,18 +1,19 @@
-import { QueryResolvers } from "../../../generated/graphql/types";
-import { searchCompanies } from "../../sirene/";
-import { getInstallation } from "../../database";
+import { checkIsAuthenticated } from "../../../common/permissions";
+import type { QueryResolvers } from "@td/codegen-back";
+import { searchCompanies } from "../../search";
 
 const searchCompaniesResolver: QueryResolvers["searchCompanies"] = async (
-  parent,
-  { clue, department }
+  _,
+  { clue, department, allowForeignCompanies, allowClosedCompanies },
+  context
 ) => {
-  const companies = await searchCompanies(clue, department);
-  return companies.map(async company => {
-    return {
-      ...company,
-      installation: await getInstallation(company.siret)
-    };
-  });
+  checkIsAuthenticated(context);
+  return searchCompanies(
+    clue,
+    department,
+    allowForeignCompanies,
+    allowClosedCompanies
+  );
 };
 
 export default searchCompaniesResolver;

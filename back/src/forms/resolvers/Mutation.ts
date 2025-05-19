@@ -1,4 +1,4 @@
-import { MutationResolvers } from "../../generated/graphql/types";
+import type { MutationResolvers } from "@td/codegen-back";
 import createForm from "./mutations/createForm";
 import updateForm from "./mutations/updateForm";
 import updateTransporterFields from "./mutations/updateTransporterFields";
@@ -6,7 +6,8 @@ import saveForm from "./mutations/saveForm";
 import deleteForm from "./mutations/deleteForm";
 import duplicateForm from "./mutations/duplicateForm";
 import markAsSealed from "./mutations/markAsSealed";
-import markAsSent from "./mutations/markAsSent";
+import signEmissionForm from "./mutations/signEmissionForm";
+import signTransportForm from "./mutations/signTransportForm";
 import signedByTransporter from "./mutations/signedByTransporter";
 import markAsReceived from "./mutations/markAsReceived";
 import markAsAccepted from "./mutations/markAsAccepted";
@@ -20,6 +21,12 @@ import editSegment from "./mutations/editSegment";
 import takeOverSegment from "./mutations/takeOverSegment";
 import markSegmentAsReadyToTakeOver from "./mutations/markSegmentAsReadyToTakeOver";
 import importPaperForm from "./mutations/importPaperForm";
+import createFormRevisionRequest from "./mutations/createFormRevisionRequest";
+import submitFormRevisionRequestApproval from "./mutations/submitFormRevisionRequestApproval";
+import cancelFormRevisionRequest from "./mutations/cancelFormRevisionRequest";
+import createFormTransporter from "./mutations/createFormTransporter";
+import updateFormTransporter from "./mutations/updateFormTransporter";
+import deleteFormTransporter from "./mutations/deleteFormTransporter";
 
 const Mutation: MutationResolvers = {
   createForm,
@@ -29,7 +36,8 @@ const Mutation: MutationResolvers = {
   deleteForm,
   duplicateForm,
   markAsSealed,
-  markAsSent,
+  signEmissionForm,
+  signTransportForm,
   signedByTransporter,
   markAsReceived,
   markAsAccepted,
@@ -42,7 +50,13 @@ const Mutation: MutationResolvers = {
   prepareSegment,
   editSegment,
   markSegmentAsReadyToTakeOver,
-  takeOverSegment
+  takeOverSegment,
+  createFormRevisionRequest: createFormRevisionRequest as any, // TODO better typing ?
+  cancelFormRevisionRequest,
+  submitFormRevisionRequestApproval: submitFormRevisionRequestApproval as any,
+  createFormTransporter,
+  updateFormTransporter,
+  deleteFormTransporter
 };
 
 export default Mutation;

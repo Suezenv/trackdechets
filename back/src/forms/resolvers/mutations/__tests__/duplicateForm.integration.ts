@@ -1,64 +1,191 @@
+import { EmitterType, Prisma, Status, UserRole } from "@prisma/client";
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import { Mutation } from "../../../../generated/graphql/types";
-import prisma from "../../../../prisma";
+import { prisma } from "@td/prisma";
 import {
+  companyFactory,
   formFactory,
   formWithTempStorageFactory,
+  siretify,
+  toIntermediaryCompany,
   userWithCompanyFactory
 } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
+import { xDaysAgo } from "../../../../utils";
+import {
+  getFirstTransporter,
+  getFirstTransporterSync
+} from "../../../database";
+import { searchCompany } from "../../../../companies/search";
+import getReadableId from "../../../readableId";
+import {
+  CompanySearchResult,
+  Mutation,
+  MutationCreateFormArgs
+} from "@td/codegen-back";
 
-const DUPLICATE_FORM = `
-  mutation DuplicateForm($id: ID!) {
-    duplicateForm(id: $id) {
+jest.mock("../../../../companies/search");
+
+const CREATE_FORM = `
+  mutation CreateForm($createFormInput: CreateFormInput!) {
+    createForm(createFormInput: $createFormInput) {
       id
     }
   }
 `;
 
+const DUPLICATE_FORM = `
+  mutation DuplicateForm($id: ID!) {
+    duplicateForm(id: $id) {
+      id
+      isDuplicateOf
+      intermediaries {
+        siret
+        name
+      }
+    }
+  }
+`;
+
+const TODAY = new Date();
+const FOUR_DAYS_AGO = xDaysAgo(TODAY, 4);
+
+function sortFn(a: string, b: string) {
+  return a.localeCompare(b);
+}
+
+async function createForm(opt: Partial<Prisma.FormCreateInput> = {}) {
+  const emitter = await userWithCompanyFactory("MEMBER");
+  const transporter = await userWithCompanyFactory("MEMBER", {
+    transporterReceipt: {
+      create: {
+        receiptNumber: "TRANSPORTER-RECEIPT-NUMBER",
+        validityLimit: TODAY.toISOString() as any,
+        department: "TRANSPORTER- RECEIPT-DEPARTMENT"
+      }
+    }
+  });
+  const transporterReceipt = await prisma.transporterReceipt.findUniqueOrThrow({
+    where: { id: transporter.company.transporterReceiptId! }
+  });
+  const recipient = await userWithCompanyFactory("MEMBER");
+  const broker = await userWithCompanyFactory("ADMIN", {
+    brokerReceipt: {
+      create: {
+        receiptNumber: "BROKER-RECEIPT-NUMBER",
+        validityLimit: TODAY.toISOString() as any,
+        department: "BROKER-RECEIPT-DEPARTMENT"
+      }
+    }
+  });
+  const brokerReceipt = await prisma.brokerReceipt.findUniqueOrThrow({
+    where: { id: broker.company.brokerReceiptId! }
+  });
+  const trader = await userWithCompanyFactory("ADMIN", {
+    traderReceipt: {
+      create: {
+        receiptNumber: "TRADER-RECEIPT-NUMBER",
+        validityLimit: TODAY.toISOString() as any,
+        department: "TRADER-RECEIPT-DEPARTMENT"
+      }
+    }
+  });
+
+  const traderReceipt = await prisma.traderReceipt.findUniqueOrThrow({
+    where: { id: trader.company.traderReceiptId! }
+  });
+
+  const form = await formFactory({
+    ownerId: emitter.user.id,
+    opt: {
+      emitterCompanySiret: emitter.company.siret,
+      emitterCompanyName: emitter.company.name,
+      emitterCompanyAddress: emitter.company.address,
+      emitterCompanyContact: emitter.company.contact,
+      emitterCompanyPhone: emitter.company.contactPhone,
+      emitterCompanyMail: emitter.company.contactEmail,
+
+      recipientCompanySiret: recipient.company.siret,
+      recipientCompanyName: recipient.company.name,
+      recipientCompanyAddress: recipient.company.address,
+      recipientCompanyContact: recipient.company.contact,
+      recipientCompanyPhone: recipient.company.contactPhone,
+      recipientCompanyMail: recipient.company.contactEmail,
+      brokerCompanySiret: broker.company.siret,
+      brokerCompanyName: broker.company.name,
+      brokerCompanyAddress: broker.company.address,
+      brokerCompanyContact: broker.company.contact,
+      brokerCompanyPhone: broker.company.contactPhone,
+      brokerCompanyMail: broker.company.contactEmail,
+      brokerReceipt: brokerReceipt.receiptNumber,
+      brokerDepartment: brokerReceipt.department,
+      brokerValidityLimit: brokerReceipt.validityLimit,
+      traderCompanySiret: trader.company.siret,
+      traderCompanyName: trader.company.name,
+      traderCompanyAddress: trader.company.address,
+      traderCompanyContact: trader.company.contact,
+      traderCompanyPhone: trader.company.contactPhone,
+      traderCompanyMail: trader.company.contactEmail,
+      traderReceipt: traderReceipt.receiptNumber,
+      traderDepartment: traderReceipt.department,
+      traderValidityLimit: traderReceipt.validityLimit,
+      transporters: {
+        create: {
+          transporterCompanySiret: transporter.company.siret,
+          transporterCompanyName: transporter.company.name,
+          transporterCompanyAddress: transporter.company.address,
+          transporterCompanyContact: transporter.company.contact,
+          transporterCompanyPhone: transporter.company.contactPhone,
+          transporterCompanyMail: transporter.company.contactEmail,
+          transporterReceipt: transporterReceipt.receiptNumber,
+          transporterDepartment: transporterReceipt.department,
+          transporterValidityLimit: transporterReceipt.validityLimit,
+          transporterNumberPlate: "AB-1234-56",
+          transporterCustomInfo: "T001",
+          number: 1
+        }
+      },
+      ...opt
+    }
+  });
+
+  return {
+    form,
+    emitter,
+    transporter,
+    recipient,
+    broker,
+    trader,
+    transporterReceipt
+  };
+}
+
 describe("Mutation.duplicateForm", () => {
   afterEach(() => resetDatabase());
 
-  it.each([
-    [
-      "",
-      {
-        transporterNumberPlate: "AB-1234-56",
-        transporterCustomInfo: "T001"
-      }
-    ],
-    [
-      "with an eco-organisme",
-      {
-        ecoOrganismeName: "COREPILE",
-        ecoOrganismeSiret: "12345678912345"
-      }
-    ]
-  ])("should duplicate a form %s", async (_, opt) => {
-    const { user, company } = await userWithCompanyFactory("MEMBER");
+  it("should duplicate a form", async () => {
+    const { form, emitter } = await createForm({
+      ecoOrganismeName: "COREPILE",
+      ecoOrganismeSiret: siretify(1)
+    });
+
     const {
       id,
-      nextDestinationProcessingOperation,
-      nextDestinationCompanyName,
-      nextDestinationCompanySiret,
-      nextDestinationCompanyAddress,
-      nextDestinationCompanyCountry,
-      nextDestinationCompanyContact,
-      nextDestinationCompanyPhone,
-      nextDestinationCompanyMail,
       emitterType,
       emitterPickupSite,
-      emitterWorkSiteName,
-      emitterWorkSiteAddress,
-      emitterWorkSiteCity,
-      emitterWorkSitePostalCode,
-      emitterWorkSiteInfos,
+      emitterIsPrivateIndividual,
+      emitterIsForeignShip,
       emitterCompanyName,
       emitterCompanySiret,
       emitterCompanyAddress,
       emitterCompanyContact,
       emitterCompanyPhone,
       emitterCompanyMail,
+      emitterCompanyOmiNumber,
+      emitterWorkSiteName,
+      emitterWorkSiteAddress,
+      emitterWorkSiteCity,
+      emitterWorkSitePostalCode,
+      emitterWorkSiteInfos,
       recipientCap,
       recipientProcessingOperation,
       recipientCompanyName,
@@ -67,26 +194,20 @@ describe("Mutation.duplicateForm", () => {
       recipientCompanyContact,
       recipientCompanyPhone,
       recipientCompanyMail,
-      transporterCompanyName,
-      transporterCompanySiret,
-      transporterCompanyAddress,
-      transporterCompanyContact,
-      transporterCompanyPhone,
-      transporterCompanyMail,
-      transporterIsExemptedOfReceipt,
-      transporterReceipt,
-      transporterDepartment,
-      transporterValidityLimit,
+      recipientIsTempStorage,
       wasteDetailsCode,
-      wasteDetailsName,
+      wasteDetailsPackagingInfos,
       wasteDetailsOnuCode,
-      wasteDetailsPackagings,
-      wasteDetailsOtherPackaging,
-      wasteDetailsNumberOfPackages,
       wasteDetailsQuantity,
       wasteDetailsQuantityType,
-      wasteDetailsConsistence,
       wasteDetailsPop,
+      wasteDetailsIsDangerous,
+      wasteDetailsParcelNumbers,
+      wasteDetailsAnalysisReferences,
+      wasteDetailsLandIdentifiers,
+      wasteDetailsName,
+      wasteDetailsConsistence,
+      wasteDetailsSampleNumber,
       traderCompanyName,
       traderCompanySiret,
       traderCompanyAddress,
@@ -96,18 +217,125 @@ describe("Mutation.duplicateForm", () => {
       traderReceipt,
       traderDepartment,
       traderValidityLimit,
+      brokerCompanyName,
+      brokerCompanySiret,
+      brokerCompanyAddress,
+      brokerCompanyContact,
+      brokerCompanyPhone,
+      brokerCompanyMail,
+      brokerReceipt,
+      brokerDepartment,
+      brokerValidityLimit,
       ecoOrganismeName,
       ecoOrganismeSiret,
-      nextTransporterSiret
-    } = await formFactory({
-      ownerId: user.id,
-      opt: {
-        emitterCompanySiret: company.siret,
-        ...opt
-      }
-    });
+      wasteDetailsIsSubjectToADR,
+      isDirectSupply,
+      ...rest
+    } = form;
 
-    const { mutate } = makeClient(user);
+    const transporter = await getFirstTransporter({ id });
+
+    const {
+      transporterCompanyName,
+      transporterCompanySiret,
+      transporterCompanyAddress,
+      transporterCompanyContact,
+      transporterCompanyPhone,
+      transporterCompanyMail,
+      transporterCompanyVatNumber,
+      transporterReceipt,
+      transporterDepartment,
+      transporterValidityLimit,
+      transporterTransportMode,
+      transporterIsExemptedOfReceipt,
+      number,
+      ...restTransporter
+    } = transporter!;
+
+    const expectedSkipped = [
+      "createdAt",
+      "updatedAt",
+      "rowNumber",
+      "readableId",
+      "status",
+      "isDuplicateOf",
+      "emittedBy",
+      "emittedAt",
+      "emittedByEcoOrganisme",
+      "takenOverBy",
+      "takenOverAt",
+      "sentAt",
+      "sentBy",
+      "isAccepted",
+      "receivedAt",
+      "quantityReceived",
+      "quantityRefused",
+      "quantityReceivedType",
+      "processingOperationDone",
+      "isDeleted",
+      "receivedBy",
+      "processedBy",
+      "processedAt",
+      "nextDestinationProcessingOperation",
+      "processingOperationDescription",
+      "noTraceability",
+      "signedByTransporter",
+      "customId",
+      "wasteAcceptationStatus",
+      "wasteRefusalReason",
+      "nextDestinationCompanyName",
+      "nextDestinationCompanySiret",
+      "nextDestinationCompanyAddress",
+      "nextDestinationCompanyContact",
+      "nextDestinationCompanyPhone",
+      "nextDestinationCompanyMail",
+      "nextDestinationCompanyCountry",
+      "nextDestinationCompanyVatNumber",
+      "nextDestinationCompanyExtraEuropeanId",
+      "nextDestinationNotificationNumber",
+      "signedAt",
+      "currentTransporterOrgId",
+      "nextTransporterOrgId",
+      "isImportedFromPaper",
+      "signedBy",
+      "ownerId",
+      "forwardedInId",
+      "recipientsSirets",
+      "transportersSirets",
+      "intermediariesSirets",
+      "canAccessDraftSirets",
+      "forwardedIn",
+      "destinationOperationMode",
+      "quantityGrouped",
+      "citerneNotWashedOutReason",
+      "hasCiterneBeenWashedOut",
+      "emptyReturnADR",
+      "wasteDetailsNonRoadRegulationMention"
+    ];
+
+    const expectedSkippedTransporter = [
+      "createdAt",
+      "updatedAt",
+      "formId",
+      "id",
+      "transporterNumberPlate",
+      "previousTransporterCompanyOrgId",
+      "readyToTakeOver",
+      "takenOverAt",
+      "takenOverBy",
+      "transporterCustomInfo"
+    ];
+
+    // make sure this test breaks when a new field is added to the Form model
+    // it will ensure we think of adding necessary fields to the duplicate input
+    expect(Object.keys(rest).sort(sortFn)).toEqual(
+      expectedSkipped.sort(sortFn)
+    );
+    expect(Object.keys(restTransporter).sort(sortFn)).toEqual(
+      expectedSkippedTransporter.sort(sortFn)
+    );
+
+    const { mutate } = makeClient(emitter.user);
     const { data } = await mutate<Pick<Mutation, "duplicateForm">>(
       DUPLICATE_FORM,
       {
@@ -116,82 +344,57 @@ describe("Mutation.duplicateForm", () => {
         }
       }
     );
+
+    expect(data.duplicateForm.isDuplicateOf).toEqual(form.readableId);
+
     const duplicatedForm = await prisma.form.findUnique({
-      where: { id: data.duplicateForm.id }
+      where: { id: data.duplicateForm.id },
+      include: { transporters: true }
     });
 
+    const duplicatedTransporter = await getFirstTransporter(duplicatedForm!);
+
     expect(duplicatedForm).toMatchObject({
-      customId: null,
-      isDeleted: false,
-      isImportedFromPaper: false,
-      signedByTransporter: null,
-      status: "DRAFT",
-      sentAt: null,
-      sentBy: null,
-      isAccepted: false,
-      wasteAcceptationStatus: null,
-      wasteRefusalReason: null,
-      receivedBy: null,
-      receivedAt: null,
-      signedAt: null,
-      quantityReceived: null,
-      processedBy: null,
-      processedAt: null,
-      processingOperationDone: null,
-      processingOperationDescription: null,
-      noTraceability: null,
-      nextDestinationProcessingOperation,
-      nextDestinationCompanyName,
-      nextDestinationCompanySiret,
-      nextDestinationCompanyAddress,
-      nextDestinationCompanyCountry,
-      nextDestinationCompanyContact,
-      nextDestinationCompanyPhone,
-      nextDestinationCompanyMail,
+      isDuplicateOf: form.readableId,
       emitterType,
       emitterPickupSite,
-      emitterWorkSiteName,
-      emitterWorkSiteAddress,
-      emitterWorkSiteCity,
-      emitterWorkSitePostalCode,
-      emitterWorkSiteInfos,
+      emitterIsPrivateIndividual,
+      emitterIsForeignShip,
       emitterCompanyName,
       emitterCompanySiret,
       emitterCompanyAddress,
       emitterCompanyContact,
       emitterCompanyPhone,
       emitterCompanyMail,
+      emitterCompanyOmiNumber,
+      emitterWorkSiteName,
+      emitterWorkSiteAddress,
+      emitterWorkSiteCity,
+      emitterWorkSitePostalCode,
+      emitterWorkSiteInfos,
       recipientCap,
       recipientProcessingOperation,
-      recipientIsTempStorage: false,
       recipientCompanyName,
       recipientCompanySiret,
       recipientCompanyAddress,
       recipientCompanyContact,
       recipientCompanyPhone,
       recipientCompanyMail,
-      transporterCompanyName,
-      transporterCompanySiret,
-      transporterCompanyAddress,
-      transporterCompanyContact,
-      transporterCompanyPhone,
-      transporterCompanyMail,
-      transporterIsExemptedOfReceipt,
-      transporterReceipt,
-      transporterDepartment,
-      transporterValidityLimit,
-      transporterNumberPlate: null,
-      transporterCustomInfo: null,
+      recipientIsTempStorage,
       wasteDetailsCode,
-      wasteDetailsName,
-      wasteDetailsOnuCode,
-      wasteDetailsPackagings,
-      wasteDetailsOtherPackaging,
-      wasteDetailsNumberOfPackages,
-      wasteDetailsQuantity,
       wasteDetailsQuantityType,
-      wasteDetailsConsistence,
       wasteDetailsPop,
+      wasteDetailsIsDangerous,
+      wasteDetailsParcelNumbers,
+      wasteDetailsAnalysisReferences,
+      wasteDetailsLandIdentifiers,
+      wasteDetailsName,
+      // [tra-15504] les contenants doivent être dupliqués
+      wasteDetailsPackagingInfos,
+      // [tra-15504] la mention ADR doit être dupliquée
+      wasteDetailsOnuCode,
+      wasteDetailsConsistence,
+      wasteDetailsSampleNumber,
       traderCompanyName,
       traderCompanySiret,
       traderCompanyAddress,
@@ -201,49 +404,55 @@ describe("Mutation.duplicateForm", () => {
       traderReceipt,
       traderDepartment,
       traderValidityLimit,
+      brokerCompanyName,
+      brokerCompanySiret,
+      brokerCompanyAddress,
+      brokerCompanyContact,
+      brokerCompanyPhone,
+      brokerCompanyMail,
+      brokerReceipt,
+      brokerDepartment,
+      brokerValidityLimit,
       ecoOrganismeName,
       ecoOrganismeSiret,
-      currentTransporterSiret: null,
-      nextTransporterSiret
+      wasteDetailsIsSubjectToADR,
+      isDirectSupply
     });
-  });
 
-  it("should duplicate the temporary storage detail", async () => {
-    const { user, company } = await userWithCompanyFactory("MEMBER");
-    const form = await formWithTempStorageFactory({
-      ownerId: user.id,
-      opt: { emitterCompanySiret: company.siret }
-    });
-    const {
-      destinationCompanyName,
-      destinationCompanySiret,
-      destinationCompanyAddress,
-      destinationCompanyContact,
-      destinationCompanyPhone,
-      destinationCompanyMail,
-      destinationCap,
-      destinationProcessingOperation,
-      wasteDetailsOnuCode,
-      wasteDetailsPackagings,
-      wasteDetailsOtherPackaging,
-      wasteDetailsNumberOfPackages,
-      wasteDetailsQuantity,
-      wasteDetailsQuantityType,
+    expect(duplicatedTransporter).toMatchObject({
+      number,
       transporterCompanyName,
       transporterCompanySiret,
       transporterCompanyAddress,
       transporterCompanyContact,
       transporterCompanyPhone,
       transporterCompanyMail,
-      transporterIsExemptedOfReceipt,
+      transporterCompanyVatNumber,
       transporterReceipt,
       transporterDepartment,
-      transporterValidityLimit
-    } = await prisma.form
-      .findUnique({ where: { id: form.id } })
-      .temporaryStorageDetail();
+      transporterValidityLimit,
+      transporterTransportMode,
+      transporterIsExemptedOfReceipt,
+      readyToTakeOver: true
+    });
+  });
 
-    const { mutate } = makeClient(user);
+  it("should migrate parcel numbers", async () => {
+    const { form, emitter } = await createForm({
+      wasteDetailsParcelNumbers: [
+        {
+          x: null,
+          y: null,
+          city: "Toulon",
+          number: "345",
+          prefix: "123",
+          section: "45",
+          postalCode: "83000"
+        }
+      ]
+    });
+
+    const { mutate } = makeClient(emitter.user);
     const { data } = await mutate<Pick<Mutation, "duplicateForm">>(
       DUPLICATE_FORM,
       {
@@ -252,55 +461,243 @@ describe("Mutation.duplicateForm", () => {
         }
       }
     );
+
     const duplicatedForm = await prisma.form.findUnique({
       where: { id: data.duplicateForm.id }
     });
-    const duplicatedTemporaryStorageDetail = await prisma.form
-      .findUnique({
-        where: {
-          id: duplicatedForm.id
+
+    expect(duplicatedForm?.wasteDetailsParcelNumbers).toMatchObject([
+      {
+        city: "Toulon",
+        number: "345",
+        inseeCode: "83000",
+        prefix: "123",
+        section: "45",
+        x: null,
+        y: null
+      }
+    ]);
+  });
+
+  it("should duplicate the temporary storage detail", async () => {
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+    const ttr = await companyFactory();
+    const destination = await companyFactory();
+    const form = await formWithTempStorageFactory({
+      ownerId: user.id,
+      opt: { emitterCompanySiret: company.siret },
+      forwardedInOpts: {
+        emitterCompanySiret: ttr.siret,
+        emitterCompanyName: ttr.name,
+        emitterCompanyAddress: ttr.address,
+        emitterCompanyContact: ttr.contact,
+        emitterCompanyPhone: ttr.contactPhone,
+        emitterCompanyMail: ttr.contactEmail,
+        recipientCompanySiret: destination.siret,
+        recipientCompanyName: destination.name,
+        recipientCompanyAddress: destination.address,
+        recipientCompanyContact: destination.contact,
+        recipientCompanyPhone: destination.contactPhone,
+        recipientCompanyMail: destination.contactEmail
+      }
+    });
+    const forwardedIn = await prisma.form
+      .findUniqueOrThrow({ where: { id: form.id } })
+      .forwardedIn({ include: { transporters: true } });
+    const {
+      emitterType,
+      emitterCompanyName,
+      emitterCompanySiret,
+      emitterCompanyAddress,
+      emitterCompanyContact,
+      emitterCompanyPhone,
+      emitterCompanyMail,
+      recipientCap,
+      recipientProcessingOperation,
+      recipientCompanyName,
+      recipientCompanySiret,
+      recipientCompanyAddress,
+      recipientCompanyContact,
+      recipientCompanyPhone,
+      recipientCompanyMail,
+      wasteDetailsCode,
+      wasteDetailsPackagingInfos,
+      wasteDetailsPop,
+      wasteDetailsIsDangerous,
+      wasteDetailsName,
+      wasteDetailsConsistence,
+      ...rest
+    } = forwardedIn ?? {};
+
+    const { mutate } = makeClient(user);
+    const { data, errors } = await mutate<Pick<Mutation, "duplicateForm">>(
+      DUPLICATE_FORM,
+      {
+        variables: {
+          id: form.id
         }
-      })
-      .temporaryStorageDetail();
+      }
+    );
+
+    expect(errors).toBeUndefined();
+
+    const duplicatedForm = await prisma.form.findUniqueOrThrow({
+      where: { id: data.duplicateForm.id }
+    });
+    const {
+      transporters: duplicatedForwardedInTransporters,
+      ...duplicatedForwardedIn
+    } =
+      (await prisma.form
+        .findUniqueOrThrow({
+          where: {
+            id: duplicatedForm.id
+          }
+        })
+        .forwardedIn({ include: { transporters: true } })) ?? {};
 
     expect(duplicatedForm.recipientIsTempStorage).toBe(true);
-    expect(duplicatedTemporaryStorageDetail).toMatchObject({
-      tempStorerQuantityType: null,
-      tempStorerQuantityReceived: null,
-      tempStorerWasteAcceptationStatus: null,
-      tempStorerWasteRefusalReason: null,
-      tempStorerReceivedAt: null,
-      tempStorerReceivedBy: null,
-      tempStorerSignedAt: null,
-      destinationCompanyName,
-      destinationCompanySiret,
-      destinationCompanyAddress,
-      destinationCompanyContact,
-      destinationCompanyPhone,
-      destinationCompanyMail,
-      destinationCap,
-      destinationProcessingOperation,
-      wasteDetailsOnuCode,
-      wasteDetailsPackagings,
-      wasteDetailsOtherPackaging,
-      wasteDetailsNumberOfPackages,
-      wasteDetailsQuantity,
-      wasteDetailsQuantityType,
-      transporterCompanyName,
-      transporterCompanySiret,
-      transporterCompanyAddress,
-      transporterCompanyContact,
-      transporterCompanyPhone,
-      transporterCompanyMail,
-      transporterIsExemptedOfReceipt,
-      transporterReceipt,
-      transporterDepartment,
-      transporterValidityLimit,
-      transporterNumberPlate: null,
+    // transporter after temp storage should not be duplicated
+    expect(duplicatedForwardedInTransporters).toEqual([]);
+    expect(duplicatedForwardedIn).toMatchObject({
+      readableId: `${duplicatedForm.readableId}-suite`,
+      emitterType,
+      emitterCompanyName,
+      emitterCompanySiret,
+      emitterCompanyAddress,
+      emitterCompanyContact,
+      emitterCompanyPhone,
+      emitterCompanyMail,
+      recipientCap,
+      recipientProcessingOperation,
+      recipientCompanyName,
+      recipientCompanySiret,
+      recipientCompanyAddress,
+      recipientCompanyContact,
+      recipientCompanyPhone,
+      recipientCompanyMail,
+      wasteDetailsCode,
+      wasteDetailsPackagingInfos,
+      wasteDetailsPop,
+      wasteDetailsIsDangerous,
+      wasteDetailsName,
+      wasteDetailsConsistence,
+      quantityReceived: null,
+      wasteAcceptationStatus: null,
+      wasteRefusalReason: null,
+      receivedAt: null,
+      receivedBy: null,
+      signedAt: null,
       signedByTransporter: null,
-      signedBy: null,
-      signedAt: null
+      signedBy: null
     });
+
+    const expectedSkipped = [
+      "id",
+      "createdAt",
+      "updatedAt",
+      "rowNumber",
+      "readableId",
+      "status",
+      "isDuplicateOf",
+      "recipientIsTempStorage",
+      "emitterCompanyOmiNumber",
+      "emitterIsForeignShip",
+      "emitterIsPrivateIndividual",
+      "emitterPickupSite",
+      "emitterWorkSiteAddress",
+      "emitterWorkSiteCity",
+      "emitterWorkSiteInfos",
+      "emitterWorkSiteName",
+      "emitterWorkSitePostalCode",
+      "traderCompanyAddress",
+      "traderCompanyContact",
+      "traderCompanyMail",
+      "traderCompanyName",
+      "traderCompanyPhone",
+      "traderCompanySiret",
+      "traderDepartment",
+      "traderReceipt",
+      "traderValidityLimit",
+      "wasteDetailsAnalysisReferences",
+      "wasteDetailsLandIdentifiers",
+      "wasteDetailsParcelNumbers",
+      "wasteDetailsQuantity",
+      "wasteDetailsQuantityType",
+      "wasteDetailsSampleNumber",
+      "wasteDetailsIsSubjectToADR",
+      "wasteDetailsNonRoadRegulationMention",
+      "emittedBy",
+      "emittedAt",
+      "emittedByEcoOrganisme",
+      "takenOverBy",
+      "takenOverAt",
+      "sentAt",
+      "sentBy",
+      "isAccepted",
+      "receivedAt",
+      "quantityReceived",
+      "quantityRefused",
+      "quantityReceivedType",
+      "processingOperationDone",
+      "isDeleted",
+      "receivedBy",
+      "processedBy",
+      "processedAt",
+      "nextDestinationProcessingOperation",
+      "processingOperationDescription",
+      "noTraceability",
+      "signedByTransporter",
+      "customId",
+      "wasteAcceptationStatus",
+      "wasteRefusalReason",
+      "nextDestinationCompanyName",
+      "nextDestinationCompanySiret",
+      "nextDestinationCompanyAddress",
+      "nextDestinationCompanyContact",
+      "nextDestinationCompanyPhone",
+      "nextDestinationCompanyMail",
+      "nextDestinationCompanyCountry",
+      "nextDestinationCompanyVatNumber",
+      "nextDestinationCompanyExtraEuropeanId",
+      "nextDestinationNotificationNumber",
+      "signedAt",
+      "currentTransporterOrgId",
+      "nextTransporterOrgId",
+      "isImportedFromPaper",
+      "signedBy",
+      "ownerId",
+      "forwardedInId",
+      "recipientsSirets",
+      "transportersSirets",
+      "intermediariesSirets",
+      "canAccessDraftSirets",
+      "brokerCompanyAddress",
+      "brokerCompanyContact",
+      "brokerCompanyMail",
+      "brokerCompanyName",
+      "brokerCompanyPhone",
+      "brokerCompanySiret",
+      "brokerDepartment",
+      "brokerReceipt",
+      "brokerValidityLimit",
+      "ecoOrganismeName",
+      "ecoOrganismeSiret",
+      "transporters",
+      "destinationOperationMode",
+      "quantityGrouped",
+      "citerneNotWashedOutReason",
+      "hasCiterneBeenWashedOut",
+      "emptyReturnADR",
+      "wasteDetailsOnuCode",
+      "isDirectSupply"
+    ];
+
+    // make sure this test breaks when a new field is added to the Form model
+    // it will ensure we think of adding necessary fields to the duplicate forwardedIn input
+    expect(Object.keys(rest).sort(sortFn)).toEqual(
+      expectedSkipped.sort(sortFn)
+    );
   });
 
   it("should create a status log", async () => {
@@ -331,5 +728,765 @@ describe("Mutation.duplicateForm", () => {
 
     expect(statusLogs.length).toEqual(1);
     expect(statusLogs[0].loggedAt).toBeTruthy();
+  });
+
+  it("should duplicate the intermediary company", async () => {
+    const { user, company } = await userWithCompanyFactory(UserRole.MEMBER);
+    const intermediary = await userWithCompanyFactory(UserRole.MEMBER);
+    const form = await formFactory({
+      ownerId: user.id,
+      opt: {
+        emitterCompanySiret: company.siret,
+        intermediaries: {
+          create: [toIntermediaryCompany(intermediary.company)]
+        }
+      }
+    });
+
+    const { mutate } = makeClient(user);
+    const { data } = await mutate<Pick<Mutation, "duplicateForm">>(
+      DUPLICATE_FORM,
+      {
+        variables: {
+          id: form.id
+        }
+      }
+    );
+
+    expect(data.duplicateForm.intermediaries).toEqual([
+      expect.objectContaining({
+        name: intermediary.company.name,
+        siret: intermediary.company.siret
+      })
+    ]);
+  });
+
+  it("should not duplicate nextDestination info", async () => {
+    const { user, company } = await userWithCompanyFactory(UserRole.MEMBER);
+    const nextDestination = await companyFactory();
+    const form = await formFactory({
+      ownerId: user.id,
+      opt: {
+        emitterCompanySiret: company.siret,
+        nextDestinationProcessingOperation: "R 2",
+        nextDestinationCompanySiret: nextDestination.siret,
+        nextDestinationCompanyName: nextDestination.name,
+        nextDestinationCompanyAddress: nextDestination.address,
+        nextDestinationCompanyContact: "John Snow",
+        nextDestinationCompanyCountry: "FR",
+        nextDestinationCompanyMail: "john.snow@trackdechets.fr",
+        nextDestinationCompanyPhone: "00 00 00 00 00",
+        nextDestinationCompanyVatNumber: "FRXX"
+      }
+    });
+    const { mutate } = makeClient(user);
+    const { data } = await mutate<Pick<Mutation, "duplicateForm">>(
+      DUPLICATE_FORM,
+      {
+        variables: {
+          id: form.id
+        }
+      }
+    );
+    const duplicatedForm = await prisma.form.findUniqueOrThrow({
+      where: { id: data.duplicateForm.id }
+    });
+    expect(duplicatedForm.nextDestinationProcessingOperation).toBeNull();
+    expect(duplicatedForm.nextDestinationCompanySiret).toBeNull();
+    expect(duplicatedForm.nextDestinationCompanyName).toBeNull();
+    expect(duplicatedForm.nextDestinationCompanyAddress).toBeNull();
+    expect(duplicatedForm.nextDestinationCompanyContact).toBeNull();
+    expect(duplicatedForm.nextDestinationCompanyCountry).toBeNull();
+    expect(duplicatedForm.nextDestinationCompanyMail).toBeNull();
+    expect(duplicatedForm.nextDestinationCompanyPhone).toBeNull();
+    expect(duplicatedForm.nextDestinationCompanyVatNumber).toBeNull();
+  });
+
+  it("should duplicate nulling transporter receipt when it was emptied", async () => {
+    const { form, transporterReceipt, emitter } = await createForm();
+    const { mutate } = makeClient(emitter.user);
+    await prisma.transporterReceipt.delete({
+      where: { id: transporterReceipt.id }
+    });
+    const { data } = await mutate<Pick<Mutation, "duplicateForm">>(
+      DUPLICATE_FORM,
+      {
+        variables: {
+          id: form.id
+        }
+      }
+    );
+    const duplicatedForm = await prisma.form.findUniqueOrThrow({
+      where: { id: data.duplicateForm.id }
+    });
+    const firstDuplicatedTransporter = await getFirstTransporter(
+      duplicatedForm
+    );
+    expect(firstDuplicatedTransporter?.transporterReceipt).toBeNull();
+    expect(firstDuplicatedTransporter?.transporterDepartment).toBeNull();
+    expect(firstDuplicatedTransporter?.transporterValidityLimit).toBeNull();
+  });
+
+  test("duplicated BSDD should have the updated data when company info changes", async () => {
+    const { form, emitter, transporter, recipient, trader, broker } =
+      await createForm();
+
+    await prisma.company.update({
+      where: { id: emitter.company.id },
+      data: {
+        name: "UPDATED-EMITTER-NAME",
+        address: "UPDATED-EMITTER-ADDRESS",
+        contact: "UPDATED-EMITTER-CONTACT",
+        contactPhone: "UPDATED-EMITTER-PHONE",
+        contactEmail: "UPDATED-EMITTER-MAIL"
+      }
+    });
+
+    await prisma.company.update({
+      where: { id: transporter.company.id },
+      data: {
+        name: "UPDATED-TRANSPORTER-NAME",
+        address: "UPDATED-TRANSPORTER-ADDRESS",
+        contact: "UPDATED-TRANSPORTER-CONTACT",
+        contactPhone: "UPDATED-TRANSPORTER-PHONE",
+        contactEmail: "UPDATED-TRANSPORTER-MAIL"
+      }
+    });
+
+    await prisma.transporterReceipt.update({
+      where: { id: transporter.company.transporterReceiptId! },
+      data: {
+        receiptNumber: "UPDATED-TRANSPORTER-RECEIPT-NUMBER",
+        validityLimit: FOUR_DAYS_AGO.toISOString(),
+        department: "UPDATED-TRANSPORTER-RECEIPT-DEPARTMENT"
+      }
+    });
+
+    await prisma.company.update({
+      where: { id: recipient.company.id },
+      data: {
+        name: "UPDATED-RECIPIENT-NAME",
+        address: "UPDATED-RECIPIENT-ADDRESS",
+        contact: "UPDATED-RECIPIENT-CONTACT",
+        contactPhone: "UPDATED-RECIPIENT-PHONE",
+        contactEmail: "UPDATED-RECIPIENT-MAIL"
+      }
+    });
+
+    await prisma.company.update({
+      where: { id: trader.company.id },
+      data: {
+        name: "UPDATED-TRADER-NAME",
+        address: "UPDATED-TRADER-ADDRESS",
+        contact: "UPDATED-TRADER-CONTACT",
+        contactPhone: "UPDATED-TRADER-PHONE",
+        contactEmail: "UPDATED-TRADER-MAIL"
+      }
+    });
+
+    await prisma.traderReceipt.update({
+      where: { id: trader.company.traderReceiptId! },
+      data: {
+        receiptNumber: "UPDATED-TRADER-RECEIPT-NUMBER",
+        validityLimit: FOUR_DAYS_AGO.toISOString(),
+        department: "UPDATED-TRADER-RECEIPT-DEPARTMENT"
+      }
+    });
+
+    await prisma.company.update({
+      where: { id: broker.company.id },
+      data: {
+        name: "UPDATED-BROKER-NAME",
+        address: "UPDATED-BROKER-ADDRESS",
+        contact: "UPDATED-BROKER-CONTACT",
+        contactPhone: "UPDATED-BROKER-PHONE",
+        contactEmail: "UPDATED-BROKER-MAIL"
+      }
+    });
+
+    await prisma.brokerReceipt.update({
+      where: { id: broker.company.brokerReceiptId! },
+      data: {
+        receiptNumber: "UPDATED-BROKER-RECEIPT-NUMBER",
+        validityLimit: FOUR_DAYS_AGO.toISOString(),
+        department: "UPDATED-BROKER-RECEIPT-DEPARTMENT"
+      }
+    });
+
+    // No SIRENE data, just return DB objects
+    (searchCompany as jest.Mock).mockImplementation(async (clue: string) => {
+      const company = await prisma.company.findFirstOrThrow({
+        where: { orgId: clue },
+        include: {
+          transporterReceipt: true,
+          brokerReceipt: true,
+          workerCertification: true
+        }
+      });
+
+      return {
+        name: company.name,
+        address: company.address,
+        statutDiffusionEtablissement: "O"
+      } as CompanySearchResult;
+    });
+
+    const { mutate } = makeClient(emitter.user);
+    const { data } = await mutate<Pick<Mutation, "duplicateForm">>(
+      DUPLICATE_FORM,
+      {
+        variables: {
+          id: form.id
+        }
+      }
+    );
+    const duplicatedForm = await prisma.form.findUniqueOrThrow({
+      where: { id: data.duplicateForm.id },
+      include: { transporters: true }
+    });
+
+    const duplicatedTransporter = getFirstTransporterSync(duplicatedForm);
+
+    expect(duplicatedForm.emitterCompanyName).toEqual("UPDATED-EMITTER-NAME");
+    expect(duplicatedForm.emitterCompanyAddress).toEqual(
+      "UPDATED-EMITTER-ADDRESS"
+    );
+    expect(duplicatedForm.emitterCompanyContact).toEqual(
+      "UPDATED-EMITTER-CONTACT"
+    );
+    expect(duplicatedForm.emitterCompanyMail).toEqual("UPDATED-EMITTER-MAIL");
+    expect(duplicatedForm.emitterCompanyPhone).toEqual("UPDATED-EMITTER-PHONE");
+
+    expect(duplicatedTransporter?.transporterCompanyName).toEqual(
+      "UPDATED-TRANSPORTER-NAME"
+    );
+    expect(duplicatedTransporter?.transporterCompanyAddress).toEqual(
+      "UPDATED-TRANSPORTER-ADDRESS"
+    );
+    expect(duplicatedTransporter?.transporterCompanyContact).toEqual(
+      "UPDATED-TRANSPORTER-CONTACT"
+    );
+    expect(duplicatedTransporter?.transporterCompanyMail).toEqual(
+      "UPDATED-TRANSPORTER-MAIL"
+    );
+    expect(duplicatedTransporter?.transporterCompanyPhone).toEqual(
+      "UPDATED-TRANSPORTER-PHONE"
+    );
+
+    expect(duplicatedTransporter?.transporterReceipt).toEqual(
+      "UPDATED-TRANSPORTER-RECEIPT-NUMBER"
+    );
+    expect(duplicatedTransporter?.transporterValidityLimit).toEqual(
+      FOUR_DAYS_AGO
+    );
+    expect(duplicatedTransporter?.transporterDepartment).toEqual(
+      "UPDATED-TRANSPORTER-RECEIPT-DEPARTMENT"
+    );
+
+    expect(duplicatedForm.recipientCompanyName).toEqual(
+      "UPDATED-RECIPIENT-NAME"
+    );
+    expect(duplicatedForm.recipientCompanyAddress).toEqual(
+      "UPDATED-RECIPIENT-ADDRESS"
+    );
+    expect(duplicatedForm.recipientCompanyContact).toEqual(
+      "UPDATED-RECIPIENT-CONTACT"
+    );
+    expect(duplicatedForm.recipientCompanyMail).toEqual(
+      "UPDATED-RECIPIENT-MAIL"
+    );
+    expect(duplicatedForm.recipientCompanyPhone).toEqual(
+      "UPDATED-RECIPIENT-PHONE"
+    );
+    expect(duplicatedForm.recipientCompanyPhone).toEqual(
+      "UPDATED-RECIPIENT-PHONE"
+    );
+
+    expect(duplicatedForm.traderCompanyName).toEqual("UPDATED-TRADER-NAME");
+    expect(duplicatedForm.traderCompanyAddress).toEqual(
+      "UPDATED-TRADER-ADDRESS"
+    );
+    expect(duplicatedForm.traderCompanyContact).toEqual(
+      "UPDATED-TRADER-CONTACT"
+    );
+    expect(duplicatedForm.traderCompanyMail).toEqual("UPDATED-TRADER-MAIL");
+    expect(duplicatedForm.traderCompanyPhone).toEqual("UPDATED-TRADER-PHONE");
+
+    expect(duplicatedForm.traderReceipt).toEqual(
+      "UPDATED-TRADER-RECEIPT-NUMBER"
+    );
+    expect(duplicatedForm.traderValidityLimit).toEqual(FOUR_DAYS_AGO);
+    expect(duplicatedForm.traderDepartment).toEqual(
+      "UPDATED-TRADER-RECEIPT-DEPARTMENT"
+    );
+
+    expect(duplicatedForm.brokerCompanyName).toEqual("UPDATED-BROKER-NAME");
+    expect(duplicatedForm.brokerCompanyAddress).toEqual(
+      "UPDATED-BROKER-ADDRESS"
+    );
+    expect(duplicatedForm.brokerCompanyContact).toEqual(
+      "UPDATED-BROKER-CONTACT"
+    );
+    expect(duplicatedForm.brokerCompanyMail).toEqual("UPDATED-BROKER-MAIL");
+    expect(duplicatedForm.brokerCompanyPhone).toEqual("UPDATED-BROKER-PHONE");
+
+    expect(duplicatedForm.brokerReceipt).toEqual(
+      "UPDATED-BROKER-RECEIPT-NUMBER"
+    );
+    expect(duplicatedForm.brokerValidityLimit).toEqual(FOUR_DAYS_AGO);
+    expect(duplicatedForm.brokerDepartment).toEqual(
+      "UPDATED-BROKER-RECEIPT-DEPARTMENT"
+    );
+  });
+
+  test(
+    "duplicated BSDD with temp storage should have updated data" +
+      " in temp storage detail when company info changes",
+    async () => {
+      const { user, company } = await userWithCompanyFactory("MEMBER");
+      const ttr = await companyFactory();
+      const destination = await companyFactory();
+      const form = await formWithTempStorageFactory({
+        ownerId: user.id,
+        opt: { emitterCompanySiret: company.siret },
+        forwardedInOpts: {
+          emitterCompanySiret: ttr.siret,
+          emitterCompanyName: ttr.name,
+          emitterCompanyAddress: ttr.address,
+          emitterCompanyContact: ttr.contact,
+          emitterCompanyPhone: ttr.contactPhone,
+          emitterCompanyMail: ttr.contactEmail,
+          recipientCompanySiret: destination.siret,
+          recipientCompanyName: destination.name,
+          recipientCompanyAddress: destination.address,
+          recipientCompanyContact: destination.contact,
+          recipientCompanyPhone: destination.contactPhone,
+          recipientCompanyMail: destination.contactEmail
+        }
+      });
+      const { mutate } = makeClient(user);
+
+      await prisma.company.update({
+        where: { id: ttr.id },
+        data: {
+          name: "UPDATED-TTR-NAME",
+          address: "UPDATED-TTR-ADDRESS",
+          contact: "UPDATED-TTR-CONTACT",
+          contactPhone: "UPDATED-TTR-PHONE",
+          contactEmail: "UPDATED-TTR-MAIL"
+        }
+      });
+
+      await prisma.company.update({
+        where: { id: destination.id },
+        data: {
+          name: "UPDATED-DESTINATION-NAME",
+          address: "UPDATED-DESTINATION-ADDRESS",
+          contact: "UPDATED-DESTINATION-CONTACT",
+          contactPhone: "UPDATED-DESTINATION-PHONE",
+          contactEmail: "UPDATED-DESTINATION-MAIL"
+        }
+      });
+
+      const { data } = await mutate<Pick<Mutation, "duplicateForm">>(
+        DUPLICATE_FORM,
+        {
+          variables: {
+            id: form.id
+          }
+        }
+      );
+      const duplicatedForwardedIn = await prisma.form
+        .findUniqueOrThrow({
+          where: { id: data.duplicateForm.id }
+        })
+        .forwardedIn();
+
+      expect(duplicatedForwardedIn?.emitterCompanyName).toEqual(
+        "UPDATED-TTR-NAME"
+      );
+      expect(duplicatedForwardedIn?.emitterCompanyAddress).toEqual(
+        "UPDATED-TTR-ADDRESS"
+      );
+      expect(duplicatedForwardedIn?.emitterCompanyContact).toEqual(
+        "UPDATED-TTR-CONTACT"
+      );
+      expect(duplicatedForwardedIn?.emitterCompanyPhone).toEqual(
+        "UPDATED-TTR-PHONE"
+      );
+      expect(duplicatedForwardedIn?.emitterCompanyMail).toEqual(
+        "UPDATED-TTR-MAIL"
+      );
+      expect(duplicatedForwardedIn?.recipientCompanyName).toEqual(
+        "UPDATED-DESTINATION-NAME"
+      );
+      expect(duplicatedForwardedIn?.recipientCompanyAddress).toEqual(
+        "UPDATED-DESTINATION-ADDRESS"
+      );
+      expect(duplicatedForwardedIn?.recipientCompanyContact).toEqual(
+        "UPDATED-DESTINATION-CONTACT"
+      );
+      expect(duplicatedForwardedIn?.recipientCompanyPhone).toEqual(
+        "UPDATED-DESTINATION-PHONE"
+      );
+      expect(duplicatedForwardedIn?.recipientCompanyMail).toEqual(
+        "UPDATED-DESTINATION-MAIL"
+      );
+    }
+  );
+
+  test("duplicated BSDD should have the updated SIRENE data when company info changes", async () => {
+    const intermediary1 = await companyFactory();
+    const intermediary2 = await companyFactory();
+    const { form, emitter, transporter, recipient, trader, broker } =
+      await createForm({
+        intermediaries: {
+          createMany: {
+            data: [
+              {
+                name: intermediary1.name,
+                siret: intermediary1.siret ?? "",
+                address: intermediary1.address,
+                contact: intermediary1.contact ?? ""
+              },
+              {
+                name: intermediary2.name,
+                siret: intermediary2.siret ?? "",
+                address: intermediary2.address,
+                contact: intermediary2.contact ?? ""
+              }
+            ]
+          }
+        }
+      });
+
+    function searchResult(companyName: string) {
+      return {
+        name: `updated ${companyName} name`,
+        address: `updated ${companyName} address`,
+        statutDiffusionEtablissement: "O"
+      } as CompanySearchResult;
+    }
+
+    const searchResults = {
+      [emitter.company.siret!]: searchResult("emitter"),
+      [transporter.company.siret!]: searchResult("transporter"),
+      [recipient.company.siret!]: searchResult("recipient"),
+      [trader.company.siret!]: searchResult("trader"),
+      [broker.company.siret!]: searchResult("broker"),
+      [intermediary1.siret!]: searchResult("intermediary1"),
+      [intermediary2.siret!]: searchResult("intermediary2")
+    };
+
+    (searchCompany as jest.Mock).mockImplementation((clue: string) => {
+      return Promise.resolve(searchResults[clue]);
+    });
+
+    const { mutate } = makeClient(emitter.user);
+    const { data, errors } = await mutate<Pick<Mutation, "duplicateForm">>(
+      DUPLICATE_FORM,
+      {
+        variables: {
+          id: form.id
+        }
+      }
+    );
+
+    expect(errors).toBeUndefined();
+
+    const duplicatedForm = await prisma.form.findUniqueOrThrow({
+      where: { id: data.duplicateForm.id },
+      include: { transporters: true, intermediaries: true }
+    });
+
+    const duplicatedTransporter = getFirstTransporterSync(duplicatedForm);
+
+    // Emitter
+    expect(duplicatedForm.emitterCompanyName).toEqual("updated emitter name");
+    expect(duplicatedForm.emitterCompanyAddress).toEqual(
+      "updated emitter address"
+    );
+
+    // Transporter
+    expect(duplicatedTransporter?.transporterCompanyName).toEqual(
+      "updated transporter name"
+    );
+    expect(duplicatedTransporter?.transporterCompanyAddress).toEqual(
+      "updated transporter address"
+    );
+
+    // Recipient
+    expect(duplicatedForm.recipientCompanyName).toEqual(
+      "updated recipient name"
+    );
+    expect(duplicatedForm.recipientCompanyAddress).toEqual(
+      "updated recipient address"
+    );
+
+    // Trader
+    expect(duplicatedForm.traderCompanyName).toEqual("updated trader name");
+    expect(duplicatedForm.traderCompanyAddress).toEqual(
+      "updated trader address"
+    );
+
+    // Broker
+    expect(duplicatedForm.brokerCompanyName).toEqual("updated broker name");
+    expect(duplicatedForm.brokerCompanyAddress).toEqual(
+      "updated broker address"
+    );
+
+    // Intermediaries
+    expect(duplicatedForm.intermediaries[0].name).toEqual(
+      "updated intermediary1 name"
+    );
+    expect(duplicatedForm.intermediaries[0].address).toEqual(
+      "updated intermediary1 address"
+    );
+    expect(duplicatedForm.intermediaries[1].name).toEqual(
+      "updated intermediary2 name"
+    );
+    expect(duplicatedForm.intermediaries[1].address).toEqual(
+      "updated intermediary2 address"
+    );
+  });
+
+  test(
+    "duplicated BSDD with temp storage should have updated data" +
+      " in temp storage detail when company SIRENE info changes",
+    async () => {
+      const { user, company } = await userWithCompanyFactory("MEMBER");
+      const ttr = await companyFactory();
+      const destination = await companyFactory();
+      const form = await formWithTempStorageFactory({
+        ownerId: user.id,
+        opt: { emitterCompanySiret: company.siret },
+        forwardedInOpts: {
+          emitterCompanySiret: ttr.siret,
+          emitterCompanyName: ttr.name,
+          emitterCompanyAddress: ttr.address,
+          emitterCompanyContact: ttr.contact,
+          emitterCompanyPhone: ttr.contactPhone,
+          emitterCompanyMail: ttr.contactEmail,
+          recipientCompanySiret: destination.siret,
+          recipientCompanyName: destination.name,
+          recipientCompanyAddress: destination.address,
+          recipientCompanyContact: destination.contact,
+          recipientCompanyPhone: destination.contactPhone,
+          recipientCompanyMail: destination.contactEmail
+        }
+      });
+      const { mutate } = makeClient(user);
+
+      function searchResult(companyName: string) {
+        return {
+          name: `updated ${companyName} name`,
+          address: `updated ${companyName} address`,
+          statutDiffusionEtablissement: "O"
+        } as CompanySearchResult;
+      }
+
+      const searchResults = {
+        [ttr.siret!]: searchResult("ttr"),
+        [destination.siret!]: searchResult("destination")
+      };
+
+      (searchCompany as jest.Mock).mockImplementation((clue: string) => {
+        return Promise.resolve(searchResults[clue]);
+      });
+
+      const { data } = await mutate<Pick<Mutation, "duplicateForm">>(
+        DUPLICATE_FORM,
+        {
+          variables: {
+            id: form.id
+          }
+        }
+      );
+      const duplicatedForwardedIn = await prisma.form
+        .findUniqueOrThrow({
+          where: { id: data.duplicateForm.id }
+        })
+        .forwardedIn();
+
+      expect(duplicatedForwardedIn?.emitterCompanyName).toEqual(
+        "updated ttr name"
+      );
+      expect(duplicatedForwardedIn?.emitterCompanyAddress).toEqual(
+        "updated ttr address"
+      );
+
+      expect(duplicatedForwardedIn?.recipientCompanyName).toEqual(
+        "updated destination name"
+      );
+      expect(duplicatedForwardedIn?.recipientCompanyAddress).toEqual(
+        "updated destination address"
+      );
+    }
+  );
+
+  it.each([true, false, null])(
+    "should set `wasteDetailsIsSubjectToADR=true` when waste is dangerous " +
+      "and wasteDetailsIsSubjectToADR is %p on the BSDD being duplicated",
+    async wasteDetailsIsSubjectToADR => {
+      const { user, company } = await userWithCompanyFactory(UserRole.MEMBER);
+      const form = await formFactory({
+        ownerId: user.id,
+        opt: {
+          emitterCompanySiret: company.siret,
+          wasteDetailsIsDangerous: true,
+          wasteDetailsIsSubjectToADR
+        }
+      });
+
+      const { mutate } = makeClient(user);
+      const { data } = await mutate<Pick<Mutation, "duplicateForm">>(
+        DUPLICATE_FORM,
+        {
+          variables: {
+            id: form.id
+          }
+        }
+      );
+
+      const duplicatedForm = await prisma.form.findUniqueOrThrow({
+        where: {
+          id: data.duplicateForm.id
+        }
+      });
+
+      expect(duplicatedForm).toEqual(
+        expect.objectContaining({
+          wasteDetailsIsSubjectToADR: true
+        })
+      );
+    }
+  );
+
+  it.each([true, false, null])(
+    "should set `wasteDetailsIsSubjectToADR=true` when waste contains pop " +
+      "and wasteDetailsIsSubjectToADR is %p on the BSDD being duplicated",
+    async wasteDetailsIsSubjectToADR => {
+      const { user, company } = await userWithCompanyFactory(UserRole.MEMBER);
+      const form = await formFactory({
+        ownerId: user.id,
+        opt: {
+          emitterCompanySiret: company.siret,
+          wasteDetailsIsDangerous: false,
+          wasteDetailsPop: true,
+          wasteDetailsIsSubjectToADR
+        }
+      });
+
+      const { mutate } = makeClient(user);
+      const { data } = await mutate<Pick<Mutation, "duplicateForm">>(
+        DUPLICATE_FORM,
+        {
+          variables: {
+            id: form.id
+          }
+        }
+      );
+
+      const duplicatedForm = await prisma.form.findUniqueOrThrow({
+        where: {
+          id: data.duplicateForm.id
+        }
+      });
+
+      expect(duplicatedForm).toEqual(
+        expect.objectContaining({
+          wasteDetailsIsSubjectToADR: true
+        })
+      );
+    }
+  );
+
+  it.each([true, false, null])(
+    "should keep existing wasteDetailsIsSubjectToADR when" +
+      " wasteDetailsIsSubjectToADR is %p and waste is not dangerous",
+    async wasteDetailsIsSubjectToADR => {
+      const { user, company } = await userWithCompanyFactory(UserRole.MEMBER);
+      const form = await formFactory({
+        ownerId: user.id,
+        opt: {
+          emitterCompanySiret: company.siret,
+          wasteDetailsIsDangerous: false,
+          wasteDetailsIsSubjectToADR
+        }
+      });
+
+      const { mutate } = makeClient(user);
+      const { data } = await mutate<Pick<Mutation, "duplicateForm">>(
+        DUPLICATE_FORM,
+        {
+          variables: {
+            id: form.id
+          }
+        }
+      );
+
+      const duplicatedForm = await prisma.form.findUniqueOrThrow({
+        where: {
+          id: data.duplicateForm.id
+        }
+      });
+
+      expect(duplicatedForm).toEqual(
+        expect.objectContaining({
+          wasteDetailsIsSubjectToADR
+        })
+      );
+    }
+  );
+
+  it("should not be possible to duplicate annexe 1", async () => {
+    // Given
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+    const { company: producerCompany } = await userWithCompanyFactory("MEMBER");
+    const { mutate } = makeClient(user);
+
+    const appendix1 = await prisma.form.create({
+      data: {
+        readableId: getReadableId(),
+        status: Status.SEALED,
+        emitterType: EmitterType.APPENDIX1_PRODUCER,
+        emitterCompanySiret: producerCompany.siret,
+        owner: { connect: { id: user.id } }
+      }
+    });
+
+    const { errors } = await mutate<
+      Pick<Mutation, "createForm">,
+      MutationCreateFormArgs
+    >(CREATE_FORM, {
+      variables: {
+        createFormInput: {
+          emitter: {
+            type: "APPENDIX1",
+            company: { siret: company.siret }
+          },
+          transporter: { company: { siret: company.siret } },
+          grouping: [{ form: { id: appendix1.id } }]
+        }
+      }
+    });
+
+    expect(errors).toBeUndefined();
+
+    // When
+    const { errors: errors2 } = await mutate<Pick<Mutation, "duplicateForm">>(
+      DUPLICATE_FORM,
+      {
+        variables: {
+          id: appendix1.id
+        }
+      }
+    );
+
+    // Then
+    expect(errors2).not.toBeUndefined();
+    expect(errors2[0].message).toBe(
+      "Impossible de dupliquer un bordereau d'annexe 1"
+    );
   });
 });

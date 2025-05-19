@@ -1,0 +1,66 @@
+@import "../../../../scss/Breakpoints.scss";
+
+.company-selector {
+  overflow: visible;
+  margin-bottom: 32px;
+}
+
+.company-selector-search {
+  overflow: visible;
+}
+
+.company-selector-results {
+  background-color: white;
+  min-height: 86px;
+}
+
+.company-selector-header {
+  background-color: #f5f5fe;
+  color: #000091;
+  text-transform: uppercase;
+  width: 100%;
+  padding: 5px 20px;
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.company-selector-empty {
+  display: flex;
+  align-items: center;
+  padding: 12px 20px;
+
+  svg {
+    margin-right: 32px;
+  }
+}
+
+.company-selector-item {
+  min-height: 86px;
+  display: flex;
+  width: 100%;
+  padding: 16px 20px;
+  cursor: pointer;
+
+  &:hover:not(&__selected) {
+    background-color: #e8edff;
+  }
+
+  &__selected {
+    margin-top: 24px;
+    background-color: #e8edff;
+    cursor: default;
+
+    &__error {
+      background-color: #fcd7d7;
+    }
+  }
+
+  &__icon {
+    margin-right: 32px;
+    min-width: 23px;
+  }
+
+  &__info {
+    margin-bottom: 10px;
+  }
+}

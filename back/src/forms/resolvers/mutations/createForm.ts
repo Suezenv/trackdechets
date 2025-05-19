@@ -1,24 +1,35 @@
-import { Prisma, Status } from "@prisma/client";
+import { EmitterType, Prisma } from "@prisma/client";
+import { isDangerous } from "@td/constants";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { eventEmitter, TDEvent } from "../../../events/emitter";
-import {
+import type {
   MutationCreateFormArgs,
+  PackagingInfo,
   ResolversParentTypes
-} from "../../../generated/graphql/types";
-import prisma from "../../../prisma";
+} from "@td/codegen-back";
 import { GraphQLContext } from "../../../types";
-import { getFullForm } from "../../database";
-import { indexForm } from "../../elastic";
 import { MissingTempStorageFlag } from "../../errors";
 import {
-  expandFormFromDb,
+  getAndExpandFormFromDb,
   flattenFormInput,
-  flattenTemporaryStorageDetailInput
-} from "../../form-converter";
-import { checkIsFormContributor } from "../../permissions";
+  flattenTemporaryStorageDetailInput,
+  flattenTransporterInput
+} from "../../converter";
 import getReadableId from "../../readableId";
-import { FormSirets } from "../../types";
-import { validateAppendix2Forms, draftFormSchema } from "../../validation";
+import { getFormRepository } from "../../repository";
+import {
+  Transporter,
+  draftFormSchema,
+  hasPipelinePackaging,
+  validateGroupement,
+  validateIntermediaries
+} from "../../validation";
+import { appendix2toFormFractions } from "../../compat";
+import { runInTransaction } from "../../../common/repository/helper";
+import { sirenifyFormInput } from "../../sirenify";
+import { recipifyFormInput } from "../../recipify";
+import { checkCanCreate } from "../../permissions";
+import { UserInputError } from "../../../common/errors";
+import { prisma } from "@td/prisma";
 
 const createFormResolver = async (
   parent: ResolversParentTypes["Mutation"],
@@ -27,47 +38,131 @@ const createFormResolver = async (
 ) => {
   const user = checkIsAuthenticated(context);
 
+  const sirenifiedFormInput = await sirenifyFormInput(createFormInput, user);
+
   const {
     appendix2Forms,
+    grouping,
     temporaryStorageDetail,
+    intermediaries,
     ...formContent
-  } = createFormInput;
+  } = await recipifyFormInput(sirenifiedFormInput);
 
-  const formSirets: FormSirets = {
-    emitterCompanySiret: formContent.emitter?.company?.siret,
-    recipientCompanySiret: formContent.recipient?.company?.siret,
-    transporterCompanySiret: formContent.transporter?.company?.siret,
-    traderCompanySiret: formContent.trader?.company?.siret,
-    brokerCompanySiret: formContent.broker?.company?.siret,
-    ecoOrganismeSiret: formContent.ecoOrganisme?.siret,
-    ...(temporaryStorageDetail?.destination?.company?.siret
-      ? {
-          destinationCompanySiret:
-            temporaryStorageDetail.destination.company.siret
-        }
-      : {})
-  };
+  if (appendix2Forms && grouping) {
+    throw new UserInputError(
+      "Vous pouvez renseigner soit `appendix2Forms` soit `grouping` mais pas les deux"
+    );
+  }
 
-  await checkIsFormContributor(
-    user,
-    formSirets,
-    "Vous ne pouvez pas créer un bordereau sur lequel votre entreprise n'apparait pas"
-  );
+  if (
+    formContent.wasteDetails?.code &&
+    isDangerous(formContent.wasteDetails?.code) &&
+    formContent.wasteDetails.isDangerous === undefined
+  ) {
+    formContent.wasteDetails.isDangerous = true;
+  }
+
+  // APPENDIX1_PRODUCER is the only type of forms for which you don't necessarely appear during creation.
+  // The destination and transporter will be auto completed
+  if (formContent?.emitter?.type !== "APPENDIX1_PRODUCER") {
+    await checkCanCreate(user, createFormInput);
+  }
 
   const form = flattenFormInput(formContent);
 
-  if (appendix2Forms) {
-    await validateAppendix2Forms(appendix2Forms, form);
+  if (formContent.transporter && formContent.transporters) {
+    throw new UserInputError(
+      "Vous ne pouvez pas utiliser les champs `transporter` et `transporters` en même temps"
+    );
+  }
+
+  let transporters: Prisma.BsddTransporterCreateNestedManyWithoutFormInput = {}; // payload de nested write Prisma
+  let transportersForValidation: Transporter[] = []; // payload de validation
+
+  if (formContent.transporter) {
+    // Lorsque l'ancien champ `transporter` est spécifié, on crée
+    // un nouveau enregistrement dans la table BsddTransporter et on
+    // l'associe au bordereau
+    transporters.create = {
+      ...flattenTransporterInput(formContent),
+      number: 1,
+      readyToTakeOver: true
+    };
+    transportersForValidation.push(transporters.create);
+  } else if (formContent.transporters) {
+    const dbTransporters = await prisma.bsddTransporter.findMany({
+      where: { id: { in: formContent.transporters } }
+    });
+    // check all identifiers has a matching record in DB
+    const unknowTransporters = formContent.transporters.filter(
+      id => !dbTransporters.map(t => t.id).includes(id)
+    );
+    if (unknowTransporters.length > 0) {
+      throw new UserInputError(
+        `Aucun transporteur ne possède le ou les identifiants suivants : ${unknowTransporters.join(
+          ", "
+        )}`
+      );
+    }
+    transportersForValidation = [
+      ...transportersForValidation,
+      ...dbTransporters
+    ];
+    // Lorsque le champs `transporters` est passé, on connecte les enregistrements
+    // de la table `BsddTransporter` avec ce bordereau. La fonction `create`
+    // du repository s'assure que la numérotation des transporteurs correspondent à
+    // l'ordre du tableau d'identifiants.
+    transporters = {
+      connect: formContent.transporters.map(id => ({
+        id
+      }))
+    };
+  }
+
+  // Do not take into account user sent transporter data in case of APPENDIX1_PRODUCER
+  // Transporter data will be copied from the bordereau chapeau
+  if (form.emitterType === "APPENDIX1_PRODUCER") {
+    delete transporters.create;
+    delete transporters.connect;
+    transportersForValidation = [];
+  }
+
+  // Rétro-compatibilité avec l'utilisation d'un conditionnement "Pipeline"
+  // Cela permet de ne pas faire de breaking change lors de l'implémentation
+  // de tra-15674 - Sortir Conditionné pour pipeline de la liste des conditionnements
+  if (hasPipelinePackaging(form)) {
+    form.wasteDetailsPackagingInfos = (
+      (form.wasteDetailsPackagingInfos ?? []) as PackagingInfo[]
+    ).filter(p => p.type !== "PIPELINE");
+    form.isDirectSupply = true;
+    transporters = {};
+    transportersForValidation = [];
+  }
+
+  const readableId = getReadableId();
+
+  const cleanedForm = await draftFormSchema.validate({
+    ...form,
+    transporters: transportersForValidation
+  });
+
+  // `cleanedForm` was introduced for the annexe 1 to get only the keys from
+  // the annexe 1 yup schema. The problem is that it also returns
+  // fields that should not be included in the FormCreateInput.
+  if (cleanedForm) {
+    for (const key of Object.keys(cleanedForm)) {
+      if (!(key in form)) {
+        delete cleanedForm[key];
+      }
+    }
   }
 
   const formCreateInput: Prisma.FormCreateInput = {
-    ...form,
-    readableId: getReadableId(),
+    ...cleanedForm,
+    readableId,
     owner: { connect: { id: user.id } },
-    appendix2Forms: appendix2Forms ? { connect: appendix2Forms } : undefined
+    transporters
   };
-
-  await draftFormSchema.validate(formCreateInput);
 
   if (temporaryStorageDetail) {
     if (formContent.recipient?.isTempStorage !== true) {
@@ -75,44 +170,82 @@ const createFormResolver = async (
       // recipient.isTempStorage=true, throw error
       throw new MissingTempStorageFlag();
     }
-    formCreateInput.temporaryStorageDetail = {
-      create: flattenTemporaryStorageDetailInput(temporaryStorageDetail)
+    formCreateInput.forwardedIn = {
+      create: {
+        owner: { connect: { id: user.id } },
+        readableId: `${readableId}-suite`,
+        ...flattenTemporaryStorageDetailInput(temporaryStorageDetail)
+      }
     };
   } else {
     if (formContent.recipient?.isTempStorage === true) {
       // Recipient is temp storage but no details provided
       // Create empty temporary storage details
-      formCreateInput.temporaryStorageDetail = {
-        create: {}
+      formCreateInput.forwardedIn = {
+        create: {
+          owner: { connect: { id: user.id } },
+          readableId: `${readableId}-suite`
+        }
       };
     }
   }
 
-  const newForm = await prisma.form.create({ data: formCreateInput });
+  if (intermediaries) {
+    await validateIntermediaries(intermediaries, form);
+    formCreateInput.intermediaries = {
+      createMany: {
+        data: intermediaries.map(i => ({
+          name: i.name!, // enforced through validation schema
+          siret: i.siret!, // enforced through validation schema
+          contact: i.contact!, // enforced through validation schema
+          address: i.address,
+          vatNumber: i.vatNumber,
+          phone: i.phone,
+          mail: i.mail
+        })),
+        skipDuplicates: true
+      }
+    };
+  }
 
-  eventEmitter.emit(TDEvent.CreateForm, {
-    previousNode: null,
-    node: newForm,
-    updatedFields: {},
-    mutation: "CREATED"
-  });
+  const isGroupement =
+    (grouping && grouping.length > 0) ||
+    (appendix2Forms && appendix2Forms.length > 0);
+  const formFractions = isGroupement
+    ? await validateGroupement(
+        formCreateInput,
+        grouping && grouping.length > 0
+          ? grouping
+          : appendix2toFormFractions(appendix2Forms!)
+      )
+    : null;
 
-  // create statuslog when and only when form is created
-  await prisma.statusLog.create({
-    data: {
-      form: { connect: { id: newForm.id } },
-      user: { connect: { id: context.user!.id } },
-      status: newForm.status as Status,
-      updatedFields: {},
-      authType: user.auth,
-      loggedAt: new Date()
+  const newForm = await runInTransaction(async transaction => {
+    const { create, setAppendix1, setAppendix2 } = getFormRepository(
+      user,
+      transaction
+    );
+    const newForm = await create(formCreateInput);
+    if (isGroupement) {
+      if (newForm.emitterType === EmitterType.APPENDIX1) {
+        await setAppendix1({
+          form: newForm,
+          newAppendix1Fractions: formFractions!,
+          currentAppendix1Forms: []
+        });
+      } else {
+        await setAppendix2({
+          form: newForm,
+          appendix2: formFractions!,
+          currentAppendix2Forms: []
+        });
+      }
     }
+
+    return newForm;
   });
 
-  const fullForm = await getFullForm(newForm);
-  await indexForm(fullForm, context);
-
-  return expandFormFromDb(newForm);
+  return getAndExpandFormFromDb(newForm.id);
 };
 
 export default createFormResolver;

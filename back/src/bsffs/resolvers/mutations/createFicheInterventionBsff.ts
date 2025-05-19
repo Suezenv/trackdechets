@@ -1,30 +1,36 @@
+import { Prisma } from "@prisma/client";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { MutationResolvers } from "../../../generated/graphql/types";
-import prisma from "../../../prisma";
+import type { MutationResolvers } from "@td/codegen-back";
 import {
   flattenFicheInterventionBsffInput,
-  unflattenFicheInterventionBsff
+  expandFicheInterventionBsffFromDB
 } from "../../converter";
-import { isFicheInterventionOperateur } from "../../permissions";
+import { checkCanCreateFicheIntervention } from "../../permissions";
+import { getBsffFicheInterventionRepository } from "../../repository";
+import { sirenifyBsffFicheInterventionInput } from "../../sirenify";
 import { validateFicheIntervention } from "../../validation";
 
-const createFicheInterventionBsff: MutationResolvers["createFicheInterventionBsff"] = async (
-  _,
-  { input },
-  context
-) => {
-  const user = checkIsAuthenticated(context);
+const createFicheInterventionBsff: MutationResolvers["createFicheInterventionBsff"] =
+  async (_, { input }, context) => {
+    const user = checkIsAuthenticated(context);
 
-  const flatInput = flattenFicheInterventionBsffInput(input);
-  await isFicheInterventionOperateur(user, flatInput);
+    const sirenifiedInput = await sirenifyBsffFicheInterventionInput(
+      input,
+      user
+    );
+    await checkCanCreateFicheIntervention(user, input);
+    const flatInput = flattenFicheInterventionBsffInput(sirenifiedInput);
 
-  await validateFicheIntervention(flatInput);
+    await validateFicheIntervention(flatInput);
 
-  const ficheIntervention = await prisma.bsffFicheIntervention.create({
-    data: flatInput
-  });
+    const { create: createFicheIntervention } =
+      getBsffFicheInterventionRepository(user);
 
-  return unflattenFicheInterventionBsff(ficheIntervention);
-};
+    const ficheIntervention = await createFicheIntervention({
+      data: flatInput as Prisma.BsffFicheInterventionCreateInput
+    });
+
+    return expandFicheInterventionBsffFromDB(ficheIntervention);
+  };
 
 export default createFicheInterventionBsff;

@@ -1,74 +1,74 @@
-import { unflattenBsdasri } from "../../converter";
+import { Prisma } from "@prisma/client";
+import { expandBsdasriFromDB } from "../../converter";
 
-import prisma from "../../../prisma";
 import { checkIsAuthenticated } from "../../../common/permissions";
-
-import { getCursorConnectionsArgs } from "../../cursorPagination";
-
 import { GraphQLContext } from "../../../types";
 import { toPrismaWhereInput } from "../../where";
 import { applyMask } from "../../../common/where";
-import { getUserCompanies } from "../../../users/database";
-
-const defaultPaginateBy = 50;
-
-export default async function dasris(_, args, context: GraphQLContext) {
+import { getConnection } from "../../../common/pagination";
+import type { QueryResolvers } from "@td/codegen-back";
+import { getBsdasriRepository } from "../../repository";
+import { Permission, can, getUserRoles } from "../../../permissions";
+const bsdasrisResolver: QueryResolvers["bsdasris"] = async (
+  _,
+  args,
+  context: GraphQLContext
+) => {
   const user = checkIsAuthenticated(context);
 
-  const { where: whereArgs, ...paginationArgs } = args;
+  const { where: whereArgs, ...gqlPaginationArgs } = args;
 
-  const itemsPerPage =
-    paginationArgs.first ?? paginationArgs.last ?? defaultPaginateBy;
-  const { requiredItems, ...connectionsArgs } = await getCursorConnectionsArgs({
-    ...paginationArgs,
-    defaultPaginateBy: itemsPerPage,
-    maxPaginateBy: 500
-  });
+  const roles = await getUserRoles(user.id);
+  const orgIdsWithListPermission = Object.keys(roles).filter(orgId =>
+    can(roles[orgId], Permission.BsdCanList)
+  );
 
-  const userCompanies = await getUserCompanies(user.id);
-  const userSirets = userCompanies.map(c => c.siret);
   // ensure query returns only bsds belonging to current user
   const mask = {
     OR: [
-      { emitterCompanySiret: { in: userSirets } },
-      { transporterCompanySiret: { in: userSirets } },
-      { destinationCompanySiret: { in: userSirets } }
+      { emitterCompanySiret: { in: orgIdsWithListPermission } },
+      { transporterCompanySiret: { in: orgIdsWithListPermission } },
+      { transporterCompanyVatNumber: { in: orgIdsWithListPermission } },
+      { destinationCompanySiret: { in: orgIdsWithListPermission } },
+      { ecoOrganismeSiret: { in: orgIdsWithListPermission } }
+    ]
+  };
+
+  const draftMask: Prisma.BsdasriWhereInput = {
+    OR: [
+      {
+        isDraft: false,
+        ...mask
+      },
+      {
+        isDraft: true,
+        canAccessDraftOrgIds: { hasSome: orgIdsWithListPermission },
+        ...mask
+      }
     ]
   };
 
   const prismaWhere = {
-    // ...filters,
     ...(whereArgs ? toPrismaWhereInput(whereArgs) : {}),
     isDeleted: false
   };
 
-  const where = applyMask(prismaWhere, mask);
+  const where = applyMask<Prisma.BsdasriWhereInput>(prismaWhere, draftMask);
 
-  const queried = await prisma.bsdasri.findMany({
-    ...connectionsArgs,
-    orderBy: { createdAt: "desc" },
+  const bsdasriRepository = getBsdasriRepository(user);
 
-    where
-  });
-  const totalCount = await prisma.bsdasri.count({ where });
-  const queriedCount = queried.length;
+  const totalCount = await bsdasriRepository.count(where);
 
-  const expanded = queried.map(f => unflattenBsdasri(f));
-  const pageInfo = {
-    startCursor: expanded[0]?.id || "",
-    endCursor: expanded[queriedCount - 1]?.id || "",
-    hasNextPage:
-      paginationArgs.after | paginationArgs.first
-        ? queriedCount > requiredItems
-        : false,
-    hasPreviousPage:
-      paginationArgs.before | paginationArgs.last
-        ? queriedCount > requiredItems
-        : false
-  };
-  return {
+  return getConnection({
     totalCount,
-    edges: expanded.map(bsd => ({ cursor: bsd.id, node: bsd })),
-    pageInfo
-  };
-}
+    findMany: prismaPaginationArgs =>
+      bsdasriRepository.findMany(where, {
+        ...prismaPaginationArgs,
+        orderBy: { rowNumber: "desc" }
+      }),
+    formatNode: expandBsdasriFromDB,
+    ...gqlPaginationArgs
+  });
+};
+
+export default bsdasrisResolver;

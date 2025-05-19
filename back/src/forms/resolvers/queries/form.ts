@@ -1,13 +1,10 @@
-import {
-  QueryResolvers,
-  QueryFormArgs
-} from "../../../generated/graphql/types";
-import { expandFormFromDb } from "../../form-converter";
-import { UserInputError } from "apollo-server-express";
+import type { QueryResolvers, QueryFormArgs } from "@td/codegen-back";
+import { expandableFormIncludes, expandFormFromDb } from "../../converter";
 import { MissingIdOrReadableId } from "../../errors";
 import { checkIsAuthenticated } from "../../../common/permissions";
 import { checkCanRead } from "../../permissions";
 import { getFormOrFormNotFound } from "../../database";
+import { UserInputError } from "../../../common/errors";
 
 function validateArgs(args: QueryFormArgs) {
   if (args.id == null && args.readableId == null) {
@@ -18,7 +15,7 @@ function validateArgs(args: QueryFormArgs) {
       "Vous devez préciser soit un id soit un readableId mais pas les deux"
     );
   }
-  return args;
+  return args as { id: string } | { readableId: string };
 }
 
 const formResolver: QueryResolvers["form"] = async (_, args, context) => {
@@ -27,7 +24,20 @@ const formResolver: QueryResolvers["form"] = async (_, args, context) => {
 
   const validArgs = validateArgs(args);
 
-  const form = await getFormOrFormNotFound(validArgs);
+  const form = await getFormOrFormNotFound(validArgs, {
+    ...expandableFormIncludes,
+    intermediaries: true,
+    grouping: {
+      include: {
+        initialForm: {
+          include: {
+            transporters: true,
+            forwardedIn: true
+          }
+        }
+      }
+    }
+  });
 
   await checkCanRead(user, form);
 

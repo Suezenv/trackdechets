@@ -1,17 +1,14 @@
-import { UserInputError } from "apollo-server-express";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import getReadableId, { ReadableIdPrefix } from "../../../forms/readableId";
-import {
-  BsdaInput,
-  MutationCreateBsdaArgs
-} from "../../../generated/graphql/types";
-import prisma from "../../../prisma";
+import type { BsdaInput, MutationCreateBsdaArgs } from "@td/codegen-back";
 import { GraphQLContext } from "../../../types";
-import { expandBsdaFromDb, flattenBsdaInput } from "../../converter";
-import { getBsdaOrNotFound } from "../../database";
-import { indexBsda } from "../../elastic";
-import { checkIsBsdaContributor } from "../../permissions";
-import { validateBsda } from "../../validation";
+import { getUserCompanies } from "../../../users/database";
+import { companyToIntermediaryInput, expandBsdaFromDb } from "../../converter";
+import { getBsdaRepository } from "../../repository";
+import { checkCanCreate } from "../../permissions";
+import { UserInputError } from "../../../common/errors";
+import { parseBsdaAsync } from "../../validation";
+import { graphQlInputToZodBsda } from "../../validation/helpers";
+import { Prisma } from "@prisma/client";
 
 type CreateBsda = {
   isDraft: boolean;
@@ -29,58 +26,79 @@ export default async function create(
 
 export async function genericCreate({ isDraft, input, context }: CreateBsda) {
   const user = checkIsAuthenticated(context);
-
-  const bsda = flattenBsdaInput(input);
-  await checkIsBsdaContributor(
-    user,
-    bsda,
-    "Vous ne pouvez pas créer un bordereau sur lequel votre entreprise n'apparait pas"
+  await checkCanCreate(user, input);
+  const companies = await getUserCompanies(user.id);
+  const destinationCompany = companies.find(
+    company => company.siret === input.destination?.company?.siret
   );
-
-  const isForwarding = Boolean(input.forwarding);
-  const isGrouping = input.grouping?.length > 0;
-
-  if ([isForwarding, isGrouping].filter(b => b).length > 1) {
+  if (
+    input.type === "COLLECTION_2710" &&
+    !destinationCompany?.companyTypes.includes("WASTE_CENTER")
+  ) {
     throw new UserInputError(
-      "Les opérations d'entreposage provisoire et groupement ne sont pas compatibles entre elles"
+      "Seules les déchetteries peuvent créer un bordereau de ce type, et elles doivent impérativement être identifiées comme destinataire du déchet."
     );
   }
 
-  const forwardedBsda = isForwarding
-    ? await getBsdaOrNotFound(input.forwarding)
-    : null;
-  const groupedBsdas = isGrouping
-    ? await prisma.bsda.findMany({
-        where: { id: { in: input.grouping } }
-      })
-    : [];
+  const zodBsda = await graphQlInputToZodBsda(input);
 
-  const previousBsdas = [
-    ...(isForwarding ? [forwardedBsda] : []),
-    ...(isGrouping ? groupedBsdas : [])
-  ];
-
-  await validateBsda(bsda, previousBsdas, {
-    isPrivateIndividual: bsda.emitterIsPrivateIndividual,
-    isType2710: bsda.type === "COLLECTION_2710",
-    emissionSignature: !isDraft
-  });
-
-  const newBsda = await prisma.bsda.create({
-    data: {
-      ...bsda,
-      id: getReadableId(ReadableIdPrefix.BSDA),
-      isDraft,
-      ...(isForwarding && {
-        forwarding: { connect: { id: input.forwarding } }
-      }),
-      ...(isGrouping && {
-        grouping: { connect: groupedBsdas.map(({ id }) => ({ id })) }
-      })
+  const { createdAt, ...bsda } = await parseBsdaAsync(
+    { ...zodBsda, isDraft },
+    {
+      user,
+      enableCompletionTransformers: true,
+      enablePreviousBsdasChecks: true,
+      // L'UI utilise 'createDraft', 'create' est juste utilisé côté API
+      // On part du principe que le BSD doit être prêt pour la signature
+      // émetteur, donc on remonte déjà toutes les erreurs de l'étape
+      // de signature émetteur (d'où currentSignatureType: EMISSION)
+      currentSignatureType: !isDraft ? "EMISSION" : undefined
     }
+  );
+
+  const forwarding = !!bsda.forwarding
+    ? { connect: { id: bsda.forwarding } }
+    : undefined;
+  const grouping =
+    bsda.grouping && bsda.grouping.length > 0
+      ? { connect: bsda.grouping.map(id => ({ id })) }
+      : undefined;
+  const intermediaries =
+    bsda.intermediaries && bsda.intermediaries.length > 0
+      ? {
+          createMany: {
+            data: companyToIntermediaryInput(bsda.intermediaries)
+          }
+        }
+      : undefined;
+
+  let transporters:
+    | Prisma.BsdaTransporterCreateNestedManyWithoutBsdaInput
+    | undefined = undefined;
+
+  if (input.transporter) {
+    transporters = {
+      createMany: {
+        // un seul transporteur dans le tableau normalement
+        data: bsda.transporters!.map((t, idx) => {
+          const { id, bsdaId, ...data } = t;
+          return { ...data, number: idx + 1 };
+        })
+      }
+    };
+  } else if (input.transporters && input.transporters.length > 0) {
+    transporters = {
+      connect: bsda.transporters!.map(t => ({ id: t.id! }))
+    };
+  }
+
+  const bsdaRepository = getBsdaRepository(user);
+  const newBsda = await bsdaRepository.create({
+    ...bsda,
+    forwarding,
+    grouping,
+    intermediaries,
+    transporters
   });
-
-  await indexBsda(newBsda, context);
-
   return expandBsdaFromDb(newBsda);
 }

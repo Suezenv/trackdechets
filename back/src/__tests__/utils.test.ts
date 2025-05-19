@@ -4,7 +4,10 @@ import {
   daysBetween,
   base32Encode,
   hashToken,
-  extractPostalCode
+  xDaysAgo,
+  randomNbrChain,
+  removeSpecialCharsExceptHyphens,
+  inXDays
 } from "../utils";
 
 test("getUid returns a unique identifier of fixed length", () => {
@@ -49,21 +52,49 @@ describe("base32Encode", () => {
   });
 });
 
-describe("extractPostalCode", () => {
-  test("when there is a match", () => {
-    const address = "3 route du déchet, 07100 Annonay";
-    expect(extractPostalCode(address)).toEqual("07100");
+describe("xDaysAgo", () => {
+  it("should return a relative past date", () => {
+    const someDate = new Date("2019-10-03T00:00:00.000Z");
+    const threeDaysBefore = xDaysAgo(someDate, 3);
+    expect(threeDaysBefore).toEqual(new Date("2019-09-30T00:00:00.000Z"));
   });
+});
 
-  test("when there is not match", () => {
-    expect(extractPostalCode("Somewhere")).toEqual("");
+describe("inXDays", () => {
+  it("should return a date in x days", () => {
+    const someDate = new Date("2019-10-03T10:00:00.000Z");
+    const threeDaysLater = inXDays(someDate, 3);
+    expect(threeDaysLater).toEqual(new Date("2019-10-06T00:00:00.000Z"));
   });
+});
 
-  test("when address is empty", () => {
-    expect(extractPostalCode("")).toEqual("");
+describe("randomNbrChain", () => {
+  it("should generate random chain of numbers", async () => {
+    // Given
+    const length = 10;
+
+    // When
+    const chain = randomNbrChain(length);
+
+    // Then
+    expect(chain.length).toEqual(length);
+    // Numbers only
+    expect(new RegExp(/^\d+$/).test(chain)).toBeTruthy();
   });
+});
 
-  test("when address is null", () => {
-    expect(extractPostalCode(null)).toEqual("");
+describe("removeSpecialCharsExceptHyphens", () => {
+  test.each`
+    input                                                                   | expected
+    ${""}                                                                   | ${""}
+    ${"text"}                                                               | ${"text"}
+    ${"text with spaces"}                                                   | ${"text with spaces"}
+    ${"text with accents éèàçùÉ"}                                           | ${"text with accents éèàçùÉ"}
+    ${"text-with-hyphens"}                                                  | ${"text-with-hyphens"}
+    ${"/[~`!@#$%^&*()+={}[];:'\"<>.,/?_]"}                                  | ${""}
+    ${"/[~`!@#$%^&*()+={}[];:'\"<>.,/?_]/[~`!@#$%^&*()+={}[];:'\"<>.,/?_]"} | ${""}
+    ${"/[~`!@#$%^and some&*()+={}[];:'\" text in between<>.,/?_]"}          | ${"and some text in between"}
+  `('"$input" should return $expected', ({ input, expected }) => {
+    expect(removeSpecialCharsExceptHyphens(input)).toEqual(expected);
   });
 });

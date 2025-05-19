@@ -1,11 +1,11 @@
 import * as React from "react";
-import { Bsdasri } from "generated/graphql/types";
+import { Bsdasri } from "@td/codegen-ui";
 import {
   Journey,
   JourneyStop,
   JourneyStopName,
-  JourneyStopDescription,
-} from "common/components";
+  JourneyStopDescription
+} from "../../../../../common/components";
 
 interface BsdasriJourneySummaryProps {
   bsdasri: Bsdasri;
@@ -17,7 +17,7 @@ export function BsdasriJourneySummary({ bsdasri }: BsdasriJourneySummaryProps) {
     SIGNED_BY_PRODUCER: ["complete", "active", "incomplete"],
     SENT: ["complete", "active", "incomplete"],
     RECEIVED: ["complete", "complete", "active"],
-    PROCESSED: ["complete", "complete", "complete"],
+    PROCESSED: ["complete", "complete", "complete"]
   };
   const status = bsdasri["bsdasriStatus"];
 
@@ -35,7 +35,7 @@ export function BsdasriJourneySummary({ bsdasri }: BsdasriJourneySummaryProps) {
         <JourneyStopName>Transporteur</JourneyStopName>
         <JourneyStopDescription>
           {bsdasri.transporter?.company?.name} (
-          {bsdasri.transporter?.company?.siret})
+          {bsdasri.transporter?.company?.orgId})
           <br />
           {bsdasri.transporter?.company?.address}
         </JourneyStopDescription>

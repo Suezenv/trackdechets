@@ -3,7 +3,7 @@ enum CompanyType {
   "Producteur de déchet"
   PRODUCER
 
-  "Installation de Transit, regroupement ou tri de déchets"
+  "Installation de Tri, transit regroupement de déchets"
   COLLECTOR
 
   "Installation de traitement"
@@ -15,7 +15,7 @@ enum CompanyType {
   "Installation de traitement de VHU (casse automobile et/ou broyeur agréé)"
   WASTE_VEHICLES
 
-  "Installation de collecte de déchets apportés par le producteur initial"
+  "Installation de collecte de déchets apportés par le producteur initial (Rubrique 2710)"
   WASTE_CENTER
 
   "Négociant"
@@ -26,6 +26,22 @@ enum CompanyType {
 
   "Éco-organisme"
   ECO_ORGANISME
+
+  "Entreprise de travaux"
+  WORKER
+
+  "Crématorium"
+  CREMATORIUM
+    @deprecated(reason: "Déprécié - Utiliser WasteprocessorType.CREMATION")
+
+  "Intermédiaire : établissement qui peut être ajouté à une traçabilité, sans responsabilité réglementaire (y compris entreprises de travaux hors amiante)"
+  INTERMEDIARY
+
+  "Installation de valorisation de terres et sédiments"
+  DISPOSAL_FACILITY
+
+  "Installation dans laquelle les déchets perdent leur statut de déchet"
+  RECOVERY_FACILITY
 }
 
 "État du processus de vérification de l'établissement"
@@ -39,4 +55,68 @@ enum CompanyVerificationStatus {
   auprès du registre du commerce et des sociétés
   """
   LETTER_SENT
+  """
+  Vérification mise en pause / archivée
+  """
+  STANDBY
+}
+
+enum CollectorType {
+  "Déchets non Dangereux (Rubriques 2713, 2714, 2715, 2716)"
+  NON_DANGEROUS_WASTES
+
+  "Déchets Dangereux (Rubrique 2718)"
+  DANGEROUS_WASTES
+
+  "Déchets DEEE (Rubrique 2711)"
+  DEEE_WASTES
+
+  "Autres cas déchets non dangereux (Rubrique 2731)"
+  OTHER_NON_DANGEROUS_WASTES
+
+  "Autres cas déchets dangereux (Rubriques 2719, 2792-1, 2793-1, 2793-2, 2797-1, 2798)"
+  OTHER_DANGEROUS_WASTES
+}
+
+enum WasteProcessorType {
+  "Incinération de déchets dangereux (Rubrique 2770)"
+  DANGEROUS_WASTES_INCINERATION
+
+  "Incinération de déchets non dangereux (Rubriques 2771, 2740)"
+  NON_DANGEROUS_WASTES_INCINERATION
+
+  "Crémation"
+  CREMATION
+
+  "Installation de stockage de déchets dangereux (Rubriques 2720-1, 2760-1, 2760-4, 2797-2)"
+  DANGEROUS_WASTES_STORAGE
+
+  "Installation de stockage de déchets non dangereux, y compris casiers dédiés amiante, plâtre (Rubriques 2720-2, 2760-2-a, 2760-2-b)"
+  NON_DANGEROUS_WASTES_STORAGE
+
+  "Installation de stockage de déchets inertes (Rubrique 2760-3)"
+  INERT_WASTES_STORAGE
+
+  "Autres traitements de déchets dangereux (Rubriques 2790, 2792-2, 2793-3)"
+  OTHER_DANGEROUS_WASTES
+
+  "Autres traitements de déchets non dangereux (Rubriques 2791, 2781, 2782, 2780)"
+  OTHER_NON_DANGEROUS_WASTES
+}
+
+# Sous-type pour les installations de traitement VHU
+enum WasteVehiclesType {
+  # Broyeur VHU
+  BROYEUR
+  # Casse automobile / démolisseur
+  DEMOLISSEUR
+}
+
+enum AdministrativeTransferStatus {
+  "En attente de validation"
+  PENDING
+  "Accepté"
+  ACCEPTED
+  "Refusé"
+  REFUSED
 }

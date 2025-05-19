@@ -1,41 +1,38 @@
-import { Request, Response } from "express";
-import prisma from "../../../prisma";
-import { QueryBsdaPdfArgs } from "../../../generated/graphql/types";
-import {
-  getFileDownloadToken,
-  registerFileDownloader
-} from "../../../common/file-download";
+import type { QueryBsdaPdfArgs } from "@td/codegen-back";
+import { getFileDownload } from "../../../common/fileDownload";
 import { checkIsAuthenticated } from "../../../common/permissions";
 import { createPDFResponse } from "../../../common/pdf";
 import { getBsdaOrNotFound } from "../../database";
-import { checkIsBsdaContributor } from "../../permissions";
-import { buildPdf } from "../../pdf/generator";
+import { BsdaForPDFInclude, buildPdf } from "../../pdf/generator";
+import { DownloadHandler } from "../../../routers/downloadRouter";
+import { getReadonlyBsdaRepository } from "../../repository";
+import { checkCanReadPdf } from "../../permissions";
+import { hasGovernmentReadAllBsdsPermOrThrow } from "../../../permissions";
 
-const TYPE = "bsda_pdf";
-
-// TODO: it would be better to declare the handlers directly in the download route
-registerFileDownloader(TYPE, sendBsdaPdf);
-
-async function sendBsdaPdf(
-  req: Request,
-  res: Response,
-  { id }: { id: string }
-) {
-  const bsda = await prisma.bsda.findUnique({ where: { id } });
-  const readableStream = await buildPdf(bsda);
-
-  readableStream.pipe(createPDFResponse(res, bsda.id));
-}
+export const bsdaPdfDownloadHandler: DownloadHandler<QueryBsdaPdfArgs> = {
+  name: "bsdaPdf",
+  handler: async (_, res, { id }) => {
+    const bsda = await getReadonlyBsdaRepository().findUnique(
+      { id },
+      { include: BsdaForPDFInclude }
+    );
+    const readableStream = await buildPdf(bsda);
+    readableStream.pipe(createPDFResponse(res, bsda.id));
+  }
+};
 
 export default async function bsdaPdf(_, { id }: QueryBsdaPdfArgs, context) {
   const user = checkIsAuthenticated(context);
-  const form = await getBsdaOrNotFound(id);
+  const bsda = await getBsdaOrNotFound(id, { include: { transporters: true } });
 
-  await checkIsBsdaContributor(
-    user,
-    form,
-    "Vous n'êtes pas autorisé à accéder à ce bordereau"
-  );
-
-  return getFileDownloadToken({ type: TYPE, params: { id } }, sendBsdaPdf);
+  if (!user.isAdmin && !user.governmentAccountId) {
+    await checkCanReadPdf(user, bsda);
+  }
+  if (user.governmentAccountId) {
+    await hasGovernmentReadAllBsdsPermOrThrow(user);
+  }
+  return getFileDownload({
+    handler: bsdaPdfDownloadHandler.name,
+    params: { id }
+  });
 }

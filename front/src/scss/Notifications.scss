@@ -1,4 +1,5 @@
-@import "src/scss/Constants.scss";
+@import "./Constants.scss";
+@import "./Breakpoints.scss";
 
 // lighter notifications
 .light-notification {
@@ -51,8 +52,39 @@
     border-color: $orange;
   }
 
+  &--downtime,
+  &--platform {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1em 1em;
+
+    @include desktop {
+      padding: 1em 4em;
+    }
+
+    img {
+      margin-right: 20px;
+    }
+  }
+
+  &--platform {
+    background: #fde39c;
+  }
+
+  &--downtime {
+    background: #b34000;
+    color: white;
+    font-weight: bold;
+  }
+
   &--error {
     background: $red-light;
     border-color: $red;
+  }
+
+  a {
+    cursor: pointer;
+    text-decoration: underline;
   }
 }

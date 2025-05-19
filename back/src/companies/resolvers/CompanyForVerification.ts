@@ -1,16 +1,9 @@
-import { UserRole } from "@prisma/client";
-import { CompanyForVerificationResolvers } from "../../generated/graphql/types";
-import prisma from "../../prisma";
+import type { CompanyForVerificationResolvers } from "@td/codegen-back";
 
 const companyForVerificationResolvers: CompanyForVerificationResolvers = {
-  admin: async parent => {
+  admin: async (parent, _, context) => {
     // returns first admin who joined
-    const admin = await prisma.companyAssociation
-      .findFirst({
-        where: { company: { siret: parent.siret }, role: UserRole.ADMIN }
-      })
-      .user();
-    return admin;
+    return context.dataloaders.companiesAdmin.load(parent.id);
   }
 };
 

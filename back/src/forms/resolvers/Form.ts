@@ -1,15 +1,29 @@
-import { FormResolvers } from "../../generated/graphql/types";
+import type { FormResolvers } from "@td/codegen-back";
 import stateSummary from "./forms/stateSummary";
 import appendix2Forms from "./forms/appendix2Forms";
-import transportSegments from "./forms/transportSegments";
-import temporaryStorageDetail from "./forms/temporaryStorageDetail";
+import groupedIn from "./forms/groupedIn";
+import grouping from "./forms/grouping";
+import intermediaries from "./forms/intermediary";
+import {
+  wasteQuantityAcceptedResolver,
+  wasteQuantityRefusedResolver
+} from "./forms/wasteQuantities";
 
 const formResolvers: FormResolvers = {
   appendix2Forms,
-  temporaryStorageDetail,
   // Somme contextual values, depending on the form status / type, mostly to ease the display
   stateSummary,
-  transportSegments
+  groupedIn,
+  grouping,
+  intermediaries,
+  quantityAccepted: wasteQuantityAcceptedResolver,
+  quantityRefused: wasteQuantityRefusedResolver,
+  metadata: bsdd => {
+    return {
+      ...bsdd.metadata,
+      id: bsdd.id
+    } as any;
+  }
 };
 
 export default formResolvers;

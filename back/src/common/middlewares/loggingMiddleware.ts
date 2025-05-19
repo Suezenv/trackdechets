@@ -1,43 +1,119 @@
+import { logger } from "@td/logger";
+import { AsyncResource } from "node:async_hooks";
 import { Request, Response, NextFunction } from "express";
-import logger from "../../logging/logger";
 
 /**
  * Logging middleware
+ * For each request we generate a log on start and finish. This enable us to detect requests that never finish.
+ * A `request_timing` property indicates the timing of the log (start/end)
  */
-export default function (graphQLPath: string) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    // Monkey patch res.send to retrieves response body
-    let responseBody = null;
-    const originalSend = res.send;
-    res.send = body => {
-      responseBody = body;
-      return originalSend.call(res, body);
+export function loggingMiddleware(graphQLPath: string) {
+  return function logging(
+    request: Request,
+    response: Response,
+    next: NextFunction
+  ) {
+    logExpressRequest(request, response, {
+      requestTiming: "start",
+      graphQLPath
+    });
+
+    const startTime = Date.now();
+
+    const { send, end } = response;
+
+    response.send = body => {
+      response.send = send;
+      response.locals.body = body;
+      return response.send(body);
     };
 
-    const start = new Date();
-
-    res.on("finish", () => {
-      const end = new Date();
-      const message = `${req.method} ${req.path}`;
-      const meta: { [key: string]: any } = {
-        user: req.user?.email || "anonyme",
-        auth: req.user?.auth,
-        ip: req.ip,
-        execution_time_num: end.getTime() - start.getTime(), // in millis,
-        http_params: req.params,
-        http_query: req.query,
-        http_status: res.statusCode,
-        response_body: Buffer.isBuffer(responseBody) ? null : responseBody
-      };
-      // GraphQL specific fields
-      if (req.path === graphQLPath && req.method === "POST") {
-        meta.graphql_operation_name = req.body?.operationName;
-        meta.graphql_variables = req.body?.variables;
-        meta.graphql_query = req.body?.query;
+    // To keep the request correlationId we bind the event handler to its parent context
+    const onClose = AsyncResource.bind(() => {
+      request.socket.off("close", onClose);
+      if (response.headersSent) {
+        return;
       }
-      logger.info(message, meta);
+
+      logExpressRequest(request, response, {
+        requestTiming: "error",
+        graphQLPath
+      });
     });
+
+    // Sometimes the connection is closed without calling res.end (ex: gateway times out the request before app does)
+    request.socket.on("close", onClose);
+
+    response.end = ((chunk: any, encoding: BufferEncoding) => {
+      response.end = end;
+
+      const responseTime = Date.now() - startTime;
+      request.socket.off("close", onClose);
+
+      logExpressRequest(request, response, {
+        requestTiming: "end",
+        responseTime,
+        graphQLPath
+      });
+
+      return response.end(chunk, encoding);
+    }) as any;
 
     next();
   };
+}
+
+function logExpressRequest(
+  request: Request,
+  response: Response,
+  {
+    requestTiming,
+    responseTime,
+    graphQLPath
+  }: {
+    requestTiming: "start" | "end" | "error";
+    responseTime?: number;
+    graphQLPath?: string;
+  }
+) {
+  const path = request.originalUrl.split("?")[0];
+  const message = `${request.method} ${path}`;
+
+  let requestMetadata: Record<string, any> = {
+    ip: request.ip,
+    http_params: request.params,
+    http_query: request.query,
+    http_path: path,
+    http_method: request.method,
+    request_timing: requestTiming
+  };
+
+  // GraphQL specific fields
+  if (graphQLPath && path === graphQLPath && request.method === "POST") {
+    requestMetadata.graphql_operation_name = request.body?.operationName;
+    requestMetadata.graphql_variables = request.body?.variables;
+    requestMetadata.graphql_query = request.body?.query;
+  }
+
+  if (["end", "error"].includes(requestTiming)) {
+    requestMetadata = {
+      ...requestMetadata,
+      user: request.user?.email || "anonyme",
+      auth: request.user?.auth,
+      http_status: response.statusCode,
+      request_timing: "end",
+      execution_time_num: responseTime, // in millis
+      response_body: Buffer.isBuffer(response.locals.body)
+        ? null
+        : response.locals.body,
+      graphql_operation: request.gqlInfos?.[0]?.operation,
+      graphql_selection_name: request.gqlInfos?.[0]?.name
+    };
+  }
+
+  if (requestTiming === "error") {
+    return logger.error(message, requestMetadata);
+  }
+
+  logger.info(message, requestMetadata);
 }

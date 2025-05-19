@@ -1,23 +1,16 @@
-import { QueryResolvers } from "../../../generated/graphql/types";
+import type { QueryResolvers } from "@td/codegen-back";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { unflattenBsff } from "../../converter";
-import { getUserCompanies } from "../../../users/database";
+import { expandBsffFromDB } from "../../converter";
 import { getBsffOrNotFound } from "../../database";
+import { checkCanRead } from "../../permissions";
 
 const bsff: QueryResolvers["bsff"] = async (_, { id }, context) => {
   const user = checkIsAuthenticated(context);
-  const companies = await getUserCompanies(user.id);
-  const sirets = companies.map(company => company.siret);
   const bsff = await getBsffOrNotFound({
-    id,
-    OR: [
-      { emitterCompanySiret: { in: sirets } },
-      { transporterCompanySiret: { in: sirets } },
-      { destinationCompanySiret: { in: sirets } }
-    ]
+    id
   });
-
-  return unflattenBsff(bsff);
+  await checkCanRead(user, bsff);
+  return expandBsffFromDB(bsff);
 };
 
 export default bsff;

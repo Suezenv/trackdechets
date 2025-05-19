@@ -4,35 +4,27 @@ import { Formik, Form, Field } from "formik";
 import * as yup from "yup";
 import {
   Bsff,
-  BsffAcceptationStatus,
   BsffSignatureType,
   Mutation,
   MutationSignBsffArgs,
-  MutationUpdateBsffArgs,
-} from "generated/graphql/types";
-import { RedErrorMessage, Switch } from "common/components";
-import { NotificationError } from "common/components/Error";
-import DateInput from "form/common/components/custom-inputs/DateInput";
-import NumberInput from "form/common/components/custom-inputs/NumberInput";
-import { SIGN_BSFF, UPDATE_BSFF_FORM } from "form/bsff/utils/queries";
+  MutationUpdateBsffArgs
+} from "@td/codegen-ui";
+import { RedErrorMessage } from "../../../../../common/components";
+import { NotificationError } from "../../../../../Apps/common/Components/Error/Error";
+import DateInput from "../../../../../form/common/components/custom-inputs/DateInput";
+import {
+  SIGN_BSFF,
+  UPDATE_BSFF_FORM
+} from "../../../../../Apps/common/queries/bsff/queries";
 import { SignBsff } from "./SignBsff";
-import { GET_BSDS } from "common/queries";
+import { subMonths } from "date-fns";
 
 const validationSchema = yup.object({
-  receptionDate: yup.date().required(),
-  receptionWeight: yup.number().required(),
-  receptionRefusalReason: yup.string().when("receptionAcceptationStatus", {
-    is: value => value === BsffAcceptationStatus.Refused,
-    then: schema =>
-      schema
-        .ensure()
-        .min(1, "Le motif du refus doit être complété en cas de refus"),
-    otherwise: schema => schema.nullable(),
-  }),
+  receptionDate: yup.date().required("La date de réception est requise"),
   signatureAuthor: yup
     .string()
     .ensure()
-    .min(1, "Le nom et prénom de l'auteur de la signature est requis"),
+    .min(1, "Le nom et prénom de l'auteur de la signature est requis")
 });
 
 interface SignReceptionModalProps {
@@ -48,7 +40,9 @@ function SignReceptionModal({ bsff, onCancel }: SignReceptionModalProps) {
   const [signBsff, signBsffResult] = useMutation<
     Pick<Mutation, "signBsff">,
     MutationSignBsffArgs
-  >(SIGN_BSFF, { refetchQueries: [GET_BSDS], awaitRefetchQueries: true });
+  >(SIGN_BSFF);
+
+  const TODAY = new Date();
 
   const loading = updateBsffResult.loading || signBsffResult.loading;
   const error = updateBsffResult.error ?? signBsffResult.error;
@@ -56,16 +50,8 @@ function SignReceptionModal({ bsff, onCancel }: SignReceptionModalProps) {
   return (
     <Formik
       initialValues={{
-        receptionDate:
-          bsff.destination?.reception?.date ?? new Date().toISOString(),
-        receptionWeight:
-          bsff.destination?.reception?.weight ?? bsff.weight?.value ?? 0,
-        receptionAcceptationStatus:
-          bsff.destination?.reception?.acceptation?.status ??
-          BsffAcceptationStatus.Accepted,
-        receptionRefusalReason:
-          bsff.destination?.reception?.acceptation?.refusalReason ?? null,
-        signatureAuthor: "",
+        receptionDate: bsff.destination?.reception?.date ?? TODAY.toISOString(),
+        signatureAuthor: ""
       }}
       validationSchema={validationSchema}
       onSubmit={async values => {
@@ -75,136 +61,99 @@ function SignReceptionModal({ bsff, onCancel }: SignReceptionModalProps) {
             input: {
               destination: {
                 reception: {
-                  date: values.receptionDate,
-                  weight: values.receptionWeight,
-                  acceptation: {
-                    status: values.receptionAcceptationStatus,
-                    refusalReason: values.receptionRefusalReason,
-                  },
-                },
-              },
-            },
-          },
+                  date: values.receptionDate
+                }
+              }
+            }
+          }
         });
         await signBsff({
           variables: {
             id: bsff.id,
-            type: BsffSignatureType.Reception,
-            signature: {
+            input: {
+              type: BsffSignatureType.Reception,
               author: values.signatureAuthor,
-              date: new Date().toISOString(),
-            },
-          },
+              date: values.receptionDate
+            }
+          }
         });
         onCancel();
       }}
     >
-      {({ values, setValues }) => (
-        <Form>
-          <p>
-            En qualité de <strong>destinataire du déchet</strong>, j'atteste que
-            les informations ci-dessus sont correctes. En signant ce document,
-            je déclare réceptionner le déchet.
-          </p>
-          <div className="form__row">
-            <label>
-              Date de réception
+      <Form>
+        <p>
+          En qualité de <strong>destinataire du déchet</strong>, j'atteste que
+          les informations ci-dessus sont correctes. En signant ce document, je
+          déclare réceptionner le déchet.
+        </p>
+        <div className="form__row">
+          <label>
+            Date de réception
+            <div className="td-date-wrapper">
               <Field
                 className="td-input"
                 name="receptionDate"
                 component={DateInput}
+                minDate={subMonths(TODAY, 2)}
+                maxDate={TODAY}
+                required
               />
-            </label>
-            <RedErrorMessage name="receptionDate" />
-          </div>
-          <div className="form__row">
-            <label>
-              Quantité de fluides reçu (en kilo(s))
-              <Field
-                className="td-input"
-                name="receptionWeight"
-                component={NumberInput}
-              />
-            </label>
-            <RedErrorMessage name="receptionWeight" />
-          </div>
-          <div className="form__row">
-            <label>
-              <Switch
-                label="Le déchet a été refusé"
-                onChange={checked =>
-                  setValues({
-                    ...values,
-                    receptionAcceptationStatus: checked
-                      ? BsffAcceptationStatus.Refused
-                      : BsffAcceptationStatus.Accepted,
-                    receptionRefusalReason: checked ? "" : null,
-                  })
-                }
-                checked={
-                  values.receptionAcceptationStatus ===
-                  BsffAcceptationStatus.Refused
-                }
-              />
-            </label>
-          </div>
-          {values.receptionAcceptationStatus ===
-            BsffAcceptationStatus.Refused && (
-            <div className="form__row">
-              <label>
-                <Field
-                  as="textarea"
-                  className="td-input"
-                  name="receptionRefusalReason"
-                  placeholder="Motif du refus"
-                />
-              </label>
-              <RedErrorMessage name="receptionRefusalReason" />
             </div>
-          )}
-          <div className="form__row">
-            <label>
-              NOM et prénom du signataire
-              <Field
-                className="td-input"
-                name="signatureAuthor"
-                placeholder="NOM Prénom"
-              />
-            </label>
-            <RedErrorMessage name="signatureAuthor" />
-          </div>
+          </label>
+          <RedErrorMessage name="receptionDate" />
+        </div>
+        <div className="form__row">
+          <label>
+            NOM et prénom du signataire
+            <Field
+              className="td-input"
+              name="signatureAuthor"
+              placeholder="NOM Prénom"
+            />
+          </label>
+          <RedErrorMessage name="signatureAuthor" />
+        </div>
 
-          {error && <NotificationError apolloError={error} />}
+        {error && <NotificationError apolloError={error} />}
 
-          <div className="td-modal-actions">
-            <button
-              type="button"
-              className="btn btn--outline-primary"
-              onClick={onCancel}
-            >
-              Annuler
-            </button>
-            <button
-              type="submit"
-              className="btn btn--primary"
-              disabled={loading}
-            >
-              <span>{loading ? "Signature en cours..." : "Signer"}</span>
-            </button>
-          </div>
-        </Form>
-      )}
+        <div className="td-modal-actions">
+          <button
+            type="button"
+            className="btn btn--outline-primary"
+            onClick={onCancel}
+          >
+            Annuler
+          </button>
+          <button type="submit" className="btn btn--primary" disabled={loading}>
+            <span>{loading ? "Signature en cours..." : "Signer"}</span>
+          </button>
+        </div>
+      </Form>
     </Formik>
   );
 }
 
 interface SignReceptionProps {
   bsffId: string;
+  isModalOpenFromParent?: boolean;
+  onModalCloseFromParent?: () => void;
+  displayActionButton?: boolean;
 }
 
-export function SignReception({ bsffId }: SignReceptionProps) {
+export function SignReception({
+  bsffId,
+  isModalOpenFromParent,
+  onModalCloseFromParent,
+  displayActionButton
+}: SignReceptionProps) {
   return (
-    <SignBsff title="Signer la réception" bsffId={bsffId}>
+    <SignBsff
+      title="Signer la réception"
+      bsffId={bsffId}
+      isModalOpenFromParent={isModalOpenFromParent}
+      onModalCloseFromParent={onModalCloseFromParent}
+      displayActionButton={displayActionButton}
+    >
       {({ bsff, onClose }) => (
         <SignReceptionModal bsff={bsff} onCancel={onClose} />
       )}

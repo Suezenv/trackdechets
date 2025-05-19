@@ -1,4 +1,4 @@
-import { QueryResolvers } from "../../../generated/graphql/types";
+import type { QueryResolvers } from "@td/codegen-back";
 import { applyAuthStrategies, AuthType } from "../../../auth";
 import { checkIsAuthenticated } from "../../../common/permissions";
 import { createAccessToken } from "../../database";
@@ -15,8 +15,8 @@ const apiKeyResolver: QueryResolvers["apiKey"] = async (
 ) => {
   applyAuthStrategies(context, [AuthType.Session]);
   const user = checkIsAuthenticated(context);
-  const { clearToken } = await createAccessToken(user);
-  return clearToken;
+  const accessToken = await createAccessToken({ user });
+  return accessToken.token;
 };
 
 export default apiKeyResolver;

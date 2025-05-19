@@ -1,22 +1,42 @@
 import { format } from "date-fns";
-import { CompanyType, Status, UserRole } from "@prisma/client";
+import {
+  CompanyType,
+  EmitterType,
+  Status,
+  User,
+  UserRole,
+  WasteAcceptationStatus
+} from "@prisma/client";
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import prisma from "../../../../prisma";
-import * as mailsHelper from "../../../../mailer/mailing";
+import { prisma } from "@td/prisma";
+import { sendMail } from "../../../../mailer/mailing";
 import {
   companyFactory,
   formFactory,
-  transportSegmentFactory,
+  formWithTempStorageFactory,
+  siretify,
+  bsddTransporterFactory,
   userFactory,
   userWithCompanyFactory
 } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
 import { prepareDB, prepareRedis } from "../../../__tests__/helpers";
 import { allowedFormats } from "../../../../common/dates";
+import { ErrorCode } from "../../../../common/errors";
+import type { Mutation, MutationMarkAsReceivedArgs } from "@td/codegen-back";
+import { generateBsddPdfToBase64 } from "../../../pdf/generateBsddPdf";
+import getReadableId from "../../../readableId";
+import { getFirstTransporter } from "../../../database";
+import { updateAppendix2Queue } from "../../../../queue/producers/updateAppendix2";
+import { waitForJobsCompletion } from "../../../../queue/helpers";
 
 // No mails
-const sendMailSpy = jest.spyOn(mailsHelper, "sendMail");
-sendMailSpy.mockImplementation(() => Promise.resolve());
+jest.mock("../../../../mailer/mailing");
+(sendMail as jest.Mock).mockImplementation(() => Promise.resolve());
+
+// No PDFs
+jest.mock("../../../pdf/generateBsddPdf");
+(generateBsddPdfToBase64 as jest.Mock).mockResolvedValue("");
 
 const MARK_AS_RECEIVED = `
   mutation MarkAsReceived($id: ID!, $receivedInfo: ReceivedFormInput!){
@@ -30,6 +50,17 @@ const MARK_AS_RECEIVED = `
 describe("Test Form reception", () => {
   afterEach(async () => {
     await resetDatabase();
+    jest.resetAllMocks();
+  });
+
+  beforeEach(() => {
+    // No mails
+    jest.mock("../../../../mailer/mailing");
+    (sendMail as jest.Mock).mockImplementation(() => Promise.resolve());
+
+    // No PDFs
+    jest.mock("../../../pdf/generateBsddPdf");
+    (generateBsddPdfToBase64 as jest.Mock).mockResolvedValue("");
   });
 
   it("should mark a sent form as received", async () => {
@@ -41,7 +72,7 @@ describe("Test Form reception", () => {
     } = await prepareDB();
     const form = await prisma.form.update({
       where: { id: initialForm.id },
-      data: { currentTransporterSiret: "5678" }
+      data: { currentTransporterOrgId: siretify(3) }
     });
     await prepareRedis({
       emitterCompany,
@@ -60,15 +91,15 @@ describe("Test Form reception", () => {
       }
     });
 
-    const frm = await prisma.form.findUnique({ where: { id: form.id } });
+    const frm = await prisma.form.findUniqueOrThrow({ where: { id: form.id } });
 
     expect(frm.status).toBe("RECEIVED");
     expect(frm.wasteAcceptationStatus).toBe(null);
     expect(frm.receivedBy).toBe("Bill");
     expect(frm.quantityReceived).toBe(null);
 
-    // when form is received, we clean up currentTransporterSiret
-    expect(frm.currentTransporterSiret).toEqual("");
+    // when form is received, we clean up currentTransporterOrgId
+    expect(frm.currentTransporterOrgId).toEqual("");
 
     // A StatusLog object is created
     const logs = await prisma.statusLog.findMany({
@@ -76,6 +107,108 @@ describe("Test Form reception", () => {
     });
     expect(logs.length).toBe(1);
     expect(logs[0].status).toBe("RECEIVED");
+  });
+
+  it("ensure an older SENT bsdd with invalid plates can still be accepted", async () => {
+    const emitter = await userWithCompanyFactory("ADMIN");
+    const transporter = await userWithCompanyFactory("ADMIN");
+    const recipient = await userWithCompanyFactory("ADMIN");
+    const initialForm = await formFactory({
+      ownerId: emitter.user.id,
+      opt: {
+        status: "SENT",
+        emitterCompanySiret: emitter.company.siret,
+        emitterCompanyName: emitter.company.name,
+        signedByTransporter: null,
+        sentAt: null,
+        sentBy: null,
+
+        emittedBy: emitter.user.name,
+
+        recipientCompanySiret: recipient.company.siret,
+        recipientsSirets: [recipient.company.siret!],
+        transporters: {
+          create: {
+            transporterCompanySiret: transporter.company.siret,
+            transporterCompanyName: transporter.company.name,
+            transporterNumberPlate: "XY", // invalid plate number
+            number: 1
+          }
+        }
+      }
+    });
+
+    const form = await prisma.form.update({
+      where: { id: initialForm.id },
+      data: { currentTransporterOrgId: siretify(3) }
+    });
+
+    const { mutate } = makeClient(recipient.user);
+
+    await mutate(MARK_AS_RECEIVED, {
+      variables: {
+        id: form.id,
+        receivedInfo: {
+          receivedBy: "Bill",
+          receivedAt: "2019-01-17T10:22:00+0100"
+        }
+      }
+    });
+
+    const frm = await prisma.form.findUniqueOrThrow({ where: { id: form.id } });
+
+    expect(frm.status).toBe("RECEIVED");
+    expect(frm.wasteAcceptationStatus).toBe(null);
+    expect(frm.receivedBy).toBe("Bill");
+    expect(frm.quantityReceived).toBe(null);
+
+    // when form is received, we clean up currentTransporterOrgId
+    expect(frm.currentTransporterOrgId).toEqual("");
+
+    // A StatusLog object is created
+    const logs = await prisma.statusLog.findMany({
+      where: { form: { id: frm.id }, user: { id: recipient.id } }
+    });
+    expect(logs.length).toBe(1);
+    expect(logs[0].status).toBe("RECEIVED");
+  });
+
+  it("should be possible to specify a quantityReceived=0 when acceptation status is not specified", async () => {
+    const {
+      emitterCompany,
+      recipient,
+      recipientCompany,
+      form: initialForm
+    } = await prepareDB();
+    const form = await prisma.form.update({
+      where: { id: initialForm.id },
+      data: { currentTransporterOrgId: siretify(3) }
+    });
+    await prepareRedis({
+      emitterCompany,
+      recipientCompany
+    });
+
+    const { mutate } = makeClient(recipient);
+
+    const { errors } = await mutate(MARK_AS_RECEIVED, {
+      variables: {
+        id: form.id,
+        receivedInfo: {
+          receivedBy: "Bill",
+          receivedAt: "2019-01-17T10:22:00+0100",
+          quantityReceived: 0
+        }
+      }
+    });
+
+    expect(errors).toBeUndefined();
+
+    const receivedForm = await prisma.form.findUniqueOrThrow({
+      where: { id: form.id }
+    });
+
+    expect(receivedForm.status).toBe("RECEIVED");
   });
 
   it("should mark a sent form as accepted if wasteAcceptationStatus is ACCEPTED", async () => {
@@ -87,7 +220,7 @@ describe("Test Form reception", () => {
     } = await prepareDB();
     const form = await prisma.form.update({
       where: { id: initialForm.id },
-      data: { currentTransporterSiret: "5678" }
+      data: { currentTransporterOrgId: siretify(3) }
     });
     await prepareRedis({
       emitterCompany,
@@ -104,20 +237,21 @@ describe("Test Form reception", () => {
           receivedAt: "2019-01-17T10:22:00+0100",
           signedAt: "2019-01-17T10:22:00+0100",
           wasteAcceptationStatus: "ACCEPTED",
-          quantityReceived: 11
+          quantityReceived: 11,
+          quantityRefused: 0
         }
       }
     });
 
-    const frm = await prisma.form.findUnique({ where: { id: form.id } });
+    const frm = await prisma.form.findUniqueOrThrow({ where: { id: form.id } });
 
     expect(frm.status).toBe("ACCEPTED");
     expect(frm.wasteAcceptationStatus).toBe("ACCEPTED");
     expect(frm.receivedBy).toBe("Bill");
-    expect(frm.quantityReceived).toBe(11);
+    expect(frm.quantityReceived?.toNumber()).toBe(11);
 
-    // when form is received, we clean up currentTransporterSiret
-    expect(frm.currentTransporterSiret).toEqual("");
+    // when form is received, we clean up currentTransporterOrgId
+    expect(frm.currentTransporterOrgId).toEqual("");
 
     // A StatusLog object is created
     const logs = await prisma.statusLog.findMany({
@@ -127,13 +261,63 @@ describe("Test Form reception", () => {
     expect(logs[0].status).toBe("ACCEPTED");
   });
 
-  it("should not accept negative values", async () => {
+  it("it should not mark a sent form as accepted if wasteAcceptationStatus is ACCEPTED but quantityReceived is 0", async () => {
     const {
       emitterCompany,
       recipient,
       recipientCompany,
-      form
+      form: initialForm
     } = await prepareDB();
+    const form = await prisma.form.update({
+      where: { id: initialForm.id },
+      data: { currentTransporterOrgId: siretify(3) }
+    });
+    await prepareRedis({
+      emitterCompany,
+      recipientCompany
+    });
+    const frm1 = await prisma.form.findUniqueOrThrow({
+      where: { id: form.id }
+    });
+
+    expect(frm1.quantityReceivedType).toBeNull();
+    const { mutate } = makeClient(recipient);
+    const { errors } = await mutate(MARK_AS_RECEIVED, {
+      variables: {
+        id: form.id,
+        receivedInfo: {
+          receivedBy: "Bill",
+          receivedAt: "2019-01-17T10:22:00+0100",
+          signedAt: "2019-01-17T10:22:00+0100",
+          wasteAcceptationStatus: "ACCEPTED",
+          quantityReceived: 0,
+          quantityRefused: 0
+        }
+      }
+    });
+
+    expect(errors).toEqual([
+      expect.objectContaining({
+        message:
+          "Réception : le poids doit être supérieur à 0 lorsque le déchet est accepté ou accepté partiellement",
+        extensions: expect.objectContaining({
+          code: ErrorCode.BAD_USER_INPUT
+        })
+      })
+    ]);
+    const frm = await prisma.form.findUniqueOrThrow({
+      where: { id: form.id }
+    });
+    // form was not accepted, still sent
+    expect(frm.status).toBe("SENT");
+    expect(frm.wasteAcceptationStatus).toBe(null);
+    expect(frm.receivedBy).toBe(null);
+    expect(frm.quantityReceived).toBe(null);
+  });
+
+  it("should not accept negative values", async () => {
+    const { emitterCompany, recipient, recipientCompany, form } =
+      await prepareDB();
     await prepareRedis({
       emitterCompany,
       recipientCompany
@@ -154,7 +338,7 @@ describe("Test Form reception", () => {
       }
     });
 
-    const frm = await prisma.form.findUnique({ where: { id: form.id } });
+    const frm = await prisma.form.findUniqueOrThrow({ where: { id: form.id } });
     // form was not accepted, still sent
     expect(frm.status).toBe("SENT");
     expect(frm.wasteAcceptationStatus).toBe(null);
@@ -163,12 +347,8 @@ describe("Test Form reception", () => {
   });
 
   it("should not accept 0 value when form is accepted", async () => {
-    const {
-      emitterCompany,
-      recipient,
-      recipientCompany,
-      form
-    } = await prepareDB();
+    const { emitterCompany, recipient, recipientCompany, form } =
+      await prepareDB();
     await prepareRedis({
       emitterCompany,
       recipientCompany
@@ -189,7 +369,7 @@ describe("Test Form reception", () => {
       }
     });
 
-    const frm = await prisma.form.findUnique({ where: { id: form.id } });
+    const frm = await prisma.form.findUniqueOrThrow({ where: { id: form.id } });
     // form was not accepted, still sent
     expect(frm.status).toBe("SENT");
     expect(frm.wasteAcceptationStatus).toBe(null);
@@ -198,12 +378,8 @@ describe("Test Form reception", () => {
   });
 
   it("should mark a sent form as refused", async () => {
-    const {
-      emitterCompany,
-      recipient,
-      recipientCompany,
-      form
-    } = await prepareDB();
+    const { emitterCompany, recipient, recipientCompany, form } =
+      await prepareDB();
     await prepareRedis({
       emitterCompany,
       recipientCompany
@@ -219,19 +395,20 @@ describe("Test Form reception", () => {
           signedAt: "2019-01-17T10:22:00+0100",
           wasteAcceptationStatus: "REFUSED",
           wasteRefusalReason: "Lorem ipsum",
-          quantityReceived: 0
+          quantityReceived: 0,
+          quantityRefused: 0
         }
       }
     });
 
-    const frm = await prisma.form.findUnique({ where: { id: form.id } });
+    const frm = await prisma.form.findUniqueOrThrow({ where: { id: form.id } });
 
     // form was refused
     expect(frm.status).toBe("REFUSED");
     expect(frm.wasteAcceptationStatus).toBe("REFUSED");
     expect(frm.receivedBy).toBe("Holden");
     expect(frm.wasteRefusalReason).toBe("Lorem ipsum");
-    expect(frm.quantityReceived).toBe(0); // quantityReceived is set to 0
+    expect(frm.quantityReceived?.toNumber()).toBe(0); // quantityReceived is set to 0
 
     // A StatusLog object is created
     const logs = await prisma.statusLog.findMany({
@@ -239,58 +416,17 @@ describe("Test Form reception", () => {
     });
     expect(logs.length).toBe(1);
     expect(logs[0].status).toBe("REFUSED");
-  });
-
-  it("should not accept a non-zero quantity when waste is refused", async () => {
-    const {
-      emitterCompany,
-      recipient,
-      recipientCompany,
-      form
-    } = await prepareDB();
-    await prepareRedis({
-      emitterCompany,
-      recipientCompany
-    });
-    const { mutate } = makeClient(recipient);
-    // trying to refuse waste with a non-zero quantityReceived
-    await mutate(MARK_AS_RECEIVED, {
-      variables: {
-        id: form.id,
-        receivedInfo: {
-          receivedBy: "Holden",
-          receivedAt: "2019-01-17T10:22:00+0100",
-          signedAt: "2019-01-17T10:22:00+0100",
-          wasteAcceptationStatus: "REFUSED",
-          wasteRefusalReason: "Lorem ipsum",
-          quantityReceived: 21
-        }
-      }
-    });
-
-    const frm = await prisma.form.findUnique({ where: { id: form.id } });
-
-    // form is still sent
-    expect(frm.status).toBe("SENT");
-
-    expect(frm.wasteAcceptationStatus).toBe(null);
-    expect(frm.receivedBy).toBe(null);
-    expect(frm.quantityReceived).toBe(null);
-
-    // No StatusLog object was created
-    const logs = await prisma.statusLog.findMany({
-      where: { form: { id: frm.id }, user: { id: recipient.id } }
-    });
-    expect(logs.length).toBe(0);
+    expect(sendMail as jest.Mock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subject:
+          "Le déchet de l’entreprise company_1 a été totalement refusé à réception"
+      })
+    );
   });
 
   it("should mark a sent form as partially refused", async () => {
-    const {
-      emitterCompany,
-      recipient,
-      recipientCompany,
-      form
-    } = await prepareDB();
+    const { emitterCompany, recipient, recipientCompany, form } =
+      await prepareDB();
     await prepareRedis({
       emitterCompany,
       recipientCompany
@@ -306,18 +442,20 @@ describe("Test Form reception", () => {
           signedAt: "2019-01-17T10:22:00+0100",
           wasteAcceptationStatus: "PARTIALLY_REFUSED",
           wasteRefusalReason: "Dolor sit amet",
-          quantityReceived: 12.5
+          quantityReceived: 12.5,
+          quantityRefused: 7
         }
       }
     });
 
-    const frm = await prisma.form.findUnique({ where: { id: form.id } });
+    const frm = await prisma.form.findUniqueOrThrow({ where: { id: form.id } });
     // form was not accepted
     expect(frm.status).toBe("ACCEPTED");
     expect(frm.wasteAcceptationStatus).toBe("PARTIALLY_REFUSED");
     expect(frm.receivedBy).toBe("Carol");
     expect(frm.wasteRefusalReason).toBe("Dolor sit amet");
-    expect(frm.quantityReceived).toBe(12.5);
+    expect(frm.quantityReceived?.toNumber()).toBe(12.5);
+    expect(frm.quantityRefused?.toNumber()).toBe(7);
 
     // A StatusLog object is created
     const logs = await prisma.statusLog.findMany({
@@ -328,12 +466,8 @@ describe("Test Form reception", () => {
   });
 
   it("should not accept to edit a received form", async () => {
-    const {
-      emitter,
-      emitterCompany,
-      recipient,
-      recipientCompany
-    } = await prepareDB();
+    const { emitter, emitterCompany, recipient, recipientCompany } =
+      await prepareDB();
     await prepareRedis({
       emitterCompany,
       recipientCompany
@@ -366,15 +500,15 @@ describe("Test Form reception", () => {
       }
     });
 
-    const frm = await prisma.form.findUnique({
+    const frm = await prisma.form.findUniqueOrThrow({
       where: { id: alreadyReceivedForm.id }
     });
     // form is not updated by the last mutation
     expect(frm.status).toBe("RECEIVED");
     expect(frm.wasteAcceptationStatus).toBe("ACCEPTED");
     expect(frm.receivedBy).toBe("Hugo");
-    expect(frm.wasteRefusalReason).toBe("");
-    expect(frm.quantityReceived).toBe(22.7);
+    expect(frm.wasteRefusalReason).toBe(null);
+    expect(frm.quantityReceived?.toNumber()).toBe(22.7);
   });
 
   it("should not allow users whose siret is not on the form", async () => {
@@ -383,12 +517,12 @@ describe("Test Form reception", () => {
       emitterCompany,
       recipientCompany
     });
-    const randomUserCompany = await companyFactory({ siret: "9999999" }); // this user does not belong to the form
+    const randomUserCompany = await companyFactory({ siret: siretify(2) }); // this user does not belong to the form
     const randomUser = await userFactory({
       companyAssociations: {
         create: {
-          company: { connect: { siret: randomUserCompany.siret } },
-          role: "ADMIN" as UserRole
+          company: { connect: { id: randomUserCompany.id } },
+          role: "ADMIN"
         }
       }
     });
@@ -408,7 +542,7 @@ describe("Test Form reception", () => {
       }
     });
 
-    const frm = await prisma.form.findUnique({ where: { id: form.id } });
+    const frm = await prisma.form.findUniqueOrThrow({ where: { id: form.id } });
 
     expect(frm.status).toBe("SENT");
     expect(frm.wasteAcceptationStatus).toBe(null);
@@ -425,14 +559,14 @@ describe("Test Form reception", () => {
     } = await prepareDB();
     const form = await prisma.form.update({
       where: { id: initialForm.id },
-      data: { currentTransporterSiret: "5678" }
+      data: { currentTransporterOrgId: siretify(3) }
     });
 
     // a taken over segment
-    await transportSegmentFactory({
+    await bsddTransporterFactory({
       formId: form.id,
-      segmentPayload: {
-        transporterCompanySiret: "98765",
+      opts: {
+        transporterCompanySiret: siretify(2),
         readyToTakeOver: true,
         takenOverAt: new Date("2020-01-01"),
         takenOverBy: "Jason Statham"
@@ -453,20 +587,21 @@ describe("Test Form reception", () => {
           receivedBy: "Bill",
           receivedAt: "2019-01-17T10:22:00+0100",
           wasteAcceptationStatus: "ACCEPTED",
-          quantityReceived: 11
+          quantityReceived: 11,
+          quantityRefused: 0
         }
       }
     });
 
-    const frm = await prisma.form.findUnique({ where: { id: form.id } });
+    const frm = await prisma.form.findUniqueOrThrow({ where: { id: form.id } });
 
     expect(frm.status).toBe("ACCEPTED");
     expect(frm.wasteAcceptationStatus).toBe("ACCEPTED");
     expect(frm.receivedBy).toBe("Bill");
-    expect(frm.quantityReceived).toBe(11);
+    expect(frm.quantityReceived?.toNumber()).toBe(11);
 
-    // when form is received, we clean up currentTransporterSiret
-    expect(frm.currentTransporterSiret).toEqual("");
+    // when form is received, we clean up currentTransporterOrgId
+    expect(frm.currentTransporterOrgId).toEqual("");
 
     // A StatusLog object is created
     const logs = await prisma.statusLog.findMany({
@@ -476,7 +611,7 @@ describe("Test Form reception", () => {
     expect(logs[0].status).toBe("ACCEPTED");
   });
 
-  it("should not mark as received a form with segment not taken over", async () => {
+  it("should delete stale transport segments not yet taken over after a reception occured", async () => {
     const {
       emitterCompany,
       recipient,
@@ -485,24 +620,27 @@ describe("Test Form reception", () => {
     } = await prepareDB();
     const form = await prisma.form.update({
       where: { id: initialForm.id },
-      data: { currentTransporterSiret: "5678" }
+      data: { currentTransporterOrgId: siretify(3) }
     });
 
     // a taken over segment
-    await transportSegmentFactory({
+    await bsddTransporterFactory({
       formId: form.id,
-      segmentPayload: {
-        transporterCompanySiret: "98765",
+      opts: {
+        transporterCompanySiret: siretify(3),
         readyToTakeOver: true,
         takenOverAt: new Date("2020-01-01"),
         takenOverBy: "Jason Statham"
       }
     });
 
-    // this segment is still not yet taken over, the form should not be accepted
-    await transportSegmentFactory({
+    // this segment has not been taken over yet
+    const staleSegment = await bsddTransporterFactory({
       formId: form.id,
-      segmentPayload: { transporterCompanySiret: "7777", readyToTakeOver: true }
+      opts: {
+        transporterCompanySiret: siretify(4),
+        readyToTakeOver: true
+      }
     });
     await prepareRedis({
       emitterCompany,
@@ -511,6 +649,7 @@ describe("Test Form reception", () => {
 
     const { mutate } = makeClient(recipient);
 
+    // the truck finally goes directly to the destination
     await mutate(MARK_AS_RECEIVED, {
       variables: {
         id: form.id,
@@ -518,23 +657,23 @@ describe("Test Form reception", () => {
           receivedBy: "Bill",
           receivedAt: "2019-01-17T10:22:00+0100",
           wasteAcceptationStatus: "ACCEPTED",
-          quantityReceived: 11
+          quantityReceived: 11,
+          quantityRefused: 0
         }
       }
     });
 
-    const frm = await prisma.form.findUnique({ where: { id: form.id } });
+    const frm = await prisma.form.findUniqueOrThrow({ where: { id: form.id } });
 
-    expect(frm.status).toBe("SENT");
+    expect(frm.status).toBe("ACCEPTED");
 
-    // currentTransporterSiret was not cleaned up
-    expect(frm.currentTransporterSiret).toEqual("5678");
+    // currentTransporterOrgId was cleaned up
+    expect(frm.currentTransporterOrgId).toEqual("");
 
-    // A StatusLog object is created
-    const logs = await prisma.statusLog.findMany({
-      where: { form: { id: frm.id }, user: { id: recipient.id } }
+    const deleted = await prisma.bsddTransporter.findFirst({
+      where: { id: staleSegment.id }
     });
-    expect(logs.length).toBe(0);
+    expect(deleted).toEqual(null);
   });
 
   it("should fail if recipient is temp storage", async () => {
@@ -598,10 +737,1076 @@ describe("Test Form reception", () => {
         }
       });
 
-      const frm = await prisma.form.findUnique({ where: { id: form.id } });
+      const frm = await prisma.form.findUniqueOrThrow({
+        where: { id: form.id }
+      });
 
       expect(frm.status).toBe(Status.RECEIVED);
       expect(frm.receivedAt).toEqual(receivedAt);
     }
   );
+
+  it("should unlink appendix 2 in case of refusal", async () => {
+    const { user: ttrUser, company: ttr } = await userWithCompanyFactory(
+      UserRole.MEMBER,
+      {
+        companyTypes: { set: [CompanyType.COLLECTOR] }
+      }
+    );
+    const { user: destinationUser, company: destination } =
+      await userWithCompanyFactory(UserRole.MEMBER, {
+        companyTypes: { set: [CompanyType.WASTEPROCESSOR] }
+      });
+
+    const form1 = await formFactory({
+      ownerId: ttrUser.id,
+      opt: {
+        status: "GROUPED",
+        processingOperationDone: "R 13",
+        recipientCompanySiret: ttr.siret,
+        quantityReceived: 1
+      }
+    });
+
+    const form2 = await formFactory({
+      ownerId: ttrUser.id,
+      opt: {
+        status: "GROUPED",
+        processingOperationDone: "R 13",
+        recipientCompanySiret: ttr.siret,
+        quantityReceived: 1
+      }
+    });
+
+    const groupementForm = await formFactory({
+      ownerId: ttrUser.id,
+      opt: {
+        emitterType: "APPENDIX2",
+        emitterCompanySiret: ttr.siret,
+        status: Status.SENT,
+        receivedBy: "Bill",
+        recipientCompanySiret: destination.siret,
+        receivedAt: new Date("2019-01-17"),
+        grouping: {
+          createMany: {
+            data: [
+              {
+                initialFormId: form1.id,
+                quantity: form1.quantityReceived!.toNumber()
+              },
+              {
+                initialFormId: form2.id,
+                quantity: form2.quantityReceived!.toNumber()
+              }
+            ]
+          }
+        }
+      }
+    });
+
+    const { mutate } = makeClient(destinationUser);
+
+    const mutateFn = () =>
+      mutate<Pick<Mutation, "markAsReceived">, MutationMarkAsReceivedArgs>(
+        MARK_AS_RECEIVED,
+        {
+          variables: {
+            id: groupementForm.id,
+            receivedInfo: {
+              wasteAcceptationStatus: "REFUSED",
+              wasteRefusalReason: "Parce que",
+              receivedAt: "2019-01-18" as any,
+              receivedBy: "John",
+              quantityReceived: 0,
+              quantityRefused: 0
+            }
+          }
+        }
+      );
+
+    await waitForJobsCompletion({
+      fn: mutateFn,
+      queue: updateAppendix2Queue,
+      expectedJobCount: 2
+    });
+
+    const updatedForm1 = await prisma.form.findUniqueOrThrow({
+      where: { id: form1.id }
+    });
+    const updatedForm2 = await prisma.form.findUniqueOrThrow({
+      where: { id: form2.id }
+    });
+    expect(updatedForm1.status).toEqual("AWAITING_GROUP");
+    expect(updatedForm2.status).toEqual("AWAITING_GROUP");
+
+    const appendix2Forms = (
+      await prisma.formGroupement.findMany({
+        where: { nextFormId: groupementForm.id },
+        include: { initialForm: true }
+      })
+    ).map(g => g.initialForm);
+
+    expect(appendix2Forms).toEqual([]);
+  });
+
+  it("should not allow a temp storer to call markAsReceived", async () => {
+    const emitter = await userWithCompanyFactory("MEMBER");
+    const tempStorer = await userWithCompanyFactory("MEMBER");
+    const destination = await userWithCompanyFactory("MEMBER");
+    const form = await formWithTempStorageFactory({
+      ownerId: emitter.user.id,
+      opt: {
+        recipientCompanySiret: tempStorer.company.siret,
+        status: "RESENT"
+      },
+      forwardedInOpts: {
+        recipientCompanySiret: destination.company.siret,
+        emittedAt: new Date()
+      }
+    });
+    const { mutate } = makeClient(tempStorer.user);
+    const { errors } = await mutate<
+      Pick<Mutation, "markAsReceived">,
+      MutationMarkAsReceivedArgs
+    >(MARK_AS_RECEIVED, {
+      variables: {
+        id: form.id,
+        receivedInfo: {
+          wasteAcceptationStatus: "ACCEPTED",
+          receivedAt: new Date("2022-01-01").toISOString() as any,
+          receivedBy: "John",
+          quantityReceived: 1
+        }
+      }
+    });
+    expect(errors).toEqual([
+      expect.objectContaining({
+        message: "Vous n'êtes pas autorisé à réceptionner ce bordereau"
+      })
+    ]);
+  });
+
+  it("should throw an error if transport mode is road and quantity accepted > 40T", async () => {
+    const { emitterCompany, recipient, recipientCompany, form } =
+      await prepareDB();
+
+    const transporter = await getFirstTransporter(form);
+
+    expect(transporter!.transporterTransportMode).toEqual("ROAD");
+
+    await prepareRedis({
+      emitterCompany,
+      recipientCompany
+    });
+
+    const { mutate } = makeClient(recipient);
+
+    const { errors } = await mutate(MARK_AS_RECEIVED, {
+      variables: {
+        id: form.id,
+        receivedInfo: {
+          receivedBy: "Bill",
+          receivedAt: "2019-01-17T10:22:00+0100",
+          signedAt: "2019-01-17T10:22:00+0100",
+          wasteAcceptationStatus: "ACCEPTED",
+          quantityReceived: 50,
+          quantityRefused: 0
+        }
+      }
+    });
+
+    expect(errors).toEqual([
+      expect.objectContaining({
+        message:
+          "Réception : le poids doit être inférieur à 40 tonnes lorsque le transport se fait par la route"
+      })
+    ]);
+  });
+
+  it("should throw an error if the BSDD is canceled", async () => {
+    const { emitterCompany, recipient, recipientCompany, form } =
+      await prepareDB({ status: Status.CANCELED });
+
+    const transporter = await getFirstTransporter(form);
+
+    expect(transporter!.transporterTransportMode).toEqual("ROAD");
+
+    await prepareRedis({
+      emitterCompany,
+      recipientCompany
+    });
+
+    const { mutate } = makeClient(recipient);
+
+    const { errors } = await mutate(MARK_AS_RECEIVED, {
+      variables: {
+        id: form.id,
+        receivedInfo: {
+          receivedBy: "Bill",
+          receivedAt: "2019-01-17T10:22:00+0100",
+          signedAt: "2019-01-17T10:22:00+0100",
+          wasteAcceptationStatus: "ACCEPTED",
+          quantityReceived: 30,
+          quantityRefused: 0
+        }
+      }
+    });
+
+    expect(errors).toEqual([
+      expect.objectContaining({
+        message: "Vous ne pouvez pas passer ce bordereau à l'état souhaité."
+      })
+    ]);
+  });
+
+  describe("Annexe 1", () => {
+    it("should prevent marking an appendix1 item as received", async () => {
+      const { user, company } = await userWithCompanyFactory("MEMBER");
+
+      const appendix1_item = await prisma.form.create({
+        data: {
+          readableId: getReadableId(),
+          status: Status.SENT,
+          emitterType: EmitterType.APPENDIX1_PRODUCER,
+          emitterCompanySiret: company.siret,
+          owner: { connect: { id: user.id } },
+          transporters: {
+            create: {
+              transporterCompanySiret: company.siret,
+              number: 1
+            }
+          }
+        }
+      });
+
+      const { mutate } = makeClient(user);
+      const { errors } = await mutate<
+        Pick<Mutation, "markAsReceived">,
+        MutationMarkAsReceivedArgs
+      >(MARK_AS_RECEIVED, {
+        variables: {
+          id: appendix1_item.id,
+          receivedInfo: {
+            wasteAcceptationStatus: "ACCEPTED",
+            receivedAt: new Date("2022-01-01").toISOString() as any,
+            receivedBy: "John",
+            quantityReceived: 1
+          }
+        }
+      });
+
+      expect(errors).toEqual([
+        expect.objectContaining({
+          message:
+            "Un bordereau d'annexe 1 ne peut pas être marqué comme reçu. C'est la réception du bordereau de tournée qui mettra à jour le statut de ce bordereau."
+        })
+      ]);
+    });
+
+    it("should mark the appendix1 items as ACCEPTED when the container form if marked as ACCEPTED", async () => {
+      const { company: producerCompany } = await userWithCompanyFactory(
+        "MEMBER"
+      );
+      const { user, company } = await userWithCompanyFactory("MEMBER");
+
+      const appendix1_item = await prisma.form.create({
+        data: {
+          readableId: getReadableId(),
+          status: Status.SENT,
+          emitterType: EmitterType.APPENDIX1_PRODUCER,
+          emitterCompanySiret: producerCompany.siret,
+          owner: { connect: { id: user.id } },
+          transporters: {
+            create: {
+              transporterCompanySiret: company.siret,
+              number: 1
+            }
+          }
+        }
+      });
+
+      const container = await formFactory({
+        ownerId: user.id,
+        opt: {
+          status: Status.SENT,
+          emitterType: EmitterType.APPENDIX1,
+          emitterCompanySiret: company.siret,
+          emitterCompanyName: company.name,
+          recipientCompanySiret: company.siret,
+          grouping: {
+            create: { initialFormId: appendix1_item.id, quantity: 0 }
+          },
+          transporters: {
+            create: {
+              transporterCompanySiret: company.siret,
+              number: 1
+            }
+          }
+        }
+      });
+
+      const { mutate } = makeClient(user);
+      const { data } = await mutate<
+        Pick<Mutation, "markAsReceived">,
+        MutationMarkAsReceivedArgs
+      >(MARK_AS_RECEIVED, {
+        variables: {
+          id: container.id,
+          receivedInfo: {
+            wasteAcceptationStatus: "ACCEPTED",
+            receivedAt: new Date("2022-01-01").toISOString() as any,
+            receivedBy: "John",
+            quantityReceived: 1,
+            quantityRefused: 0
+          }
+        }
+      });
+
+      expect(data.markAsReceived.status).toBe(Status.ACCEPTED);
+
+      const refreshedItem = await prisma.form.findUniqueOrThrow({
+        where: { id: appendix1_item.id }
+      });
+      expect(refreshedItem.status).toBe(Status.ACCEPTED);
+    });
+
+    it("should mark the appendix1 items as RECEIVED when the container form if marked as RECEIVED", async () => {
+      const { company: producerCompany } = await userWithCompanyFactory(
+        "MEMBER"
+      );
+      const { user, company } = await userWithCompanyFactory("MEMBER");
+
+      const appendix1_item = await prisma.form.create({
+        data: {
+          readableId: getReadableId(),
+          status: Status.SENT,
+          emitterType: EmitterType.APPENDIX1_PRODUCER,
+          emitterCompanySiret: producerCompany.siret,
+          owner: { connect: { id: user.id } },
+          transporters: {
+            create: {
+              transporterCompanySiret: company.siret,
+              number: 1
+            }
+          }
+        }
+      });
+
+      const container = await formFactory({
+        ownerId: user.id,
+        opt: {
+          status: Status.SENT,
+          emitterType: EmitterType.APPENDIX1,
+          emitterCompanySiret: company.siret,
+          emitterCompanyName: company.name,
+          recipientCompanySiret: company.siret,
+          grouping: {
+            create: { initialFormId: appendix1_item.id, quantity: 0 }
+          },
+          transporters: {
+            create: {
+              transporterCompanySiret: company.siret,
+              number: 1
+            }
+          }
+        }
+      });
+
+      const { mutate } = makeClient(user);
+      const { data } = await mutate<
+        Pick<Mutation, "markAsReceived">,
+        MutationMarkAsReceivedArgs
+      >(MARK_AS_RECEIVED, {
+        variables: {
+          id: container.id,
+          receivedInfo: {
+            receivedAt: new Date("2022-01-01").toISOString() as any,
+            receivedBy: "John",
+            quantityReceived: 1
+          }
+        }
+      });
+
+      expect(data.markAsReceived.status).toBe(Status.RECEIVED);
+
+      const refreshedItem = await prisma.form.findUniqueOrThrow({
+        where: { id: appendix1_item.id }
+      });
+      expect(refreshedItem.status).toBe(Status.RECEIVED);
+    });
+
+    it("should remove the appendix1 items that have not been marked as SENT when receiving the container form", async () => {
+      const { company: producerCompany } = await userWithCompanyFactory(
+        "MEMBER"
+      );
+      const { user, company } = await userWithCompanyFactory("MEMBER");
+
+      // This one is SENT
+      const appendix1_1 = await prisma.form.create({
+        data: {
+          readableId: getReadableId(),
+          status: Status.SENT,
+          emitterType: EmitterType.APPENDIX1_PRODUCER,
+          emitterCompanySiret: producerCompany.siret,
+          owner: { connect: { id: user.id } },
+          transporters: {
+            create: {
+              transporterCompanySiret: company.siret,
+              number: 1
+            }
+          }
+        }
+      });
+      // This one hasnt been signed by the transporter
+      const appendix1_2 = await prisma.form.create({
+        data: {
+          readableId: getReadableId(),
+          status: Status.SIGNED_BY_PRODUCER,
+          emitterType: EmitterType.APPENDIX1_PRODUCER,
+          emitterCompanySiret: producerCompany.siret,
+          owner: { connect: { id: user.id } },
+          transporters: {
+            create: {
+              transporterCompanySiret: company.siret,
+              number: 1
+            }
+          }
+        }
+      });
+      // This one hasnt been signed at all
+      const appendix1_3 = await prisma.form.create({
+        data: {
+          readableId: getReadableId(),
+          status: Status.SEALED,
+          emitterType: EmitterType.APPENDIX1_PRODUCER,
+          emitterCompanySiret: producerCompany.siret,
+          owner: { connect: { id: user.id } },
+          transporters: {
+            create: {
+              transporterCompanySiret: company.siret,
+              number: 1
+            }
+          }
+        }
+      });
+
+      const container = await formFactory({
+        ownerId: user.id,
+        opt: {
+          status: Status.SENT,
+          emitterType: EmitterType.APPENDIX1,
+          emitterCompanySiret: company.siret,
+          emitterCompanyName: company.name,
+          recipientCompanySiret: company.siret,
+          grouping: {
+            createMany: {
+              data: [
+                { initialFormId: appendix1_1.id, quantity: 0 },
+                { initialFormId: appendix1_2.id, quantity: 0 },
+                { initialFormId: appendix1_3.id, quantity: 0 }
+              ]
+            }
+          },
+          transporters: {
+            create: {
+              transporterCompanySiret: company.siret,
+              number: 1
+            }
+          }
+        }
+      });
+
+      const { mutate } = makeClient(user);
+      const { data } = await mutate<
+        Pick<Mutation, "markAsReceived">,
+        MutationMarkAsReceivedArgs
+      >(MARK_AS_RECEIVED, {
+        variables: {
+          id: container.id,
+          receivedInfo: {
+            receivedAt: new Date("2022-01-01").toISOString() as any,
+            receivedBy: "John",
+            quantityReceived: 1
+          }
+        }
+      });
+
+      expect(data.markAsReceived.status).toBe(Status.RECEIVED);
+      const links = await prisma.formGroupement.findMany({
+        where: { nextFormId: container.id }
+      });
+      expect(links.length).toBe(1);
+
+      const refreshedItem1 = await prisma.form.findUniqueOrThrow({
+        where: { id: appendix1_1.id }
+      });
+      expect(refreshedItem1.status).toBe(Status.RECEIVED);
+
+      const refreshedItem2 = await prisma.form.findUniqueOrThrow({
+        where: { id: appendix1_2.id }
+      });
+      expect(refreshedItem2.isDeleted).toBe(true);
+
+      const refreshedItem3 = await prisma.form.findUniqueOrThrow({
+        where: { id: appendix1_3.id }
+      });
+      expect(refreshedItem3.isDeleted).toBe(true);
+    });
+  });
+
+  it("when final destination refuses a BSD, a mail should be sent", async () => {
+    // Given
+    const emitter = await userWithCompanyFactory("MEMBER");
+    const tempStorer = await userWithCompanyFactory("MEMBER");
+    const destination = await userWithCompanyFactory("MEMBER");
+    const form = await formWithTempStorageFactory({
+      ownerId: emitter.user.id,
+      opt: {
+        emitterCompanySiret: emitter.company.siret,
+        recipientCompanySiret: tempStorer.company.siret,
+        status: "RESENT",
+        wasteAcceptationStatus: "PARTIALLY_REFUSED",
+        quantityReceived: 10,
+        quantityRefused: 2
+      },
+      forwardedInOpts: {
+        sentAt: new Date(),
+        emitterCompanySiret: tempStorer.company.siret,
+        recipientCompanySiret: destination.company.siret,
+        emittedAt: new Date()
+      }
+    });
+
+    // When
+    const { mutate } = makeClient(destination.user);
+    const { errors } = await mutate<
+      Pick<Mutation, "markAsReceived">,
+      MutationMarkAsReceivedArgs
+    >(MARK_AS_RECEIVED, {
+      variables: {
+        id: form.id,
+        receivedInfo: {
+          receivedAt: new Date("2022-01-01").toISOString() as any,
+          receivedBy: "John",
+          wasteAcceptationStatus: "REFUSED",
+          wasteRefusalReason: "Bof",
+          quantityReceived: 8,
+          quantityRefused: 8
+        }
+      }
+    });
+
+    // Then
+    expect(errors).toBeUndefined();
+    expect(sendMail as jest.Mock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subject:
+          "Le déchet de l’entreprise WASTE PRODUCER a été totalement refusé à réception"
+      })
+    );
+  });
+
+  it("when final destination partially refuses a BSD, a mail should be sent", async () => {
+    // Given
+    const emitter = await userWithCompanyFactory("MEMBER");
+    const tempStorer = await userWithCompanyFactory("MEMBER");
+    const destination = await userWithCompanyFactory("MEMBER");
+    const form = await formWithTempStorageFactory({
+      ownerId: emitter.user.id,
+      opt: {
+        emitterCompanySiret: emitter.company.siret,
+        recipientCompanySiret: tempStorer.company.siret,
+        status: "RESENT",
+        wasteAcceptationStatus: "PARTIALLY_REFUSED",
+        quantityReceived: 10,
+        quantityRefused: 2
+      },
+      forwardedInOpts: {
+        sentAt: new Date(),
+        emitterCompanySiret: tempStorer.company.siret,
+        recipientCompanySiret: destination.company.siret,
+        emittedAt: new Date()
+      }
+    });
+
+    // When
+    const { mutate } = makeClient(destination.user);
+    const { data, errors } = await mutate<
+      Pick<Mutation, "markAsReceived">,
+      MutationMarkAsReceivedArgs
+    >(MARK_AS_RECEIVED, {
+      variables: {
+        id: form.id,
+        receivedInfo: {
+          receivedAt: new Date("2022-01-01").toISOString() as any,
+          receivedBy: "John",
+          wasteAcceptationStatus: "PARTIALLY_REFUSED",
+          wasteRefusalReason: "Bof",
+          quantityReceived: 8,
+          quantityRefused: 6
+        }
+      }
+    });
+
+    // Then
+    expect(errors).toBeUndefined();
+    expect(data.markAsReceived.status).toBe("ACCEPTED");
+    expect(sendMail as jest.Mock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subject:
+          "Le déchet de l’entreprise WASTE PRODUCER a été partiellement refusé à réception"
+      })
+    );
+  });
+
+  // Bug was "Cannot destructure property 'prepareVariables' of 'mailTemplate' as it is undefined."
+  // Use-case:
+  // - Create a tmp storage BSD
+  // - Temp storer partially accepts the waste
+  // - Final destination tries to receive the waste (no acceptation, just receive)
+  // - markAsReceived detects that waste was partially refused (by tmp storer) and tries to send a mail,
+  //   but wasteAcceptationStatus does not exist yet for the final destination. Cannot find the mail template
+  //   and crashes
+  it("when final destination receives a BSD (without acceptation), no mail should be sent even if temp storage partially refused the BSD", async () => {
+    // Given
+    const emitter = await userWithCompanyFactory("MEMBER");
+    const tempStorer = await userWithCompanyFactory("MEMBER");
+    const destination = await userWithCompanyFactory("MEMBER");
+    const form = await formWithTempStorageFactory({
+      ownerId: emitter.user.id,
+      opt: {
+        emitterCompanySiret: emitter.company.siret,
+        recipientCompanySiret: tempStorer.company.siret,
+        status: "RESENT",
+        wasteAcceptationStatus: "PARTIALLY_REFUSED",
+        quantityReceived: 10,
+        quantityRefused: 2
+      },
+      forwardedInOpts: {
+        sentAt: new Date(),
+        emitterCompanySiret: tempStorer.company.siret,
+        recipientCompanySiret: destination.company.siret,
+        emittedAt: new Date()
+      }
+    });
+
+    // When
+    const { mutate } = makeClient(destination.user);
+    const { data, errors } = await mutate<
+      Pick<Mutation, "markAsReceived">,
+      MutationMarkAsReceivedArgs
+    >(MARK_AS_RECEIVED, {
+      variables: {
+        id: form.id,
+        receivedInfo: {
+          receivedAt: new Date("2022-01-01").toISOString() as any,
+          receivedBy: "John"
+        }
+      }
+    });
+
+    // Then
+    expect(errors).toBeUndefined();
+    expect(sendMail as jest.Mock).toHaveBeenCalledTimes(0);
+    expect(data.markAsReceived.status).toBe("RECEIVED");
+  });
+
+  it("when final destination accepts a BSD, no mail should be sent even if temp storage partially refused the BSD", async () => {
+    // Given
+    const emitter = await userWithCompanyFactory("MEMBER");
+    const tempStorer = await userWithCompanyFactory("MEMBER");
+    const destination = await userWithCompanyFactory("MEMBER");
+    const form = await formWithTempStorageFactory({
+      ownerId: emitter.user.id,
+      opt: {
+        emitterCompanySiret: emitter.company.siret,
+        recipientCompanySiret: tempStorer.company.siret,
+        status: "RESENT",
+        wasteAcceptationStatus: "PARTIALLY_REFUSED",
+        quantityReceived: 10,
+        quantityRefused: 2
+      },
+      forwardedInOpts: {
+        sentAt: new Date(),
+        emitterCompanySiret: tempStorer.company.siret,
+        recipientCompanySiret: destination.company.siret,
+        emittedAt: new Date()
+      }
+    });
+
+    // When
+    const { mutate } = makeClient(destination.user);
+    const { data, errors } = await mutate<
+      Pick<Mutation, "markAsReceived">,
+      MutationMarkAsReceivedArgs
+    >(MARK_AS_RECEIVED, {
+      variables: {
+        id: form.id,
+        receivedInfo: {
+          receivedAt: new Date("2022-01-01").toISOString() as any,
+          receivedBy: "John",
+          // Acceptation also
+          wasteAcceptationStatus: "ACCEPTED",
+          quantityReceived: 8,
+          quantityRefused: 0
+        }
+      }
+    });
+
+    // Then
+    expect(errors).toBeUndefined();
+    expect(sendMail as jest.Mock).toHaveBeenCalledTimes(0);
+    expect(data.markAsReceived.status).toBe("ACCEPTED");
+  });
+
+  it("quantityReceived is required for a final destination to accept a BSD", async () => {
+    const emitter = await userWithCompanyFactory("MEMBER");
+    const tempStorer = await userWithCompanyFactory("MEMBER");
+    const destination = await userWithCompanyFactory("MEMBER");
+    const form = await formWithTempStorageFactory({
+      ownerId: emitter.user.id,
+      opt: {
+        emitterCompanySiret: emitter.company.siret,
+        recipientCompanySiret: tempStorer.company.siret,
+        status: "RESENT",
+        wasteAcceptationStatus: "ACCEPTED",
+        quantityReceived: 10,
+        quantityRefused: 0
+      },
+      forwardedInOpts: {
+        sentAt: new Date(),
+        emitterCompanySiret: tempStorer.company.siret,
+        recipientCompanySiret: destination.company.siret,
+        emittedAt: new Date()
+      }
+    });
+
+    const { mutate } = makeClient(destination.user);
+    const { errors } = await mutate<
+      Pick<Mutation, "markAsReceived">,
+      MutationMarkAsReceivedArgs
+    >(MARK_AS_RECEIVED, {
+      variables: {
+        id: form.id,
+        receivedInfo: {
+          receivedAt: new Date("2022-01-01").toISOString() as any,
+          receivedBy: "John",
+
+          wasteAcceptationStatus: "ACCEPTED"
+          // quantityReceived not provided,
+        }
+      }
+    });
+
+    expect(errors).toEqual([
+      expect.objectContaining({
+        message: "La quantité refusée (quantityRefused) est requise"
+      })
+    ]);
+
+    const frm = await prisma.form.findUniqueOrThrow({
+      where: { id: form.id }
+    });
+    // form was not accepted, still resent
+    expect(frm.status).toBe("RESENT");
+  });
+
+  describe("quantityRefused", () => {
+    const createBSDD = async (opt?) => {
+      const {
+        emitterCompany,
+        recipient,
+        recipientCompany,
+        form: initialForm
+      } = await prepareDB();
+
+      const form = await prisma.form.update({
+        where: { id: initialForm.id },
+        data: {
+          currentTransporterOrgId: siretify(3),
+          ...opt
+        }
+      });
+
+      await prepareRedis({
+        emitterCompany,
+        recipientCompany
+      });
+
+      return { recipient, form };
+    };
+
+    const markBSDDAsReceived = async (
+      recipient: User,
+      formId: string,
+      wasteAcceptationStatus: WasteAcceptationStatus,
+      quantityReceived: number,
+      quantityRefused: number | null,
+      wasteRefusalReason?: string | null
+    ) => {
+      const { mutate } = makeClient(recipient);
+      return await mutate(MARK_AS_RECEIVED, {
+        variables: {
+          id: formId,
+          receivedInfo: {
+            receivedBy: "Carol",
+            receivedAt: "2019-01-17T10:22:00+0100",
+            signedAt: "2019-01-17T10:22:00+0100",
+            wasteAcceptationStatus,
+            wasteRefusalReason,
+            quantityReceived,
+            quantityRefused
+          }
+        }
+      });
+    };
+
+    it("quantityRefused is not required if reception only", async () => {
+      // Given
+      const { recipient, form } = await createBSDD();
+
+      // When
+      const { mutate } = makeClient(recipient);
+      const { errors } = await mutate(MARK_AS_RECEIVED, {
+        variables: {
+          id: form.id,
+          receivedInfo: {
+            receivedBy: "Carol",
+            receivedAt: "2019-01-17T10:22:00+0100",
+            signedAt: "2019-01-17T10:22:00+0100",
+            quantityReceived: 10
+            // No acceptation data
+          }
+        }
+      });
+
+      // Then
+      expect(errors).toBeUndefined();
+    });
+
+    describe("wasteAcceptationStatus = ACCEPTED", () => {
+      it("waste should be accepted", async () => {
+        // Given
+        const { recipient, form } = await createBSDD();
+
+        // When
+        const { errors } = await markBSDDAsReceived(
+          recipient,
+          form.id,
+          "ACCEPTED",
+          11,
+          0
+        );
+
+        // Then
+        expect(errors).toBeUndefined();
+        const acceptedForm = await prisma.form.findUniqueOrThrow({
+          where: { id: form.id }
+        });
+        expect(acceptedForm.quantityReceived?.toNumber()).toEqual(11);
+        expect(acceptedForm.quantityRefused?.toNumber()).toEqual(0);
+        expect(acceptedForm.wasteAcceptationStatus).toBe("ACCEPTED");
+        expect(acceptedForm.status).toBe("ACCEPTED");
+      });
+
+      it("quantityRefused is required", async () => {
+        // Given
+        const { recipient, form } = await createBSDD();
+
+        // When
+        const { errors } = await markBSDDAsReceived(
+          recipient,
+          form.id,
+          "ACCEPTED",
+          11,
+          null
+        );
+
+        // Then
+        expect(errors).not.toBeUndefined();
+        expect(errors[0].message).toBe(
+          "La quantité refusée (quantityRefused) est requise"
+        );
+      });
+
+      it("quantityRefused cannot be > 0", async () => {
+        // Given
+        const { recipient, form } = await createBSDD();
+
+        // When
+        const { errors } = await markBSDDAsReceived(
+          recipient,
+          form.id,
+          "ACCEPTED",
+          11,
+          5
+        );
+
+        // Then
+        expect(errors).not.toBeUndefined();
+        expect(errors[0].message).toBe(
+          "La quantité refusée (quantityRefused) ne peut être supérieure à zéro si le déchet est accepté (ACCEPTED)"
+        );
+      });
+    });
+
+    describe("wasteAcceptationStatus = REFUSED", () => {
+      it("waste should be refused", async () => {
+        // Given
+        const { recipient, form } = await createBSDD();
+
+        // When
+        const { errors } = await markBSDDAsReceived(
+          recipient,
+          form.id,
+          "REFUSED",
+          11,
+          11,
+          "Pas bon"
+        );
+
+        // Then
+        expect(errors).toBeUndefined();
+        const acceptedForm = await prisma.form.findUniqueOrThrow({
+          where: { id: form.id }
+        });
+        expect(acceptedForm.quantityReceived?.toNumber()).toEqual(11);
+        expect(acceptedForm.quantityRefused?.toNumber()).toEqual(11);
+        expect(acceptedForm.wasteAcceptationStatus).toBe("REFUSED");
+        expect(acceptedForm.status).toBe("REFUSED");
+      });
+
+      it("quantityRefused is required", async () => {
+        // Given
+        const { recipient, form } = await createBSDD();
+
+        // When
+        const { errors } = await markBSDDAsReceived(
+          recipient,
+          form.id,
+          "REFUSED",
+          11,
+          null,
+          "Pas bon"
+        );
+
+        // Then
+        expect(errors).not.toBeUndefined();
+        expect(errors[0].message).toBe(
+          "La quantité refusée (quantityRefused) est requise"
+        );
+      });
+
+      it("quantityRefused cannot be != quantityReceived", async () => {
+        // Given
+        const { recipient, form } = await createBSDD();
+
+        // When
+        const { errors } = await markBSDDAsReceived(
+          recipient,
+          form.id,
+          "REFUSED",
+          11,
+          5,
+          "Pas bon"
+        );
+
+        // Then
+        expect(errors).not.toBeUndefined();
+        expect(errors[0].message).toBe(
+          "La quantité refusée (quantityRefused) doit être égale à la quantité reçue (quantityReceived) si le déchet est refusé (REFUSED)"
+        );
+      });
+    });
+
+    describe("wasteAcceptationStatus = PARTIALLY_REFUSED", () => {
+      it("waste should be partially refused", async () => {
+        // Given
+        const { recipient, form } = await createBSDD();
+
+        // When
+        const { errors } = await markBSDDAsReceived(
+          recipient,
+          form.id,
+          "PARTIALLY_REFUSED",
+          11,
+          6,
+          "Pas bon"
+        );
+
+        // Then
+        expect(errors).toBeUndefined();
+        const acceptedForm = await prisma.form.findUniqueOrThrow({
+          where: { id: form.id }
+        });
+        expect(acceptedForm.quantityReceived?.toNumber()).toEqual(11);
+        expect(acceptedForm.quantityRefused?.toNumber()).toEqual(6);
+        expect(acceptedForm.wasteAcceptationStatus).toBe("PARTIALLY_REFUSED");
+        expect(acceptedForm.status).toBe("ACCEPTED");
+      });
+
+      it("quantityRefused is required", async () => {
+        // Given
+        const { recipient, form } = await createBSDD();
+
+        // When
+        const { errors } = await markBSDDAsReceived(
+          recipient,
+          form.id,
+          "PARTIALLY_REFUSED",
+          11,
+          null,
+          "Pas bon"
+        );
+
+        // Then
+        expect(errors).not.toBeUndefined();
+        expect(errors[0].message).toBe(
+          "La quantité refusée (quantityRefused) est requise"
+        );
+      });
+
+      it("quantityRefused cannot be = quantityReceived", async () => {
+        // Given
+        const { recipient, form } = await createBSDD();
+
+        // When
+        const { errors } = await markBSDDAsReceived(
+          recipient,
+          form.id,
+          "PARTIALLY_REFUSED",
+          11,
+          11,
+          "Pas bon"
+        );
+
+        // Then
+        expect(errors).not.toBeUndefined();
+        expect(errors[0].message).toBe(
+          "La quantité refusée (quantityRefused) doit être inférieure à la quantité reçue (quantityReceived) et supérieure à zéro si le déchet est partiellement refusé (PARTIALLY_REFUSED)"
+        );
+      });
+
+      it("quantityRefused cannot be zero", async () => {
+        // Given
+        const { recipient, form } = await createBSDD();
+
+        // When
+        const { errors } = await markBSDDAsReceived(
+          recipient,
+          form.id,
+          "PARTIALLY_REFUSED",
+          11,
+          0,
+          "Pas bon"
+        );
+
+        // Then
+        expect(errors).not.toBeUndefined();
+        expect(errors[0].message).toBe(
+          "La quantité refusée (quantityRefused) doit être inférieure à la quantité reçue (quantityReceived) et supérieure à zéro si le déchet est partiellement refusé (PARTIALLY_REFUSED)"
+        );
+      });
+    });
+  });
 });

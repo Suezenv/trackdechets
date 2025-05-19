@@ -3,10 +3,11 @@ import {
   CompanyVerificationStatus,
   UserRole
 } from "@prisma/client";
-import { gql } from "apollo-server-express";
+import { gql } from "graphql-tag";
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import prisma from "../../../../prisma";
+import { prisma } from "@td/prisma";
 import {
+  siretify,
   userFactory,
   userWithCompanyFactory
 } from "../../../../__tests__/factories";
@@ -55,7 +56,7 @@ describe("mutation verifyCompanyByAdmin", () => {
     const { errors } = await mutate(VERIFY_COMPANY_BY_ADMIN, {
       variables: {
         input: {
-          siret: "11111111111111"
+          siret: siretify(5)
         }
       }
     });
@@ -86,8 +87,44 @@ describe("mutation verifyCompanyByAdmin", () => {
       }
     });
 
-    const verifiedCompany = await prisma.company.findUnique({
-      where: { siret: company.siret }
+    const verifiedCompany = await prisma.company.findUniqueOrThrow({
+      where: { siret: company.siret! }
+    });
+
+    expect(verifiedCompany.verificationStatus).toEqual(
+      CompanyVerificationStatus.VERIFIED
+    );
+    expect(verifiedCompany.verificationMode).toEqual(
+      CompanyVerificationMode.MANUAL
+    );
+    expect(verifiedCompany.verificationComment).toEqual(verificationComment);
+    expect(verifiedCompany.verifiedAt).not.toBeNull();
+  });
+
+  it("should verify a foreign company, set verification mode and verificationComment", async () => {
+    const admin = await userFactory({ isAdmin: true });
+
+    const { user: _, company } = await userWithCompanyFactory(UserRole.ADMIN, {
+      verificationStatus: CompanyVerificationStatus.TO_BE_VERIFIED,
+      siret: null,
+      vatNumber: "BE0541696002"
+    });
+
+    const { mutate } = makeClient(admin);
+
+    const verificationComment = "The admin is the director of the company";
+
+    await mutate(VERIFY_COMPANY_BY_ADMIN, {
+      variables: {
+        input: {
+          siret: company.orgId,
+          verificationComment
+        }
+      }
+    });
+
+    const verifiedCompany = await prisma.company.findUniqueOrThrow({
+      where: { orgId: company.orgId }
     });
 
     expect(verifiedCompany.verificationStatus).toEqual(

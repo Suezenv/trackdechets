@@ -1,37 +1,65 @@
-import "./tracer";
-
-import {
-  ApolloError,
-  ApolloServer,
-  makeExecutableSchema,
-  UserInputError
-} from "apollo-server-express";
-import { json, urlencoded } from "body-parser";
+import { ApolloServer } from "@apollo/server";
+import { unwrapResolverError } from "@apollo/server/errors";
+import { expressMiddleware } from "@apollo/server/express4";
+import { ApolloServerPluginDrainHttpServer } from "@apollo/server/plugin/drainHttpServer";
+import { makeExecutableSchema } from "@graphql-tools/schema";
+import { ROAD_CONTROL_SLUG } from "@td/constants";
 import redisStore from "connect-redis";
 import cors from "cors";
-import express from "express";
-import rateLimit from "express-rate-limit";
+import express, { json, static as serveStatic, urlencoded } from "express";
 import session from "express-session";
+import { GraphQLError } from "graphql";
 import depthLimit from "graphql-depth-limit";
-import { applyMiddleware } from "graphql-middleware";
+import helmet from "helmet";
+import http from "http";
 import passport from "passport";
-import RateLimitRedisStore from "rate-limit-redis";
-import prisma from "./prisma";
-import { passportBearerMiddleware, passportJwtMiddleware } from "./auth";
-import { ErrorCode } from "./common/errors";
-import { downloadFileHandler } from "./common/file-download";
+import path from "path";
+import { ValidationError } from "yup";
+import { ZodError } from "zod";
+import { createEventsDataLoaders } from "./activity-events/dataloader";
+import { passportBearerMiddleware } from "./auth";
+import { createBsdaDataLoaders } from "./bsda/dataloader";
+import { createBsvhuDataLoaders } from "./bsvhu/dataloader";
+import { createBspaohDataLoaders } from "./bspaoh/dataloader";
+import { captchaGen, captchaSound } from "./captcha/captchaGen";
+import { ErrorCode, UserInputError } from "./common/errors";
+import { correlationIdMiddleware } from "./common/middlewares/correlationId";
 import errorHandler from "./common/middlewares/errorHandler";
-import graphqlBodyParser from "./common/middlewares/graphqlBodyParser";
-import loggingMiddleware from "./common/middlewares/loggingMiddleware";
-import sanitizePathBodyMiddleware from "./common/middlewares/sanitizePathBody";
-import { redisClient } from "./common/redis";
-import { authRouter } from "./routers/auth-router";
-import { oauth2Router } from "./routers/oauth2-router";
-import { typeDefs, resolvers } from "./schema";
-import { userActivationHandler } from "./users/activation";
-import { getUIBaseURL } from "./utils";
+import { graphqlBatchLimiterMiddleware } from "./common/middlewares/graphqlBatchLimiter";
+import { graphqlBodyParser } from "./common/middlewares/graphqlBodyParser";
+import { impersonateMiddleware } from "./common/middlewares/impersonate";
+import { loggingMiddleware } from "./common/middlewares/loggingMiddleware";
+import { namedMiddleware } from "./common/middlewares/namedMiddleware";
+import { rateLimiterMiddleware } from "./common/middlewares/rateLimiter";
+import { timeoutMiddleware } from "./common/middlewares/timeout";
+import { gqlInfosPlugin } from "./common/plugins/gqlInfosPlugin";
+import { gqlRateLimitPlugin } from "./common/plugins/gqlRateLimitPlugin";
+import { gqlRegenerateSessionPlugin } from "./common/plugins/gqlRegenerateSessionPlugin";
+import { graphiqlLandingPagePlugin } from "./common/plugins/graphiql";
+import { graphqlQueryMergingLimiter } from "./common/plugins/graphqlQueryMergingLimiter";
 import sentryReporter from "./common/plugins/sentryReporter";
+import { redisClient } from "./common/redis";
 import { initSentry } from "./common/sentry";
+import { createCompanyDataLoaders } from "./companies/dataloaders";
+import { createFormDataLoaders } from "./forms/dataloader";
+import { bullBoardPath, serverAdapter } from "./queue/bull-board";
+import { authRouter } from "./routers/auth-router";
+import { downloadRouter } from "./routers/downloadRouter";
+import { oauth2Router } from "./routers/oauth2-router";
+import { oidcRouter } from "./routers/oidc-router";
+import { gericoWebhookHandler } from "./routers/gericoWebhookRouter";
+import { roadControlPdfHandler } from "./routers/roadControlPdfRouter";
+import { resolvers, typeDefs } from "./schema";
+import { GraphQLContext } from "./types";
+import { userActivationHandler } from "./users/activation";
+import { createUserDataLoaders } from "./users/dataloaders";
+import { getUIBaseURL } from "./utils";
+import configureYup from "./common/yup/configureYup";
+import i18next from "i18next";
+import { z } from "zod";
+import { zodI18nMap } from "zod-i18n-map";
+import translation from "zod-i18n-map/locales/fr/zod.json";
+import { gqlPayloadSizeLimiterPlugin } from "./common/plugins/gqlPayloadSizeLimiterPlugin";
 
 const {
   SESSION_SECRET,
@@ -39,101 +67,145 @@ const {
   SESSION_COOKIE_SECURE,
   SESSION_NAME,
   UI_HOST,
-  NODE_ENV
+  MAX_REQUESTS_PER_WINDOW = "1000",
+  NODE_ENV,
+  TRUST_PROXY_HOPS,
+  GERICO_WEBHOOK_SLUG
 } = process.env;
 
+// Zod in FR
+i18next.init({
+  lng: "fr",
+  resources: {
+    fr: { zod: translation }
+  }
+});
+z.setErrorMap(zodI18nMap);
+
 const Sentry = initSentry();
+configureYup();
 
 const UI_BASE_URL = getUIBaseURL();
+const RATE_LIMIT_WINDOW_SECONDS = 60;
 
 const schema = makeExecutableSchema({
   typeDefs,
   resolvers
 });
 
-export const schemaWithMiddleware = applyMiddleware(schema);
-
 // GraphQL endpoint
 const graphQLPath = "/";
 
-export const server = new ApolloServer({
-  schema: schemaWithMiddleware,
+export const app = express();
+export const httpServer = http.createServer(app);
+
+export const server = new ApolloServer<GraphQLContext>({
+  schema,
   introspection: true, // used to enable the playground in production
-  playground: true, // used to enable the playground in production
   validationRules: [depthLimit(10)],
-  context: async ctx => {
-    return {
-      ...ctx,
-      // req.user is made available by passport
-      user: ctx.req?.user ?? null,
-      prisma
-    };
-  },
-  formatError: err => {
-    // Catch Yup `ValidationError` and throw a `UserInputError` instead of an `InternalServerError`
-    if (err.extensions.exception?.name === "ValidationError") {
-      return new UserInputError(err.extensions.exception.errors.join("\n"));
+  allowBatchedHttpRequests: true,
+  formatError: (formattedError, error) => {
+    const originalError = unwrapResolverError(error);
+
+    // Les erreurs Yup et Zod sont vues ici comme des erreurs non gérées
+    // (INTERNAL_SERVER_ERROR). On souhaite à la place renvoyer une erreur
+    // `UserInputError` avec un code BAD_USER_INPUT
+    if (originalError instanceof ValidationError) {
+      return new UserInputError(originalError.errors.join("\n"));
     }
-    if (
-      err.extensions.code === ErrorCode.INTERNAL_SERVER_ERROR &&
-      NODE_ENV === "production"
-    ) {
-      // Workaround for graphQL validation error displayed as internal server error
-      // when graphQL variables are of of invalid type
-      // See: https://github.com/apollographql/apollo-server/issues/3498
-      if (err.message && err.message.startsWith(`Variable "`)) {
-        err.extensions.code = "GRAPHQL_VALIDATION_FAILED";
-        return err;
-      }
-      // Do not leak error for internal server error in production
-      const sentryId = (err?.originalError as any)?.sentryId;
-      return new ApolloError(
-        sentryId
-          ? `Erreur serveur : rapport d'erreur ${sentryId}`
-          : "Erreur serveur",
-        ErrorCode.INTERNAL_SERVER_ERROR
+    if (originalError instanceof ZodError) {
+      return new UserInputError(
+        originalError.issues.map(issue => issue.message).join("\n"),
+        { issues: originalError.issues }
       );
     }
 
-    return err;
-  },
-  plugins: [...(Sentry ? [sentryReporter] : [])]
-});
+    if (
+      formattedError.extensions?.code === ErrorCode.INTERNAL_SERVER_ERROR &&
+      NODE_ENV === "production"
+    ) {
+      // Do not leak error for internal server error in production
+      const sentryId = (originalError as any).sentryId;
+      return new GraphQLError(
+        sentryId
+          ? `Erreur serveur : rapport d'erreur ${sentryId}`
+          : "Erreur serveur",
+        {
+          extensions: {
+            code: ErrorCode.INTERNAL_SERVER_ERROR
+          }
+        }
+      );
+    }
 
-export const app = express();
+    return formattedError;
+  },
+  plugins: [
+    gqlInfosPlugin(),
+    gqlPayloadSizeLimiterPlugin(),
+    gqlRateLimitPlugin({
+      createPasswordResetRequest: {
+        windowMs: RATE_LIMIT_WINDOW_SECONDS * 1000,
+        maxRequestsPerWindow: 3 // 3 requests each minute (captcha)
+      },
+      createApplication: {
+        // Hacker might massively create apps or tokens to annoy us or exhaust our db
+        windowMs: RATE_LIMIT_WINDOW_SECONDS * 3 * 1000,
+        maxRequestsPerWindow: 3 // 3 requests each 3 minutes
+      },
+      createAccessToken: {
+        windowMs: RATE_LIMIT_WINDOW_SECONDS * 3 * 1000,
+        maxRequestsPerWindow: 3 // 3 requests each 3 minutes
+      },
+      inviteUserToCompany: {
+        // Hacker might massively invite or reinvite users to spam them
+        windowMs: RATE_LIMIT_WINDOW_SECONDS * 3 * 1000,
+        maxRequestsPerWindow: 10 // 10 requests each 3 minutes
+      },
+      resendInvitation: {
+        windowMs: RATE_LIMIT_WINDOW_SECONDS * 3 * 1000,
+        maxRequestsPerWindow: 10 // 10 requests each 3 minutes
+      },
+      renewSecurityCode: {
+        // Hacker might massively generate new codes to spam
+        windowMs: RATE_LIMIT_WINDOW_SECONDS * 3 * 1000,
+        maxRequestsPerWindow: 10 // 10 requests each 3 minutes
+      },
+      createAnonymousCompanyFromPDF: {
+        // Prevent user from creating a huge number of companies
+        windowMs: RATE_LIMIT_WINDOW_SECONDS * 3 * 1000,
+        maxRequestsPerWindow: 10 // 10 requests each 3 minutes
+      },
+      importFile: {
+        // Prevent user from massively importing files
+        windowMs: RATE_LIMIT_WINDOW_SECONDS * 1000,
+        maxRequestsPerWindow: 3 // 3 requests per minute
+      },
+      createAdminRequest: {
+        // Be extra cautious on this sensitive feature
+        windowMs: RATE_LIMIT_WINDOW_SECONDS * 1000,
+        maxRequestsPerWindow: 10 // 10 requests per minute
+      },
+      acceptAdminRequest: {
+        // Be extra cautious on this sensitive feature
+        windowMs: RATE_LIMIT_WINDOW_SECONDS * 1000,
+        maxRequestsPerWindow: 10 // 10 requests per minute
+      }
+    }),
+    gqlRegenerateSessionPlugin(["changePassword"]),
+    graphiqlLandingPagePlugin(),
+    ...(Sentry ? [sentryReporter] : []),
+    graphqlQueryMergingLimiter(),
+    ApolloServerPluginDrainHttpServer({ httpServer })
+  ]
+});
 
 if (Sentry) {
   // The request handler must be the first middleware on the app
   app.use(Sentry.Handlers.requestHandler());
 }
 
-const RATE_LIMIT_WINDOW_SECONDS = 60;
-const MAX_REQUESTS_PER_WINDOW = 1000;
-app.use(
-  rateLimit({
-    message: `Quota de ${MAX_REQUESTS_PER_WINDOW} requêtes par minute excédée pour cette adresse IP, merci de réessayer plus tard.`,
-    windowMs: RATE_LIMIT_WINDOW_SECONDS * 1000,
-    max: MAX_REQUESTS_PER_WINDOW,
-    store: new RateLimitRedisStore({
-      client: redisClient,
-      expiry: RATE_LIMIT_WINDOW_SECONDS
-    })
-  })
-);
-
-/**
- * parse application/x-www-form-urlencoded
- * used when submitting login form
- */
-app.use(urlencoded({ extended: false }));
-
-app.use(json());
-
-// allow application/graphql header
-app.use(graphqlBodyParser);
-
-// logging middleware
-app.use(loggingMiddleware(graphQLPath));
+app.use(correlationIdMiddleware);
 
 /**
  * Set the following headers for cross-domain cookie
@@ -147,24 +219,89 @@ app.use(
   })
 );
 
+app.use(
+  rateLimiterMiddleware({
+    windowMs: RATE_LIMIT_WINDOW_SECONDS * 1000,
+    maxRequestsPerWindow: parseInt(MAX_REQUESTS_PER_WINDOW, 10)
+  })
+);
+
+app.use(
+  helmet({
+    hsts: false, // Auto injected by Scalingo
+    // Because of the GraphQL playground we have to override the default
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'none'"],
+        baseUri: ["'self'"],
+        fontSrc: ["'self'", "https:", "data:"],
+        frameAncestors: ["'self'"],
+        imgSrc: ["'self'"],
+        objectSrc: ["'none'"],
+        scriptSrc: [
+          "'self'",
+          "'sha256-KDSP72yw7Yss7rIt6vgkQo/ROHXYTHPTj3fdIW/CTn8='",
+          "'sha256-+QRKXpw524uxogTf+STlJuwKYh5pW7ad4QNYEb6HCeQ='",
+          "'sha256-FC1QdPlDgsjmWJtkJfO6Tt7pKFza/bZuwKtw25R/7m4='",
+          "'sha256-/KjN0AtQm74p7exR84hK/woqhc2pYBdNQamcxHOkiDA='"
+        ],
+        scriptSrcAttr: ["'none'"],
+        styleSrc: [
+          "'self'",
+          "https:",
+          "'sha256-dihQy2mHNADQqxc3xhWK7pH1w4GVvEow7gKjxdWvTgE='",
+          "'sha256-wTzfn13a+pLMB5rMeysPPR1hO7x0SwSeQI+cnw7VdbE='",
+          "'sha256-LFhQK3cog1BLYeE/LUUJthR1mUCLSLwgkyqlF+epuq8='"
+        ],
+        connectSrc: [process.env.API_HOST],
+        formAction: ["'self'"],
+        upgradeInsecureRequests: NODE_ENV === "production" ? [] : null
+      }
+    }
+  })
+);
+
+/**
+ * parse application/x-www-form-urlencoded
+ * used when submitting login form
+ */
+app.use(urlencoded({ extended: false }));
+
+app.use(json({ limit: "21mb" }));
+
+// allow application/graphql header
+app.use(graphQLPath, graphqlBodyParser);
+app.use(graphQLPath, graphqlBatchLimiterMiddleware());
+
+// logging middleware
+app.use(loggingMiddleware(graphQLPath));
+app.use(graphQLPath, timeoutMiddleware());
+
 // configure session for passport local strategy
 const RedisStore = redisStore(session);
 
 export const sess: session.SessionOptions = {
   store: new RedisStore({ client: redisClient }),
   name: SESSION_NAME || "trackdechets.connect.sid",
-  secret: SESSION_SECRET,
+  secret: SESSION_SECRET!,
   resave: false,
   saveUninitialized: false,
   cookie: {
     secure: false,
+    httpOnly: true,
     domain: SESSION_COOKIE_HOST || UI_HOST,
     maxAge: 24 * 3600 * 1000
   }
 };
 
-if (SESSION_COOKIE_SECURE === "true") {
-  app.set("trust proxy", 1); // trust first proxy
+// The app is always served under one or more reverse proxy:
+// - nginx during local development
+// - Scalingo proxy for live envs
+// - with Baleen, there is a second reverse proxy layer. Hence, the user's ip is 1 hop further
+// For more details, see https://expressjs.com/en/guide/behind-proxies.html.
+app.set("trust proxy", TRUST_PROXY_HOPS ? parseInt(TRUST_PROXY_HOPS, 10) : 1);
+
+if (SESSION_COOKIE_SECURE === "true" && sess.cookie) {
   sess.cookie.secure = true; // serve secure cookies
 }
 
@@ -176,10 +313,25 @@ app.use(passport.session());
 // authentification routes used by td-ui (/login /logout, /isAuthenticated)
 app.use(authRouter);
 app.use(oauth2Router);
+app.use(oidcRouter);
+
+app.use(impersonateMiddleware);
 
 app.get("/ping", (_, res) => res.send("Pong!"));
-app.get("/userActivation", userActivationHandler);
-app.get("/download", downloadFileHandler);
+
+app.get("/ip", (req, res) => {
+  return res.send(`IP: ${req.ip} | XFF: ${req.get("X-Forwarded-For")}`);
+});
+
+app.get("/captcha", (_, res) => captchaGen(res));
+
+app.get("/captcha-audio/:tokenId", (req, res) => {
+  captchaSound(req.params.tokenId, res);
+});
+
+app.post("/userActivation", userActivationHandler);
+
+app.get("/download", downloadRouter);
 
 app.get("/exports", (_, res) =>
   res
@@ -187,37 +339,48 @@ app.get("/exports", (_, res) =>
     .send("Route dépréciée, utilisez la query GraphQL `formsRegister`")
 );
 
-// Apply passport auth middlewares to the graphQL endpoint
-app.use(graphQLPath, passportBearerMiddleware, passportJwtMiddleware);
+app.get(`/${ROAD_CONTROL_SLUG}/:token`, roadControlPdfHandler);
 
-// Returns 404 Not Found for every routes not handled by apollo
-app.use((req, res, next) => {
-  const healthCheckPath = "/.well-known/apollo/server-health";
-  if (![graphQLPath, healthCheckPath].includes(req.path)) {
-    return res.status(404).send("Not found");
+app.post(`/${GERICO_WEBHOOK_SLUG}`, gericoWebhookHandler);
+
+app.use(
+  "/graphiql",
+  serveStatic(path.join(__dirname, "common/plugins/graphiql/assets"))
+);
+
+function ensureLoggedInAndAdmin() {
+  // check passeport populated user is admin
+  return function (req, res, next) {
+    if (!req.isAuthenticated || !req.isAuthenticated() || !req?.user?.isAdmin) {
+      return res.status(404).send("Not found");
+    }
+
+    next();
+  };
+}
+app.use(bullBoardPath, ensureLoggedInAndAdmin(), serverAdapter.getRouter());
+
+// Apply passport auth middlewares to the graphQL endpoint
+app.use(graphQLPath, passportBearerMiddleware);
+
+const USERS_BLACKLIST_ENV = process.env.USERS_BLACKLIST;
+let blacklist: string[] = [];
+if (USERS_BLACKLIST_ENV && USERS_BLACKLIST_ENV.length > 0) {
+  blacklist = USERS_BLACKLIST_ENV.split(",");
+}
+app.use(function checkBlacklist(req, res, next) {
+  if (req.user && blacklist.includes(req.user.email)) {
+    return res.send("Too Many Requests").status(429);
   }
   next();
 });
 
-// GraphQL sanitization middleware
-app.use(sanitizePathBodyMiddleware(graphQLPath));
-
-/**
- * Wire up ApolloServer to /
- * UI_BASE_URL is explicitly set in the origin list
- * to avoid "Credentials is not supported if the CORS header ‘Access-Control-Allow-Origin’ is ‘*’"
- * See https://developer.mozilla.org/fr/docs/Web/HTTP/CORS/Errors/CORSNotSupportingCredentials
- */
-server.applyMiddleware({
-  app,
-  cors: {
-    origin: [UI_BASE_URL, "*"],
-    methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
-    preflightContinue: false,
-    optionsSuccessStatus: 204,
-    credentials: true
-  },
-  path: graphQLPath
+// Returns 404 Not Found for every routes not handled by apollo
+app.use(function checkGqlPath(req, res, next) {
+  if (req.path !== graphQLPath) {
+    return res.status(404).send("Not found");
+  }
+  next();
 });
 
 if (Sentry) {
@@ -226,3 +389,36 @@ if (Sentry) {
 }
 
 app.use(errorHandler);
+
+// This must be a getter and not an object, as the dataloaders must be instanciated per request
+// Otherwise the caching mechanism isn't valid and you get outdated data
+export const getServerDataloaders = () => ({
+  ...createUserDataLoaders(),
+  ...createCompanyDataLoaders(),
+  ...createFormDataLoaders(),
+  ...createBsdaDataLoaders(),
+  ...createBsvhuDataLoaders(),
+  ...createBspaohDataLoaders(),
+  ...createEventsDataLoaders()
+});
+
+export async function startApolloServer() {
+  await server.start();
+
+  app.use(
+    graphQLPath,
+    namedMiddleware(
+      "apolloExpress",
+      expressMiddleware(server, {
+        context: async ctx => {
+          return {
+            ...ctx,
+            // req.user is made available by passport
+            user: ctx.req?.user ? { ...ctx.req?.user, ip: ctx.req?.ip } : null,
+            dataloaders: getServerDataloaders()
+          };
+        }
+      })
+    )
+  );
+}

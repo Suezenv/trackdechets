@@ -3,17 +3,14 @@ type Mutation {
   Crée un nouveau dasri en brouillon
   """
   createDraftBsdasri(
-    "Payload de création d'un dasri brouillon"
+    "Payload de création d'un dasri brouillon. Ne permet pas la création de dasri de synthèse."
     input: BsdasriInput!
   ): Bsdasri!
 
   """
   Crée un nouveau dasri
   """
-  createBsdasri(
-    "Payload de création d'un dasri"
-    input: BsdasriInput!
-  ): Bsdasri!
+  createBsdasri("Payload de création d'un dasri" input: BsdasriInput!): Bsdasri!
 
   """
   Met à jour un dasri existant.
@@ -29,18 +26,111 @@ type Mutation {
   """
   Marque un dasri brouillon comme publié (isDraft=false)
   """
-  publishBsdasri("ID d'un Bsdasri" id: ID!): Bsdasri
+  publishBsdasri("ID d'un Bsdasri" id: ID!): Bsdasri!
 
   """
-  Appose une signature sur un Bsdasri, verrouille les cadres correspondant
+  Appose une signature sur un Bsdasri, verrouille les cadres correspondant.
 
-  Une signature ne peut être apposée que par un membre de l'entreprise figurant sur le cadre concerné
-  Ex: la signature TRANSPORT ne peut être apposée que par un membre de l'entreprise de transport
+  Une signature ne peut être apposée que par un membre de l'entreprise figurant sur le cadre concerné.
+  Ex: la signature TRANSPORT ne peut être apposée que par un membre de l'entreprise de transport.
 
   Pour signer l'emission avec un compte transporteur (cas de la signature sur device transporteur),
-  utiliser la mutation signBsdasriEmissionWithSecretCode
+  utiliser la mutation signBsdasriEmissionWithSecretCode.
+
+  **Champs requis pour `EMISSION` :**
+
+  ```
+  emitter {
+    company {
+      name
+      siret
+      address
+      contact
+      phone
+    }
+    emission {
+      packagings {
+        type
+        volume
+        quantity
+      }
+    }
+  }
+  waste {
+    code
+    adr
+  }
+  ```
+
+  **Champs requis pour `TRANSPORT` :**
+
+  ```
+  transporter {
+    company {
+      name
+      siret
+      address
+      contact
+      phone
+    }
+    transport {
+      acceptation {
+        status
+      }
+      packagings {
+        type
+        volume
+        quantity
+      }
+      takenOverAt
+    }
+    recepisse {
+      isExempted
+    }
+  }
+  ```
+
+  **Champs requis pour `RECEPTION` :**
+
+  ```
+  destination {
+    company {
+      name
+      siret
+      address
+      contact
+      phone
+    }
+    reception {
+      acceptation {
+        status
+      }
+      packagings {
+        type
+        volume
+        quantity
+      }
+      date
+    }
+  }
+  ```
+
+  **Champs requis pour `OPERATION` :**
+
+  ```
+  destination {
+    operation {
+      weight {
+        value
+      }
+      code
+      mode
+      date
+    }
+  }
+  ```
   """
-  signBsdasri(id: ID!, input: BsdasriSignatureInput!): Bsdasri
+  signBsdasri(id: ID!, input: BsdasriSignatureInput!): Bsdasri!
 
   """
   Appose une signature de type EMISSION via un compte n'appartenant pas à l'émetteur.
@@ -49,14 +139,44 @@ type Mutation {
   signBsdasriEmissionWithSecretCode(
     id: ID!
     input: BsdasriSignatureWithSecretCodeInput!
-  ): Bsdasri
+  ): Bsdasri!
   """
-  Duplique un bordereau Dasri
+  Duplique un bordereau Dasri (non applicable pour les bordereau de synthese ou de groupement)
   """
-  duplicateBsdasri("ID d'un Bsdasri" id: ID!): Bsdasri
+  duplicateBsdasri("ID d'un Bsdasri" id: ID!): Bsdasri!
 
   """
   Supprime un BSDASRI
   """
-  deleteBsdasri("ID d'un Dasri" id: ID!): Bsdasri
+  deleteBsdasri("ID d'un Dasri" id: ID!): Bsdasri!
+
+  """
+  Crée une demande de révision sur un Bsdasri existant
+  """
+  createBsdasriRevisionRequest(
+    input: CreateBsdasriRevisionRequestInput!
+  ): BsdasriRevisionRequest!
+
+  """
+  Annule une demande de révision de Bsdasri.
+  Peut être fait uniquement par l'auteur de la révision, si celle-ci n'a pas encore été acceptée
+  """
+  cancelBsdasriRevisionRequest(
+    "Identifiant de la demande de révision"
+    id: ID!
+  ): Boolean!
+
+  """
+  Répond à une demande d'approbation d'une révision.
+  En cas de refus, la révision associée est automatiquement refusée et les autres validations supprimées.
+  En cas d'acceptation, si c'était la dernière approbation attendue, la révision associée est automatiquement approuvée et appliquée sur le Bsdasri.
+  """
+  submitBsdasriRevisionRequestApproval(
+    "Identifiant de la validation"
+    id: ID!
+    "Indique si la révision est acceptée ou non"
+    isApproved: Boolean!
+    "Commentaire facultatif"
+    comment: String
+  ): BsdasriRevisionRequest!
 }

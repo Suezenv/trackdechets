@@ -1,10 +1,12 @@
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import prisma from "../../../../prisma";
+import { prisma } from "@td/prisma";
 import {
   formFactory,
   userWithCompanyFactory
 } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
+import { Status as FormStatus } from "@prisma/client";
+import { getFirstTransporter } from "../../../database";
 
 jest.mock("axios", () => ({
   default: {
@@ -15,76 +17,135 @@ jest.mock("axios", () => ({
 describe("Forms -> updateTransporterFields mutation", () => {
   afterEach(resetDatabase);
 
-  it("should update transporter plate", async () => {
-    const { user: emitter } = await userWithCompanyFactory("MEMBER");
-    const {
-      user: transporter,
-      company: transporterCompany
-    } = await userWithCompanyFactory("MEMBER");
+  it.each([FormStatus.SEALED, FormStatus.SIGNED_BY_PRODUCER])(
+    "should update transporter plate (%p status)",
+    async status => {
+      const { user: emitter } = await userWithCompanyFactory("MEMBER");
+      const { user: transporter, company: transporterCompany } =
+        await userWithCompanyFactory("MEMBER");
 
-    let form = await formFactory({
-      ownerId: emitter.id,
-      opt: {
-        status: "SEALED",
-        transporterCompanySiret: transporterCompany.siret
-      }
-    });
-    const { mutate } = makeClient(transporter);
-    const mutation = `
+      let form = await formFactory({
+        ownerId: emitter.id,
+        opt: {
+          status,
+          transporters: {
+            create: {
+              transporterCompanySiret: transporterCompany.siret,
+              number: 1
+            }
+          }
+        }
+      });
+      const { mutate } = makeClient(transporter);
+      const mutation = `
     mutation {
       updateTransporterFields(id: "${form.id}", transporterNumberPlate: "ZBLOP 83") {
         id
       }
     }
   `;
-    await mutate(mutation);
+      await mutate(mutation);
 
-    form = await prisma.form.findUnique({ where: { id: form.id } });
+      form = await prisma.form.findUniqueOrThrow({
+        where: { id: form.id },
+        include: { forwardedIn: true }
+      });
 
-    expect(form.transporterNumberPlate).toEqual("ZBLOP 83");
-  });
+      const formTransporter = await getFirstTransporter(form);
 
-  it("should update transporter custom info", async () => {
+      expect(formTransporter!.transporterNumberPlate).toEqual("ZBLOP 83");
+    }
+  );
+
+  it("should not update transporter with invalid plates ", async () => {
     const { user: emitter } = await userWithCompanyFactory("MEMBER");
-    const {
-      user: transporter,
-      company: transporterCompany
-    } = await userWithCompanyFactory("MEMBER");
+    const { user: transporter, company: transporterCompany } =
+      await userWithCompanyFactory("MEMBER");
 
-    let form = await formFactory({
+    const form = await formFactory({
       ownerId: emitter.id,
       opt: {
-        status: "SEALED",
-        transporterCompanySiret: transporterCompany.siret
+        status: FormStatus.SEALED,
+        transporters: {
+          create: {
+            transporterCompanySiret: transporterCompany.siret,
+            number: 1
+          }
+        }
       }
     });
     const { mutate } = makeClient(transporter);
     const mutation = `
+    mutation {
+      updateTransporterFields(id: "${form.id}", transporterNumberPlate: "AZ") {
+        id
+      }
+    }
+  `;
+    const { errors } = await mutate(mutation);
+    expect(errors).toEqual([
+      expect.objectContaining({
+        message:
+          "Le numéro d'immatriculation doit faire entre 4 et 12 caractères"
+      })
+    ]);
+  });
+
+  it.each([FormStatus.SEALED, FormStatus.SIGNED_BY_PRODUCER])(
+    "should update transporter custom info (%p status)",
+    async status => {
+      const { user: emitter } = await userWithCompanyFactory("MEMBER");
+      const { user: transporter, company: transporterCompany } =
+        await userWithCompanyFactory("MEMBER");
+
+      let form = await formFactory({
+        ownerId: emitter.id,
+        opt: {
+          status,
+          transporters: {
+            create: {
+              transporterCompanySiret: transporterCompany.siret,
+              number: 1
+            }
+          }
+        }
+      });
+      const { mutate } = makeClient(transporter);
+      const mutation = `
     mutation {
       updateTransporterFields(id: "${form.id}", transporterCustomInfo: "tournée 493") {
         id
       }
     }
   `;
-    await mutate(mutation);
+      await mutate(mutation);
 
-    form = await prisma.form.findUnique({ where: { id: form.id } });
+      form = await prisma.form.findUniqueOrThrow({
+        where: { id: form.id },
+        include: { forwardedIn: true }
+      });
 
-    expect(form.transporterCustomInfo).toEqual("tournée 493");
-  });
+      const formTransporter = await getFirstTransporter(form);
+
+      expect(formTransporter!.transporterCustomInfo).toEqual("tournée 493");
+    }
+  );
 
   it("should not update not SEALED forms", async () => {
     const { user: emitter } = await userWithCompanyFactory("MEMBER");
-    const {
-      user: transporter,
-      company: transporterCompany
-    } = await userWithCompanyFactory("MEMBER");
+    const { user: transporter, company: transporterCompany } =
+      await userWithCompanyFactory("MEMBER");
 
     let form = await formFactory({
       ownerId: emitter.id,
       opt: {
         status: "SENT",
-        transporterCompanySiret: transporterCompany.siret
+        transporters: {
+          create: {
+            transporterCompanySiret: transporterCompany.siret,
+            number: 1
+          }
+        }
       }
     });
     const { mutate } = makeClient(transporter);
@@ -97,12 +158,17 @@ describe("Forms -> updateTransporterFields mutation", () => {
   `;
     const { errors } = await mutate(mutation);
     expect(errors[0].message).toEqual(
-      "Ce champ n'est pas modifiable sur un bordereau qui n'est pas en statut scellé"
+      "Ce champ n'est pas modifiable sur un bordereau qui n'est pas en statut scellé ou signé par le producteur"
     );
 
-    form = await prisma.form.findUnique({ where: { id: form.id } });
+    form = await prisma.form.findUniqueOrThrow({
+      where: { id: form.id },
+      include: { forwardedIn: true }
+    });
 
-    expect(form.transporterCustomInfo).toEqual(null);
+    const formTransporter = await getFirstTransporter(form);
+
+    expect(formTransporter!.transporterCustomInfo).toEqual(null);
   });
 
   it("should not update form if user is not made by a transporter", async () => {
@@ -115,7 +181,12 @@ describe("Forms -> updateTransporterFields mutation", () => {
       ownerId: emitter.id,
       opt: {
         status: "SEALED",
-        transporterCompanySiret: transporterCompany.siret
+        transporters: {
+          create: {
+            transporterCompanySiret: transporterCompany.siret,
+            number: 1
+          }
+        }
       }
     });
     const { mutate } = makeClient(emitter); // not a transporter
@@ -132,8 +203,13 @@ describe("Forms -> updateTransporterFields mutation", () => {
       "Vous n'êtes pas transporteur de ce bordereau."
     );
 
-    form = await prisma.form.findUnique({ where: { id: form.id } });
+    form = await prisma.form.findUniqueOrThrow({
+      where: { id: form.id },
+      include: { forwardedIn: true }
+    });
 
-    expect(form.transporterCustomInfo).toEqual(null);
+    const formTransporter = await getFirstTransporter(form);
+
+    expect(formTransporter!.transporterCustomInfo).toEqual(null);
   });
 });

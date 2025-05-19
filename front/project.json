@@ -1,0 +1,129 @@
+{
+  "name": "front",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "front/src",
+  "projectType": "application",
+  "tags": [],
+  "targets": {
+    "dsfr": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cd front && npx react-dsfr update-icons"
+      }
+    },
+    "build": {
+      "executor": "@nx/vite:build",
+      "dependsOn": ["^build", "dsfr", "generate-tw"],
+      "outputs": ["{options.outputPath}"],
+      "defaultConfiguration": "production",
+      "options": {
+        "outputPath": "dist/front"
+      },
+      "configurations": {
+        "development": {
+          "mode": "development",
+          "skipTypeCheck": true
+        },
+        "production": {
+          "mode": "production"
+        },
+        "integration": {
+          "mode": "development",
+          "skipTypeCheck": true
+        }
+      }
+    },
+    "serve": {
+      "executor": "@nx/vite:dev-server",
+      "dependsOn": ["^build", "dsfr", "generate-tw"],
+      "defaultConfiguration": "development",
+      "options": {
+        "buildTarget": "front:build",
+        "port": 3000,
+        "host": "0.0.0.0"
+      },
+      "configurations": {
+        "development": {
+          "buildTarget": "front:build:development",
+          "hmr": true
+        },
+        "production": {
+          "buildTarget": "front:build:production",
+          "hmr": false
+        },
+        "integration": {}
+      }
+    },
+    "preview": {
+      "executor": "@nx/vite:preview-server",
+      "defaultConfiguration": "development",
+      "options": {
+        "buildTarget": "front:build"
+      },
+      "configurations": {
+        "development": {
+          "buildTarget": "front:build:development"
+        },
+        "production": {
+          "buildTarget": "front:build:production"
+        }
+      },
+      "dependsOn": ["build"]
+    },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "dependsOn": ["^build", "generate-tw"],
+      "options": {
+        "jestConfig": "front/jest.config.js"
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint",
+      "outputs": ["{options.outputFile}"]
+    },
+    "generate-tw": {
+      "command": "tailwindcss build front/src/tailwind.css -c front/tailwind.config.js -o front/src/generated/css/tailwind.generated.css",
+      "configurations": {
+        "integration": {}
+      }
+    },
+    "storybook": {
+      "executor": "@nx/storybook:storybook",
+      "options": {
+        "port": 4400,
+        "configDir": "front/.storybook"
+      },
+      "configurations": {
+        "ci": {
+          "quiet": true
+        }
+      }
+    },
+    "build-storybook": {
+      "executor": "@nx/storybook:build",
+      "dependsOn": ["^build", "dsfr", "generate-tw"],
+      "outputs": ["{options.outputDir}"],
+      "options": {
+        "outputDir": "dist/storybook/front",
+        "configDir": "front/.storybook"
+      },
+      "configurations": {
+        "ci": {
+          "quiet": true
+        }
+      }
+    },
+    "static-storybook": {
+      "executor": "@nx/web:file-server",
+      "options": {
+        "buildTarget": "front:build-storybook",
+        "staticFilePath": "dist/storybook/front"
+      },
+      "configurations": {
+        "ci": {
+          "buildTarget": "front:build-storybook:ci"
+        }
+      }
+    }
+  }
+}

@@ -50,17 +50,9 @@ function transporter2CompanyInput(siret: string) {
   };
 }
 
-const receiptInput = {
-  receipt: "12379",
-  department: "07",
-  validityLimit: "2020-06-30",
-  numberPlate: "AD-007-TS"
-};
-
 function transporterInput(siret: string) {
   return {
-    company: transporterCompanyInput(siret),
-    ...receiptInput
+    company: transporterCompanyInput(siret)
   };
 }
 
@@ -103,6 +95,14 @@ function recipientIsTempStorageInput(siret: string) {
   };
 }
 
+function ttrInput(siret: string) {
+  return {
+    processingOperation: "D 13",
+    cap: "CAP",
+    company: ttrCompanyInput(siret)
+  };
+}
+
 const wasteDetailsInput = {
   code: "06 05 02*",
   onuCode: "Non Soumis",
@@ -113,15 +113,23 @@ const wasteDetailsInput = {
   consistence: "LIQUID"
 };
 
-function signingInfoInput(securityCode: number) {
+function signEmissionFormInput() {
   return {
-    sentAt: "2020-04-03T14:48:00",
-    sentBy: "Isabelle Guichard",
-    onuCode: "non soumis",
     quantity: 1,
-    signedByTransporter: true,
-    signedByProducer: true,
-    securityCode
+    onuCode: "non soumis",
+    transporterNumberPlate: "AA-123456-BB",
+    emittedAt: "2020-04-03T14:48:00",
+    emittedBy: "Isabelle Guichard",
+    emittedByEcoOrganisme: false
+  };
+}
+
+function signTransportFormInput() {
+  return {
+    takenOverAt: "2020-04-03T14:48:00",
+    takenOverBy: "Isabelle Guichard",
+    transporterNumberPlate: "AA-123456-BB",
+    transporterTransportMode: "ROAD"
   };
 }
 
@@ -130,15 +138,30 @@ const receivedInfoInput = {
   receivedBy: "Antoine Derieux",
   receivedAt: "2020-04-05T11:18:00",
   signedAt: "2020-04-05T12:00:00",
-  quantityReceived: 1
+  quantityReceived: 1,
+  quantityRefused: 0
 };
 
 const processedInfoInput = {
   processingOperationDone: "D 10",
   processingOperationDescription: "Incinération",
+  destinationOperationMode: "ELIMINATION",
   processedBy: "Alfred Dujardin",
   processedAt: "2020-04-15T10:22:00"
 };
+
+function awaitingGroupInfoInput(nextDestinationSiret: string) {
+  return {
+    processingOperationDone: "D 13",
+    processingOperationDescription: "Regroupement",
+    processedBy: "Alfred Dujardin",
+    processedAt: "2020-04-15T10:22:00",
+    nextDestination: {
+      processingOperation: "R 1",
+      company: traiteurCompanyInput(nextDestinationSiret)
+    }
+  };
+}
 
 const tempStoredInfosInput = {
   wasteAcceptationStatus: "ACCEPTED",
@@ -146,6 +169,7 @@ const tempStoredInfosInput = {
   receivedAt: "2020-05-03T09:00:00",
   signedAt: "2020-05-03T09:00:00",
   quantityReceived: 1,
+  quantityRefused: 0,
   quantityType: "REAL"
 };
 
@@ -158,8 +182,7 @@ function resealedInfosInput(siret: string) {
 function nextSegmentInfoInput(siret: string) {
   return {
     transporter: {
-      company: transporter2CompanyInput(siret),
-      ...receiptInput
+      company: transporter2CompanyInput(siret)
     },
     mode: "RAIL"
   };
@@ -179,12 +202,14 @@ export default {
   recipientInput,
   ttrCompanyInput,
   recipientIsTempStorageInput,
+  ttrInput,
   wasteDetailsInput,
   workSiteInput,
-  receiptInput,
-  signingInfoInput,
+  signEmissionFormInput,
+  signTransportFormInput,
   receivedInfoInput,
   processedInfoInput,
+  awaitingGroupInfoInput,
   tempStoredInfosInput,
   resealedInfosInput,
   nextSegmentInfoInput,

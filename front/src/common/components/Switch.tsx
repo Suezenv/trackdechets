@@ -1,7 +1,13 @@
 import { FieldProps } from "formik";
 import React from "react";
-import ReactSwitch, { ReactSwitchProps } from "react-switch";
+import RS, { ReactSwitchProps } from "react-switch";
 import styles from "./Switch.module.scss";
+
+// Fix for Rollup ESM-CJS interop with Vite
+// cf https://github.com/vitejs/vite/issues/2139
+const ReactSwitch = (RS as any).default
+  ? ((RS as any).default as typeof RS)
+  : RS;
 
 interface SwitchProps extends ReactSwitchProps {
   label: string;
@@ -30,7 +36,7 @@ type FieldSwitchProps = FieldProps & {
   label: string;
 };
 
-// Compatilibty layer between the Switch and Formik's <Field />
+// Compatibility layer between the Switch and Formik's <Field />
 export function FieldSwitch({
   field: { checked, ...field },
   form: { setFieldValue },

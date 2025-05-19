@@ -12,10 +12,13 @@ type Mutation {
   ): Form!
 
   "DEPRECATED - Sauvegarde un BSD (création ou modification, si `FormInput` contient un ID)"
-  saveForm("Payload du BSD" formInput: FormInput!): Form
+  saveForm("Payload du BSD" formInput: FormInput!): Form!
     @deprecated(reason: "Utiliser createForm / updateForm selon le besoin")
 
-  "Met à jour la plaque d'immatriculation ou le champ libre du transporteur"
+  """
+  Met à jour la plaque d'immatriculation ou le champ libre du transporteur.
+  Disponible pour le Bsdd au statut SEALED ou SIGNED_BY_PRODUCER.
+  """
   updateTransporterFields(
     "ID d'un BSD"
     id: ID!
@@ -23,22 +26,22 @@ type Mutation {
     transporterNumberPlate: String
     "Champ libre, utilisable par exemple pour noter les tournées des transporteurs"
     transporterCustomInfo: String
-  ): Form
+  ): Form!
 
   "Supprime un BSD"
-  deleteForm("ID d'un BSD" id: ID!): Form
+  deleteForm("ID d'un BSD" id: ID!): Form!
 
   "Duplique un BSD"
-  duplicateForm("ID d'un BSD" id: ID!): Form
+  duplicateForm("ID d'un BSD" id: ID!): Form!
 
   """
   Finalise un BSD
   Les champs suivants sont obligatoires pour pouvoir finaliser un bordereau et
   doivent avoir été renseignés au préalable
   ```
-  emitter: {
+  emitter {
     type
-    company: {
+    company {
       siret
       name
       address
@@ -47,10 +50,10 @@ type Mutation {
       mail
     }
   }
-  recipient: {
+  recipient {
     processingOperation
     cap // requis pour les déchets dangereux uniquement
-    company: {
+    company {
       siret
       name
       address
@@ -59,8 +62,8 @@ type Mutation {
       mail
     }
   }
-  transporter: {
-    company: {
+  transporter {
+    company {
       siret
       name
       address
@@ -68,17 +71,14 @@ type Mutation {
       mail
       phone
     }
-    isExemptedOfReceipt
-    receipt
+    receipt // non requis si isExemptedOfReceipt=true
     department // non requis si isExemptedOfReceipt=true
-    validityLimit // peut-être omis si isExemptedOfReceipt=true
-    numberPlate // peut-être omis si isExemptedOfReceipt=true
+    validityLimit // peut être omis si isExemptedOfReceipt=true
   }
-  wasteDetails: {
+  wasteDetails {
     code
     onuCode // requis pour les déchets dangereux uniquement
-    name
-    packagings {
+    packagingInfos {
       type
       other // requis si type=OTHER
       quantity
@@ -89,19 +89,10 @@ type Mutation {
     pop
   }
   ```
+  Lorsqu'un courtier ou un négociant est présent sur le BSDD, les informations de contact,
+  ainsi que le numéro, la limite de validité et le département du récépissé sont obligatoires.
   """
-  markAsSealed("ID d'un BSD" id: ID!): Form
-
-  "Valide l'envoi d'un BSD"
-  markAsSent(
-    "ID d'un BSD"
-    id: ID!
-    "Informations liées à l'envoi"
-    sentInfo: SentFormInput!
-  ): Form
-    @deprecated(
-      reason: "Utiliser la mutation signedByTransporter permettant d'apposer les signatures collecteur-transporteur (case 8) et émetteur (case 9)"
-    )
+  markAsSealed("ID d'un BSD" id: ID!): Form!
 
   "Valide l'acceptation du BSD"
   markAsAccepted(
@@ -109,7 +100,7 @@ type Mutation {
     id: ID!
     "Informations liées à l'arrivée"
     acceptedInfo: AcceptedFormInput!
-  ): Form
+  ): Form!
 
   "Valide la réception d'un BSD"
   markAsReceived(
@@ -117,7 +108,7 @@ type Mutation {
     id: ID!
     "Informations liées à la réception"
     receivedInfo: ReceivedFormInput!
-  ): Form
+  ): Form!
 
   "Valide le traitement d'un BSD"
   markAsProcessed(
@@ -125,14 +116,40 @@ type Mutation {
     id: ID!
     "Informations liées au traitement"
     processedInfo: ProcessedFormInput!
-  ): Form
+  ): Form!
+
+  """
+  Permet de signer pour le détenteur du déchet afin de le transférer au transporteur.
+  Par exemple lors de l'enlèvement initial ou après un entreposage provisoire.
+  """
+  signEmissionForm(
+    "ID du BSDD"
+    id: ID!
+    "Informations liées à la signature du détenteur"
+    input: SignEmissionFormInput!
+    "Code de signature du détenteur, permettant de signer en son nom sans être authentifié"
+    securityCode: Int
+  ): Form!
+
+  """
+  Permet de signer pour le transporteur afin de valider l'enlèvement.
+  Par exemple lors de l'enlèvement initial ou après un entreposage provisoire.
+  """
+  signTransportForm(
+    "ID du BSDD"
+    id: ID!
+    "Informations liées à la signature du transporteur"
+    input: SignTransportFormInput!
+    "Code de signature du transporteur, permettant de signer en son nom sans être authentifié"
+    securityCode: Int
+  ): Form!
 
   """
   Permet de transférer le déchet à un transporteur lors de la collecte initiale (signatures en case 8 et 9)
   ou après une étape d'entreposage provisoire ou de reconditionnement (signatures en case 18 et 19).
   Cette mutation doit être appelée avec le token du collecteur-transporteur.
   L'établissement émetteur (resp. d'entreposage provisoire ou de reconditionnement) est authentifié quant à lui
-  grâce à son code de signature disponible sur le tableau de bord Trackdéchets (Mon Compte > Établissements > Sécurité).
+  grâce à son code de signature disponible sur le tableau de bord Trackdéchets (Mes établissements > Sécurité).
   D'un point de vue pratique, cela implique qu'un responsable de l'établissement émetteur (resp. d'entreposage provisoire ou de reconditionnement)
   renseigne le code de signature sur le terminal du collecteur-transporteur.
   Dans le cas où un éco-organisme figure sur le BSD, il est également possible de signer avec son code plutôt que celui de l'émetteur.
@@ -143,22 +160,22 @@ type Mutation {
     id: ID!
     "Informations liées aux signatures transporteur et émetteur (case 8 et 9)"
     signingInfo: TransporterSignatureFormInput!
-  ): Form
+  ): Form! @deprecated(reason: "Remplacé par signEmission et signTransport")
 
   "Valide la réception d'un BSD d'un entreposage provisoire ou reconditionnement"
-  markAsTempStored(id: ID!, tempStoredInfos: TempStoredFormInput!): Form
+  markAsTempStored(id: ID!, tempStoredInfos: TempStoredFormInput!): Form!
 
   "Valide l'acceptation ou le refus d'un BSD d'un entreposage provisoire ou reconditionnement"
   markAsTempStorerAccepted(
     id: ID!
     tempStorerAcceptedInfo: TempStorerAcceptedFormInput!
-  ): Form
+  ): Form!
 
   "Valide la complétion des cadres 14 à 19 lors d'un entreposage provisoire ou reconditionnement"
-  markAsResealed(id: ID!, resealedInfos: ResealedFormInput!): Form
+  markAsResealed(id: ID!, resealedInfos: ResealedFormInput!): Form!
 
   "Valide l'envoi du BSD après un entreposage provisoire ou reconditionnement"
-  markAsResent(id: ID!, resentInfos: ResentFormInput!): Form
+  markAsResent(id: ID!, resentInfos: ResentFormInput!): Form!
     @deprecated(
       reason: "Utiliser la mutation signedByTransporter permettant d'apposer les signatures du collecteur-transporteur (case 18) et de l'exploitant du site d'entreposage provisoire ou de reconditionnement (case 19)"
     )
@@ -167,27 +184,84 @@ type Mutation {
   Permet d'importer les informations d'un BSD papier dans Trackdéchet après la réalisation de l'opération
   de traitement. Le BSD signé papier original doit être conservé à l'installation de destination qui doit
   être en mesure de retrouver le bordereau papier correspondant à un bordereau numérique. Le champ `customId`
-  de l'input peut-être utilisé pour faire le lien.
+  de l'input peut être utilisé pour faire le lien.
   """
-  importPaperForm(input: ImportPaperFormInput!): Form
+  importPaperForm(input: ImportPaperFormInput!): Form!
 
-  "Prépare un nouveau segment de transport multimodal"
+  "Prépare un nouveau segment de transport multimodal (Siret ou TVA pour les transporteurs étrangers seulement)"
   prepareSegment(
     id: ID!
     siret: String!
     nextSegmentInfo: NextSegmentInfoInput!
-  ): TransportSegment
+  ): TransportSegment!
+    @deprecated(
+      reason: "Utiliser le champ `Form.transporters` pour ajouter un transporteur et `signTransportForm` pour signer"
+    )
 
   "Marque un segment de transport comme prêt à être emporté"
-  markSegmentAsReadyToTakeOver(id: ID!): TransportSegment
+  markSegmentAsReadyToTakeOver(id: ID!): TransportSegment!
+    @deprecated(
+      reason: "Utiliser le champ `Form.transporters` pour ajouter un transporteur et `signTransportForm` pour signer"
+    )
 
   "Marque un segment comme pris en charge par le nouveau transporteur"
-  takeOverSegment(id: ID!, takeOverInfo: TakeOverInput!): TransportSegment
+  takeOverSegment(id: ID!, takeOverInfo: TakeOverInput!): TransportSegment!
+    @deprecated(
+      reason: "Utiliser le champ `Form.transporters` pour ajouter un transporteur et `signTransportForm` pour signer"
+    )
 
   "Édite un segment existant"
   editSegment(
     id: ID!
     siret: String!
     nextSegmentInfo: NextSegmentInfoInput!
-  ): TransportSegment
+  ): TransportSegment!
+    @deprecated(
+      reason: "Utiliser le champ `Form.transporters` pour ajouter un transporteur, `updateFormTransporter` pour le modifier et `signTransportForm` pour signer"
+    )
+
+  """
+  Crée une demande de révision sur un BSDD existant
+  """
+  createFormRevisionRequest(
+    input: CreateFormRevisionRequestInput!
+  ): FormRevisionRequest!
+
+  """
+  Annule une demande de révision de BSDD.
+  Peut être fait uniquement par l'auteur de la révision, si celle-ci n'a pas encore été acceptée
+  """
+  cancelFormRevisionRequest(
+    "Identifiant de la demande de révision"
+    id: ID!
+  ): Boolean!
+
+  """
+  Répond à une demande d'approbation d'une révision.
+  En cas de refus, la révision associée est automatiquement refusée et les autres validations supprimées.
+  En cas d'acceptation, si c'était la dernière approbation attendue, la révision associée est automatiquement approuvée et appliquée sur le BSDD.
+  """
+  submitFormRevisionRequestApproval(
+    "Identifiant de la validation"
+    id: ID!
+    "Indique si la révision est acceptée ou non"
+    isApproved: Boolean!
+    "Commentaire facultatif"
+    comment: String
+  ): FormRevisionRequest!
+
+  """
+  Crée un transporteur BSDD
+  """
+  createFormTransporter(input: TransporterInput!): Transporter
+
+  """
+  Modifie un transporteur BSDD
+  """
+  updateFormTransporter(id: ID!, input: TransporterInput!): Transporter
+
+  """
+  Supprime un transporteur BSDD
+  """
+  deleteFormTransporter("Identifiant du transporteur" id: ID!): ID!
 }

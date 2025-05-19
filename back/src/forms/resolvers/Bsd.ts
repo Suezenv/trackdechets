@@ -1,4 +1,4 @@
-import { BsdResolvers } from "../../generated/graphql/types";
+import type { BsdResolvers } from "@td/codegen-back";
 import { ReadableIdPrefix } from "../../forms/readableId";
 
 const bsdResolvers: BsdResolvers = {
@@ -14,6 +14,9 @@ const bsdResolvers: BsdResolvers = {
     }
     if (parent.id.startsWith(ReadableIdPrefix.FF)) {
       return "Bsff";
+    }
+    if (parent.id.startsWith(ReadableIdPrefix.PAOH)) {
+      return "Bspaoh";
     }
     return "Form";
   }

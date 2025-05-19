@@ -1,33 +1,31 @@
 import { searchCompany as searchCompanyInsee } from "./insee/client";
-import { searchCompany as searchCompanyDataGouv } from "./entreprise.data.gouv.fr/client";
-import {
-  throttle,
-  throttleErrorMessage,
-  INSEE_THROTTLE_KEY,
-  DATA_GOUV_THROTTLE_KEY
-} from "./ratelimit";
+import { searchCompany as searchCompanyTD } from "./trackdechets/client";
+import { backoffIfTestEnvs, backoffIfTooManyRequests } from "./ratelimit";
 import { redundant } from "./redundancy";
 import { cache } from "./cache";
+import { SireneSearchResult } from "./types";
+
+export const searchCompanyInseeThrottled =
+  backoffIfTestEnvs<SireneSearchResult>(
+    backoffIfTooManyRequests(searchCompanyInsee, {
+      service: "insee"
+    })
+  );
+
+// list different implementations of searchCompany by order of priority.
+// please keep searchCompanyTD then searchCompanyInseeThrottled in this order
+// in order to preserve anonymous companies processing
+const searchCompanyProviders = [searchCompanyTD, searchCompanyInseeThrottled];
 
 /**
  * Apply throttle, redundant and cache decorators to searchCompany functions
- * We use INSEE API in priority and fall back to entreprise.data.gouv.fr
  */
-const decoratedSearchCompany = cache(
-  redundant(
-    throttle(searchCompanyInsee, {
-      cacheKey: INSEE_THROTTLE_KEY,
-      errorMessage: throttleErrorMessage("INSEE")
-    }),
-    throttle(searchCompanyDataGouv, {
-      cacheKey: DATA_GOUV_THROTTLE_KEY,
-      errorMessage: throttleErrorMessage("entreprise.data.gouv.fr")
-    })
-  )
+const decoratedSearchCompany = cache<SireneSearchResult | null>(
+  redundant(...searchCompanyProviders)
 );
 
-//export default decoratedSearchCompany
-
-export default function searchCompany(siret: string) {
+export default function searchCompany(
+  siret: string
+): Promise<SireneSearchResult | null> {
   return decoratedSearchCompany(siret);
 }

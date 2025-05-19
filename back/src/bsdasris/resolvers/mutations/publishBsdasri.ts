@@ -1,14 +1,10 @@
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { MutationResolvers } from "../../../generated/graphql/types";
+import type { MutationResolvers } from "@td/codegen-back";
 import { getBsdasriOrNotFound } from "../../database";
-import { unflattenBsdasri } from "../../converter";
+import { expandBsdasriFromDB } from "../../converter";
 import { validateBsdasri } from "../../validation";
-import {
-  checkIsBsdasriContributor,
-  checkIsBsdasriPublishable
-} from "../../permissions";
-import prisma from "../../../prisma";
-import { indexBsdasri } from "../../elastic";
+import { getBsdasriRepository } from "../../repository";
+import { checkCanUpdate, checkIsBsdasriPublishable } from "../../permissions";
 
 const publishBsdasriResolver: MutationResolvers["publishBsdasri"] = async (
   _,
@@ -16,29 +12,30 @@ const publishBsdasriResolver: MutationResolvers["publishBsdasri"] = async (
   context
 ) => {
   const user = checkIsAuthenticated(context);
-  const { grouping, ...bsdasri } = await getBsdasriOrNotFound({
+
+  const { grouping, synthesizing, ...bsdasri } = await getBsdasriOrNotFound({
     id,
-    includeGrouped: true
+    includeAssociated: true
   });
-  await checkIsBsdasriContributor(
-    user,
-    bsdasri,
-    "Vous ne pouvez publier ce bordereau si vous ne figurez pas dessus"
-  );
+  await checkCanUpdate(user, bsdasri);
+
   await checkIsBsdasriPublishable(
-    user,
     bsdasri,
     grouping.map(el => el.id)
   );
 
-  await validateBsdasri(bsdasri, { emissionSignature: true });
+  await validateBsdasri(bsdasri as any, { emissionSignature: true });
+
+  const bsdasriRepository = getBsdasriRepository(user);
+
   // publish  dasri
-  const publishedBsdasri = await prisma.bsdasri.update({
-    where: { id: bsdasri.id },
-    data: { isDraft: false }
-  });
-  const expandedDasri = unflattenBsdasri(publishedBsdasri);
-  await indexBsdasri(publishedBsdasri);
+  const publishedBsdasri = await bsdasriRepository.update(
+    { id: bsdasri.id },
+    { isDraft: false }
+  );
+
+  const expandedDasri = expandBsdasriFromDB(publishedBsdasri);
+
   return expandedDasri;
 };
 

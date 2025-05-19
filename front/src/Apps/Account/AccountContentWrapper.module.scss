@@ -1,0 +1,28 @@
+@import "../../scss/Breakpoints.scss";
+
+.content {
+  @include tablet {
+    max-width: calc(1100px + 8em);
+  }
+}
+
+.panelTitle {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+
+  button,
+  button:active {
+    margin: 0;
+  }
+}
+
+.titles {
+  display: flex;
+  flex-direction: column;
+}
+
+.additional {
+  display: flex;
+  align-items: center;
+}

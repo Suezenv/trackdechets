@@ -4,8 +4,10 @@ import Form from "./Form";
 import WasteDetails from "./WasteDetails";
 import StateSummary from "./StateSummary";
 import FormCompany from "./FormCompany";
-import Appendix2Form from "./Appendix2Form";
+import InitialForm from "./InitialForm";
 import Bsd from "./Bsd";
+import FormRevisionRequest from "./FormRevisionRequest";
+import { Metadata as FormMetadata } from "./forms/metadata";
 
 export default {
   Query,
@@ -14,6 +16,8 @@ export default {
   WasteDetails,
   StateSummary,
   FormCompany,
-  Appendix2Form,
-  Bsd
+  InitialForm,
+  Bsd,
+  FormRevisionRequest,
+  FormMetadata
 };

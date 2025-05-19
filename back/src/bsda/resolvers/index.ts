@@ -1,7 +1,4 @@
-import {
-  MutationResolvers,
-  QueryResolvers
-} from "../../generated/graphql/types";
+import type { MutationResolvers, QueryResolvers } from "@td/codegen-back";
 
 import bsda from "./queries/bsda";
 import bsdas from "./queries/bsdas";
@@ -13,13 +10,22 @@ import signBsda from "./mutations/sign";
 import duplicateBsda from "./mutations/duplicate";
 import publishBsda from "./mutations/publish";
 import deleteBsda from "./mutations/delete";
+import createBsdaTransporter from "./mutations/createBsdaTransporter";
+import updateBsdaTransporter from "./mutations/updateBsdaTransporter";
+import deleteBsdaTransporter from "./mutations/deleteBsdaTransporter";
 import { Metadata as BsdaMetadata } from "./BsdaMetadata";
 import { Bsda } from "./Bsda";
+import BsdaRevisionRequest from "./BsdaRevisionRequest";
+import { createBsdaRevisionRequest } from "./mutations/revisionRequest/createRevisionRequest";
+import { cancelBsdaRevisionRequest } from "./mutations/revisionRequest/cancelRevisionRequest";
+import { submitBsdaRevisionRequestApproval } from "./mutations/revisionRequest/submitRevisionRequestApproval";
+import { bsdaRevisionRequests } from "./queries/revisionRequests";
 
 const Query: QueryResolvers = {
   bsda,
   bsdas,
-  bsdaPdf
+  bsdaPdf,
+  bsdaRevisionRequests: bsdaRevisionRequests as any
 };
 const Mutation: MutationResolvers = {
   createBsda,
@@ -28,7 +34,13 @@ const Mutation: MutationResolvers = {
   signBsda,
   duplicateBsda,
   publishBsda,
-  deleteBsda
+  deleteBsda,
+  createBsdaTransporter,
+  updateBsdaTransporter,
+  deleteBsdaTransporter,
+  createBsdaRevisionRequest: createBsdaRevisionRequest as any,
+  cancelBsdaRevisionRequest,
+  submitBsdaRevisionRequestApproval: submitBsdaRevisionRequestApproval as any
 };
 
-export default { Query, Mutation, BsdaMetadata, Bsda };
+export default { Query, Mutation, BsdaMetadata, Bsda, BsdaRevisionRequest };

@@ -1,7 +1,8 @@
 import { useQuery } from "@apollo/client";
-import { Loader, Modal } from "common/components";
-import { GET_VHU_FORM } from "form/bsvhu/utils/queries";
-import { Query, QueryBsvhuArgs } from "generated/graphql/types";
+import { Modal } from "../../../../../common/components";
+import { Loader } from "../../../../../Apps/common/Components";
+import { GET_VHU_FORM } from "../../../../../Apps/common/queries/bsvhu/queries";
+import { Query, QueryBsvhuArgs } from "@td/codegen-ui";
 import React from "react";
 import { BsvhuSummary } from "./BsvhuSummary";
 
@@ -17,8 +18,8 @@ export function SignBsvhuModal({ title, bsvhuId, children, onClose }: Props) {
     GET_VHU_FORM,
     {
       variables: {
-        id: bsvhuId,
-      },
+        id: bsvhuId
+      }
     }
   );
 
@@ -29,7 +30,7 @@ export function SignBsvhuModal({ title, bsvhuId, children, onClose }: Props) {
   const { bsvhu } = data;
 
   return (
-    <Modal onClose={onClose} ariaLabel={title} isOpen>
+    <Modal onClose={onClose} ariaLabel={title} isOpen size="L">
       <h2 className="td-modal-title">{title}</h2>
       <BsvhuSummary bsvhu={bsvhu} />
       {children({ bsvhu, onClose })}

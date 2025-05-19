@@ -6,9 +6,13 @@ function loadMutation(name: string) {
 }
 
 export default {
+  createFormTransporter: loadMutation("createFormTransporter"),
+  updateFormTransporter: loadMutation("updateFormTransporter"),
   createForm: loadMutation("createForm"),
+  updateForm: loadMutation("updateForm"),
   markAsSealed: loadMutation("markAsSealed"),
-  signedByTransporter: loadMutation("signedByTransporter"),
+  signEmissionForm: loadMutation("signEmissionForm"),
+  signTransportForm: loadMutation("signTransportForm"),
   markAsReceived: loadMutation("markAsReceived"),
   markAsProcessed: loadMutation("markAsProcessed"),
   markAsTempStored: loadMutation("markAsTempStored"),

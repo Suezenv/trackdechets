@@ -1,12 +1,12 @@
 import * as React from "react";
-import { Bsda } from "generated/graphql/types";
+import { Bsda } from "@td/codegen-ui";
 import {
   DataList,
   DataListItem,
   DataListTerm,
-  DataListDescription,
-} from "common/components";
-import { PACKAGINGS_NAMES } from "form/bsda/components/packagings/Packagings";
+  DataListDescription
+} from "../../../../../common/components";
+import { PACKAGINGS_NAMES } from "../../../../../form/bsda/components/packagings/Packagings";
 
 interface Props {
   bsda: Bsda;
@@ -23,17 +23,26 @@ export function BsdaWasteSummary({ bsda }: Props) {
         <DataListTerm>Code déchet</DataListTerm>
         <DataListDescription>{bsda.waste?.code}</DataListDescription>
       </DataListItem>
-      <DataListItem>
-        <DataListTerm>Numéro de CAP</DataListTerm>
-        <DataListDescription>{bsda.destination?.cap}</DataListDescription>
-      </DataListItem>
+      {bsda.destination?.operation?.nextDestination?.cap ? (
+        <DataListItem>
+          <DataListTerm>Numéro de CAP avec l'exutoire</DataListTerm>
+          <DataListDescription>
+            {bsda.destination?.operation?.nextDestination?.cap}
+          </DataListDescription>
+        </DataListItem>
+      ) : (
+        <DataListItem>
+          <DataListTerm>Numéro de CAP</DataListTerm>
+          <DataListDescription>{bsda.destination?.cap}</DataListDescription>
+        </DataListItem>
+      )}
       <DataListItem>
         <DataListTerm>Description</DataListTerm>
-        <DataListDescription>
-          {[bsda.waste?.materialName, bsda.waste?.familyCode, bsda.waste?.name]
-            .filter(Boolean)
-            .join(" / ")}
-        </DataListDescription>
+        <DataListDescription>{bsda.waste?.materialName}</DataListDescription>
+      </DataListItem>
+      <DataListItem>
+        <DataListTerm>Code famille</DataListTerm>
+        <DataListDescription>{bsda.waste?.familyCode}</DataListDescription>
       </DataListItem>
       <DataListItem>
         <DataListTerm>Poids</DataListTerm>
@@ -41,18 +50,16 @@ export function BsdaWasteSummary({ bsda }: Props) {
           {bsda.destination?.reception?.weight == null ? (
             <>{bsda.weight?.value ?? 0} tonne(s)</>
           ) : (
-            <>{bsda.destination.reception.weight && <>(tonne(s))</>}</>
+            bsda.destination.reception.weight && <>(tonne(s))</>
           )}
         </DataListDescription>
       </DataListItem>
       <DataListItem>
         <DataListTerm>Conditionnement</DataListTerm>
         <DataListDescription>
-          {bsda.packagings?.map(p => (
-            <span key={`${p.quantity}-${p.type}`}>
-              {p.quantity} {PACKAGINGS_NAMES[p.type]}
-            </span>
-          ))}
+          {bsda.packagings
+            ?.map(p => `${p.quantity} ${PACKAGINGS_NAMES[p.type]}`)
+            .join(", ")}
         </DataListDescription>
       </DataListItem>
     </DataList>

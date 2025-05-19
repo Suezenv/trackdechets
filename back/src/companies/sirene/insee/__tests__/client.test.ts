@@ -1,8 +1,9 @@
 import { searchCompany, searchCompanies } from "../client";
 import { ErrorCode } from "../../../../common/errors";
 import * as token from "../token";
+import { siretify } from "../../../../__tests__/factories";
 
-const axiosGet = jest.spyOn(token, "authorizedAxiosGet");
+jest.mock("../token");
 
 const axiosResponseDefault = {
   statusText: "",
@@ -12,16 +13,18 @@ const axiosResponseDefault = {
 
 describe("searchCompany", () => {
   afterEach(() => {
-    axiosGet.mockReset();
+    (token.authorizedAxiosGet as jest.Mock).mockReset();
   });
 
   it("should retrieve a company by siret", async () => {
-    axiosGet.mockResolvedValueOnce({
+    const siret = siretify(1);
+
+    (token.authorizedAxiosGet as jest.Mock).mockResolvedValueOnce({
       ...axiosResponseDefault,
       status: 200,
       data: {
         etablissement: {
-          siret: "85001946400013",
+          siret,
           uniteLegale: {
             denominationUniteLegale: "CODE EN STOCK",
             categorieJuridiqueUniteLegale: "",
@@ -46,11 +49,11 @@ describe("searchCompany", () => {
           ]
         }
       }
-    });
+    } as any);
 
-    const company = await searchCompany("85001946400013");
+    const company = await searchCompany(siret);
     const expected = {
-      siret: "85001946400013",
+      siret,
       etatAdministratif: "A",
       address: "4 bis BD LONGCHAMP Bat G 13001 Marseille",
       addressVoie: "4 bis BD LONGCHAMP Bat G",
@@ -66,12 +69,12 @@ describe("searchCompany", () => {
 
   it(`should set name for an individual enterprise
       by concatenating first and last name`, async () => {
-    axiosGet.mockResolvedValueOnce({
+    (token.authorizedAxiosGet as jest.Mock).mockResolvedValueOnce({
       ...axiosResponseDefault,
       status: 200,
       data: {
         etablissement: {
-          siret: "34393738900041",
+          siret: siretify(1),
           uniteLegale: {
             denominationUniteLegale: "",
             categorieJuridiqueUniteLegale: "1000",
@@ -94,13 +97,13 @@ describe("searchCompany", () => {
           ]
         }
       }
-    });
+    } as any);
     const company = await searchCompany("34393738900041");
     expect(company.name).toEqual("JOHN SNOW");
   });
 
   it("should raise BAD_USER_INPUT if error 404 (siret not found)", async () => {
-    axiosGet.mockRejectedValueOnce({
+    (token.authorizedAxiosGet as jest.Mock).mockRejectedValueOnce({
       response: {
         status: 404
       }
@@ -114,13 +117,14 @@ describe("searchCompany", () => {
   });
 
   it(`should escalate other types of errors
-          (network, internal server error, etc)`, async () => {
-    axiosGet.mockRejectedValueOnce({
+  (network, internal server error, etc)`, async () => {
+    const siret = siretify(1);
+    (token.authorizedAxiosGet as jest.Mock).mockRejectedValueOnce({
       message: "Erreur inconnue"
     });
     expect.assertions(1);
     try {
-      await searchCompany("85001946400013");
+      await searchCompany(siret);
     } catch (e) {
       expect(e.message).toEqual("Erreur inconnue");
     }
@@ -129,17 +133,19 @@ describe("searchCompany", () => {
 
 describe("searchCompanies", () => {
   afterEach(() => {
-    axiosGet.mockReset();
+    (token.authorizedAxiosGet as jest.Mock).mockReset();
   });
 
   it("perform a full text search based on a clue", async () => {
-    axiosGet.mockResolvedValueOnce({
+    const siret = siretify(1);
+
+    (token.authorizedAxiosGet as jest.Mock).mockResolvedValueOnce({
       ...axiosResponseDefault,
       status: 200,
       data: {
         etablissements: [
           {
-            siret: "85001946400013",
+            siret,
             uniteLegale: {
               denominationUniteLegale: "CODE EN STOCK",
               categorieJuridiqueUniteLegale: "",
@@ -163,11 +169,11 @@ describe("searchCompanies", () => {
           }
         ]
       }
-    });
+    } as any);
     const companies = await searchCompanies("code en stock");
     expect(companies).toHaveLength(1);
     const expected = {
-      siret: "85001946400013",
+      siret,
       address: "4 BD LONGCHAMP 13001 Marseille",
       addressVoie: "4 BD LONGCHAMP",
       addressPostalCode: "13001",
@@ -182,7 +188,7 @@ describe("searchCompanies", () => {
   });
 
   it("should return empty array if no results", async () => {
-    axiosGet.mockRejectedValueOnce({
+    (token.authorizedAxiosGet as jest.Mock).mockRejectedValueOnce({
       response: {
         status: 404
       }
@@ -193,7 +199,7 @@ describe("searchCompanies", () => {
 
   it(`should escalate other types of errors
       (network, internal server error, etc)`, async () => {
-    axiosGet.mockRejectedValueOnce({
+    (token.authorizedAxiosGet as jest.Mock).mockRejectedValueOnce({
       message: "Erreur inconnue"
     });
     expect.assertions(1);
@@ -205,13 +211,14 @@ describe("searchCompanies", () => {
   });
 
   it("should filter results by departement", async () => {
-    axiosGet.mockResolvedValueOnce({
+    const siret = siretify(1);
+    (token.authorizedAxiosGet as jest.Mock).mockResolvedValueOnce({
       ...axiosResponseDefault,
       status: 200,
       data: {
         etablissements: [
           {
-            siret: "xxxxxxxxxxxxxx",
+            siret,
             uniteLegale: {
               denominationUniteLegale: "BOULANGERIE",
               categorieJuridiqueUniteLegale: "",
@@ -235,12 +242,12 @@ describe("searchCompanies", () => {
           }
         ]
       }
-    });
+    } as any);
 
     const companies = await searchCompanies("boulangerie", "07");
     expect(companies).toHaveLength(1);
     const expected = {
-      siret: "xxxxxxxxxxxxxx",
+      siret,
       address: "1 ROUTE DES BLÉS 07100 ANNONAY",
       addressVoie: "1 ROUTE DES BLÉS",
       addressPostalCode: "07100",
@@ -253,7 +260,7 @@ describe("searchCompanies", () => {
         "Commerce de détail de pain, pâtisserie et confiserie en magasin spécialisé"
     };
     expect(companies[0]).toEqual(expected);
-    const callUrl = axiosGet.mock.calls[0][0];
+    const callUrl = (token.authorizedAxiosGet as jest.Mock).mock.calls[0][0];
     expect(callUrl).toContain("codePostalEtablissement:07*");
   });
 });

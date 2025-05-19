@@ -1,15 +1,14 @@
-import prisma from "../../../prisma";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { QueryResolvers } from "../../../generated/graphql/types";
+import type { QueryResolvers } from "@td/codegen-back";
 
 const meResolver: QueryResolvers["me"] = async (parent, args, context) => {
-  const me = checkIsAuthenticated(context);
-  const user = await prisma.user.findUnique({ where: { id: me.id } });
+  const user = checkIsAuthenticated(context);
 
   return {
     ...user,
     // companies are resolved through a separate resolver (User.companies)
-    companies: []
+    companies: [],
+    featureFlags: []
   };
 };
 

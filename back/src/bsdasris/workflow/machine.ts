@@ -1,55 +1,61 @@
 import { Machine } from "xstate";
-import { BsdasriState, BsdasriEventType, BsdasriEvent } from "./types";
-import { WasteAcceptationStatus } from "@prisma/client";
+import { BsdasriEvent } from "./types";
+import { WasteAcceptationStatus, BsdasriStatus } from "@prisma/client";
+import { DASRI_GROUPING_OPERATIONS_CODES } from "@td/constants";
+
 /**
  * Workflow state machine for dasris
  */
 const machine = Machine<any, BsdasriEvent>(
   {
     id: "dasri-workflow-machine",
-    initial: BsdasriState.Initial,
+    initial: BsdasriStatus.INITIAL,
     states: {
-      [BsdasriState.Initial]: {
+      [BsdasriStatus.INITIAL]: {
         on: {
-          [BsdasriEventType.SignEmission]: [
-            { target: BsdasriState.SignedByProducer, cond: "emissionNotSigned" }
+          ["EMISSION"]: [
+            {
+              target: BsdasriStatus.SIGNED_BY_PRODUCER,
+              cond: "emissionNotSigned"
+            }
           ],
-          [BsdasriEventType.SignTransport]: [
-            { target: BsdasriState.Sent, cond: "acceptedByTransporter" },
-            { target: BsdasriState.Refused, cond: "refusedByTransporter" }
-          ],
-          [BsdasriEventType.SignEmissionWithSecretCode]: [
-            { target: BsdasriState.SignedByProducer, cond: "emissionNotSigned" }
+          ["TRANSPORT"]: [
+            { target: BsdasriStatus.SENT, cond: "acceptedByTransporter" },
+            { target: BsdasriStatus.REFUSED, cond: "refusedByTransporter" }
           ]
         }
       },
-      [BsdasriState.SignedByProducer]: {
+      [BsdasriStatus.SIGNED_BY_PRODUCER]: {
         on: {
-          [BsdasriEventType.SignTransport]: [
-            { target: BsdasriState.Sent, cond: "acceptedByTransporter" },
-            { target: BsdasriState.Refused, cond: "refusedByTransporter" }
+          ["TRANSPORT"]: [
+            { target: BsdasriStatus.SENT, cond: "acceptedByTransporter" },
+            { target: BsdasriStatus.REFUSED, cond: "refusedByTransporter" }
           ]
         }
       },
-      [BsdasriState.Sent]: {
+      [BsdasriStatus.SENT]: {
         on: {
-          [BsdasriEventType.SignReception]: [
-            { target: BsdasriState.Received, cond: "acceptedByRecipient" },
-            { target: BsdasriState.Refused, cond: "refusedByRecipient" }
+          ["RECEPTION"]: [
+            { target: BsdasriStatus.RECEIVED, cond: "acceptedByRecipient" },
+            { target: BsdasriStatus.REFUSED, cond: "refusedByRecipient" }
           ]
         }
       },
-      [BsdasriState.Received]: {
+      [BsdasriStatus.RECEIVED]: {
         on: {
-          [BsdasriEventType.SignOperation]: [
-            { target: BsdasriState.Processed, cond: "processNotSigned" }
+          ["OPERATION"]: [
+            { target: BsdasriStatus.AWAITING_GROUP, cond: "hasGroupingCode" },
+            { target: BsdasriStatus.PROCESSED, cond: "processNotSigned" }
           ]
         }
       },
-      [BsdasriState.Processed]: {
+      [BsdasriStatus.PROCESSED]: {
         type: "final"
       },
-      [BsdasriState.Refused]: {
+      [BsdasriStatus.REFUSED]: {
+        type: "final"
+      },
+      [BsdasriStatus.AWAITING_GROUP]: {
         type: "final"
       },
       error: {
@@ -96,14 +102,18 @@ const machine = Machine<any, BsdasriEvent>(
         );
       },
       processNotSigned: ctx =>
-        !ctx?.recipientSignedBy && !ctx?.recipientSignedAt
+        !ctx?.recipientSignedBy && !ctx?.recipientSignedAt,
+      hasGroupingCode: ctx =>
+        DASRI_GROUPING_OPERATIONS_CODES.includes(ctx?.destinationOperationCode)
     }
   }
 );
 
 export default machine;
 
-const emissionNotSigned = ctx => !ctx?.emitterSignedBy && !ctx.emitterSignedAt;
+const emissionNotSigned = ctx => {
+  return !ctx?.emitterSignedBy && !ctx.emitterSignedAt;
+};
 const transportNotSigned = ctx =>
   !ctx?.transporterSignedBy && !ctx.transporterSignedAt;
 const receptionNotSigned = ctx =>

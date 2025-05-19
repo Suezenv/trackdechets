@@ -1,0 +1,60 @@
+"""
+Payload de création d'un récépissé transporteur
+"""
+input CreateTransporterReceiptInput {
+  """
+  Numéro de récépissé transporteur
+  """
+  receiptNumber: String!
+
+  """
+  Limite de validité du récépissé
+  """
+  validityLimit: DateTime!
+
+  """
+  Département ayant enregistré la déclaration
+  """
+  department: String!
+}
+
+"""
+Payload d'édition d'un récépissé transporteur
+"""
+input UpdateTransporterReceiptInput {
+  """
+  The id of the transporter receipt to modify
+  """
+  id: ID!
+
+  """
+  Numéro de récépissé transporteur
+  """
+  receiptNumber: String
+
+  """
+  Limite de validité du récépissé
+  """
+  validityLimit: DateTime
+
+  """
+  Département ayant enregistré la déclaration
+  """
+  department: String
+}
+
+"""
+Payload pour créer une entreprise non-diffusible via un PDF SIRENE
+"""
+input CreateAnonymousCompanyFromPDFInput {
+  """
+  Le SIRET de l'entreprise
+  """
+  siret: String!
+
+  """
+  L'avis de situation au répertoire SIRENE de moins de trois mois, de l'entreprise
+  dont le SIRET est spécifié. Au format base64
+  """
+  pdf: String!
+}

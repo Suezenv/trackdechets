@@ -1,17 +1,18 @@
-import TdSwitch from "common/components/Switch";
-import { RedErrorMessage, FieldSwitch } from "common/components";
+import TdSwitch from "../../../common/components/Switch";
+import { RedErrorMessage, FieldSwitch } from "../../../common/components";
 import { Field, useFormikContext } from "formik";
-import { Bsdasri } from "generated/graphql/types";
+import { Bsdasri } from "@td/codegen-ui";
 import React from "react";
 
-import NumberInput from "form/common/components/custom-inputs/NumberInput";
-import { getNestedNode } from "common/helper";
+import NumberInput from "../../common/components/custom-inputs/NumberInput";
+import { getNestedNode } from "../../../common/helper";
+import EstimatedQuantityTooltip from "../../../common/components/EstimatedQuantityTooltip";
 
 export default function WeightWidget({
   switchLabel,
   dasriPath,
   getInitialWeightFn,
-  disabled = false,
+  disabled = false
 }: {
   switchLabel: string;
   dasriPath: "emitter.emission" | "transporter.transport";
@@ -40,11 +41,11 @@ export default function WeightWidget({
         />
       )}
 
-      {showWeight && (
+      {showWeight ? (
         <>
           <div className="form__row">
             <label>
-              Quantité en kg :
+              Poids en kg :
               <Field
                 component={NumberInput}
                 name={`${weightPath}.value`}
@@ -63,13 +64,19 @@ export default function WeightWidget({
           <div className="form__row">
             <Field
               type="checkbox"
-              label="Il s'agit d'une estimation"
+              label={
+                <>
+                  Estimée <EstimatedQuantityTooltip />
+                </>
+              }
               component={FieldSwitch}
               name={`${weightPath}.isEstimate`}
               disabled={disabled}
             />
           </div>
         </>
+      ) : (
+        <p>Pesée non précisée</p>
       )}
     </div>
   );

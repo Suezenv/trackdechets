@@ -1,32 +1,60 @@
-import fixtures from "../fixtures";
+import defaultFixtures from "../fixtures";
 import { WorkflowStep } from "../../../common/workflow";
 import mutations from "../mutations";
 
 export function createBsff(
   company: string,
-  { detenteur: detenteurId, numero }
+  fixtures = defaultFixtures
 ): WorkflowStep {
   return {
-    description: `L'opérateur crée un BSFF en liant les fiches d'intervention`,
+    description: `L'opérateur crée un BSFF`,
     mutation: mutations.createBsff,
-    variables: ({ operateur, ...vars }) => {
-      const detenteur = vars[detenteurId];
+    variables: ({ operateur, transporteur, ttr, ficheInterventions }) => {
       return {
         input: {
-          weight: 1,
-          operateur: fixtures.operateurInput(operateur.siret),
-          detenteur: fixtures.detenteurInput(detenteur.siret),
-          numero,
-          postalCode: "13001"
+          type: "COLLECTE_PETITES_QUANTITES",
+          emitter: fixtures.operateurInput(operateur.siret),
+          packagings: fixtures.packagingsFixtures(),
+          waste: fixtures.wasteFixture(),
+          weight: fixtures.weightFixture(),
+          transporter: fixtures.transporterInput({
+            siret: transporteur.siret,
+            vatNumber: transporteur.vatNumber
+          }),
+          destination: fixtures.ttrInput(ttr.siret),
+          ficheInterventions: ficheInterventions.map(fi => fi.id)
         }
       };
     },
-    expected: { numero },
-    data: response => response.createFicheInterventionBsff,
+    expected: { status: "INITIAL" },
+    data: response => response.createBsff,
     company,
     setContext: (ctx, data) => ({
       ...ctx,
-      ficheInterventions: [...(ctx.ficheInterventions ?? []), data]
+      bsff: data,
+      packagings: data.packagings
+    })
+  };
+}
+
+export function createBsffWithTransporters(
+  company: string,
+  fixtures = defaultFixtures
+): WorkflowStep {
+  return {
+    ...createBsff(company),
+    description:
+      "Crée un BSFF en associant une liste de transporteurs dans un ordre donné",
+    variables: ({ operateur, traiteur, bsffTransporters }) => ({
+      input: {
+        type: "COLLECTE_PETITES_QUANTITES",
+        emitter: fixtures.operateurInput(operateur.siret),
+        packagings: fixtures.packagingsFixtures(),
+        waste: fixtures.wasteFixture(),
+        weight: fixtures.weightFixture(),
+        destination: fixtures.traiteurInput(traiteur.siret),
+        transporters: bsffTransporters
+      }
     })
   };
 }

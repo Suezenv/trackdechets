@@ -1,11 +1,12 @@
-import React from "react";
-import { FieldProps } from "formik";
-import { parseDate } from "common/datetime";
+import { parseDate } from "../../../../common/datetime";
+import { format, isValid } from "date-fns";
 import fr from "date-fns/locale/fr";
+import { FieldProps } from "formik";
+import React from "react";
 import DatePicker, {
-  setDefaultLocale,
-  registerLocale,
   ReactDatePickerProps,
+  registerLocale,
+  setDefaultLocale
 } from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 import "./DateInput.module.scss";
@@ -22,14 +23,25 @@ export default function DateInput({
 } & ReactDatePickerProps) {
   const { value, ...rest } = field;
 
+  const getSelectedDate = () => {
+    const parsedDate = value ? parseDate(value) : null;
+    if (isValid(parsedDate)) {
+      return parsedDate;
+    }
+  };
   return (
     <DatePicker
       {...rest}
       {...props}
       dateFormat="dd/MM/yyyy"
-      selected={value ? parseDate(value) : null}
+      autoComplete="off"
+      selected={getSelectedDate()}
       onChange={(value: Date | null) => {
-        setFieldValue(field.name, value?.toISOString() ?? null);
+        setFieldValue(field.name, value ? format(value, "yyyy-MM-dd") : null);
+      }}
+      onChangeRaw={e => {
+        // disable entering manual date
+        e.preventDefault();
       }}
     />
   );

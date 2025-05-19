@@ -1,29 +1,34 @@
-import { Form, Prisma, User } from "@prisma/client";
-import { UserInputError } from "apollo-server-express";
-import prisma from "../../../prisma";
+import { Form, Prisma, Status } from "@prisma/client";
 import { checkIsAuthenticated } from "../../../common/permissions";
+import type { ImportPaperFormInput, MutationResolvers } from "@td/codegen-back";
+import { getFirstTransporter, getFormOrFormNotFound } from "../../database";
 import {
-  ImportPaperFormInput,
-  MutationResolvers
-} from "../../../generated/graphql/types";
-import { getUserCompanies } from "../../../users/database";
-import { getFormOrFormNotFound } from "../../database";
-import {
-  expandFormFromDb,
-  flattenImportPaperFormInput
-} from "../../form-converter";
+  getAndExpandFormFromDb,
+  flattenImportPaperFormInput,
+  flattenTransporterInput
+} from "../../converter";
 import { checkCanImportForm } from "../../permissions";
 import getReadableId from "../../readableId";
+import { getFormRepository } from "../../repository";
 import { processedFormSchema } from "../../validation";
 import transitionForm from "../../workflow/transitionForm";
 import { EventType } from "../../workflow/types";
+import {
+  isDangerous,
+  PROCESSING_OPERATIONS_GROUPEMENT_CODES
+} from "@td/constants";
+import { UserInputError } from "../../../common/errors";
 
 /**
  * Update an existing form with data imported from a paper form
  * Only SEALED form can be updated and marked as processed
  * which is reflected in the state machine
  */
-async function updateForm(user: User, form: Form, input: ImportPaperFormInput) {
+async function updateForm(
+  form: Form,
+  input: ImportPaperFormInput,
+  user: Express.User
+) {
   // fail fast on form.status (before state machine validation) to ensure
   // we apply validation on a sealed form
   if (form.status !== "SEALED") {
@@ -32,8 +37,29 @@ async function updateForm(user: User, form: Form, input: ImportPaperFormInput) {
     );
   }
 
+  if (
+    input.wasteDetails?.code &&
+    isDangerous(input.wasteDetails?.code) &&
+    input.wasteDetails?.isDangerous === undefined
+  ) {
+    input.wasteDetails.isDangerous = true;
+  }
+
   const flattenedFormInput = flattenImportPaperFormInput(input);
-  const validationData = { ...form, ...flattenedFormInput };
+  const flattenedTransporter = flattenTransporterInput(input);
+
+  const existingTransporter = await getFirstTransporter(form);
+  const validationData = {
+    ...form,
+    ...flattenedFormInput,
+    ...existingTransporter,
+    ...flattenedTransporter,
+    isAccepted: flattenedFormInput.wasteAcceptationStatus === "ACCEPTED",
+    destinationOperationMode:
+      flattenedFormInput?.destinationOperationMode ??
+      form?.destinationOperationMode ??
+      undefined
+  };
 
   await processedFormSchema.validate(validationData, { abortEarly: false });
 
@@ -41,15 +67,15 @@ async function updateForm(user: User, form: Form, input: ImportPaperFormInput) {
   const {
     emitterCompanySiret,
     recipientCompanySiret,
-    transporterCompanySiret,
     traderCompanySiret,
-    brokerCompanySiret
+    brokerCompanySiret,
+    transporterCompanySiret
   } = validationData;
 
   if (
     emitterCompanySiret != form.emitterCompanySiret ||
     recipientCompanySiret != form.recipientCompanySiret ||
-    transporterCompanySiret != form.transporterCompanySiret ||
+    transporterCompanySiret != existingTransporter?.transporterCompanySiret ||
     traderCompanySiret != form.traderCompanySiret ||
     brokerCompanySiret != form.brokerCompanySiret
   ) {
@@ -61,47 +87,98 @@ async function updateForm(user: User, form: Form, input: ImportPaperFormInput) {
   const formUpdateInput: Prisma.FormUpdateInput = {
     ...flattenedFormInput,
     isImportedFromPaper: true,
-    signedByTransporter: true
+    signedByTransporter: true,
+    emittedAt: flattenedFormInput.sentAt,
+    emittedBy: flattenedFormInput.sentBy,
+    takenOverAt: flattenedFormInput.sentAt,
+    ...(existingTransporter
+      ? {
+          transporters: {
+            update: {
+              where: { id: existingTransporter.id },
+              data: flattenedTransporter
+            }
+          }
+        }
+      : {
+          transporters: {
+            create: {
+              ...flattenedTransporter,
+              number: 1,
+              readyToTakeOver: true
+            }
+          }
+        })
   };
 
-  const updatedForm = await transitionForm(user, form, {
-    type: EventType.ImportPaperForm,
-    formUpdateInput
-  });
-  return expandFormFromDb(updatedForm);
+  return getFormRepository(user).update(
+    { id: form.id, status: form.status },
+    {
+      status: transitionForm(form, {
+        type: EventType.ImportPaperForm,
+        formUpdateInput
+      }),
+      ...formUpdateInput
+    }
+  );
 }
 
 /**
  * Create a form from scratch based on imported data
  * A customId corresponding to paper form number should be provided
  */
-async function createForm(user: User, input: ImportPaperFormInput) {
+async function createForm(input: ImportPaperFormInput, user: Express.User) {
   const flattenedFormInput = flattenImportPaperFormInput(input);
+  const flattenedTransporter = flattenTransporterInput(input);
 
-  await processedFormSchema.validate(flattenedFormInput, {
-    abortEarly: false
-  });
+  await processedFormSchema.validate(
+    { ...flattenedFormInput, ...flattenedTransporter },
+    {
+      abortEarly: false
+    }
+  );
 
-  // check user belongs to destination company
-  const userCompanies = await getUserCompanies(user.id);
-  const userSirets = userCompanies.map(c => c.siret);
-  if (!userSirets.includes(flattenedFormInput.recipientCompanySiret)) {
-    throw new UserInputError(
-      "Vous devez apparaitre en tant que destinataire du bordereau (case 2) pour pouvoir importer ce bordereau"
-    );
-  }
+  const noTraceability = input.processedInfo?.noTraceability === true;
+  const awaitingGroup = PROCESSING_OPERATIONS_GROUPEMENT_CODES.includes(
+    input.processedInfo?.processingOperationDone
+  );
 
   const formCreateInput: Prisma.FormCreateInput = {
     ...flattenedFormInput,
     readableId: getReadableId(),
     owner: { connect: { id: user.id } },
-    status: "PROCESSED",
+    status: noTraceability
+      ? Status.NO_TRACEABILITY
+      : awaitingGroup
+      ? Status.AWAITING_GROUP
+      : Status.PROCESSED,
     isImportedFromPaper: true,
-    signedByTransporter: true
+    signedByTransporter: true,
+    ...(input.transporter
+      ? {
+          transporters: {
+            create: {
+              ...flattenedTransporter,
+              number: 1,
+              readyToTakeOver: true
+            }
+          }
+        }
+      : {})
   };
 
-  const form = await prisma.form.create({ data: formCreateInput });
-  return expandFormFromDb(form);
+  const formRepository = getFormRepository(user);
+  return formRepository.create(formCreateInput, { isPaperForm: true });
+}
+
+async function createOrUpdateForm(
+  id: string | null | undefined,
+  formInput: ImportPaperFormInput,
+  user: Express.User
+) {
+  const form = id ? await getFormOrFormNotFound({ id }) : null;
+  await checkCanImportForm(user, formInput, form);
+  return form ? updateForm(form, formInput, user) : createForm(formInput, user);
 }
 
 const importPaperFormResolver: MutationResolvers["importPaperForm"] = async (
@@ -119,13 +196,9 @@ const importPaperFormResolver: MutationResolvers["importPaperForm"] = async (
       : rest.wasteDetails
   };
 
-  if (id) {
-    const form = await getFormOrFormNotFound({ id });
-    await checkCanImportForm(user, form);
-    return updateForm(user, form, formInput);
-  }
+  const form = await createOrUpdateForm(id, formInput, user);
 
-  return createForm(user, formInput);
+  return getAndExpandFormFromDb(form.id);
 };
 
 export default importPaperFormResolver;

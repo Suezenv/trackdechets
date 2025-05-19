@@ -1,0 +1,63 @@
+.registryFormBuilder {
+  .tabError {
+    background-color: var(--light-background-contrast-error, #ffe9e9);
+    &[aria-selected="true"]:not(:disabled) {
+      color: var(--text-action-high-grey);
+      background-image: linear-gradient(
+          0deg,
+          var(--background-flat-error),
+          var(--background-flat-error)
+        ),
+        linear-gradient(
+          0deg,
+          var(--border-default-grey),
+          var(--border-default-grey)
+        ),
+        linear-gradient(
+          0deg,
+          var(--border-default-grey),
+          var(--border-default-grey)
+        ),
+        linear-gradient(
+          0deg,
+          var(--border-default-grey),
+          var(--border-default-grey)
+        );
+    }
+    &[aria-selected="true"]:not(:disabled):hover {
+      background-color: var(--hover-tint);
+    }
+    &:not(:disabled):hover {
+      background-color: var(
+        --light-primary-red-marianne-850-red-marianne-850-hover,
+        #fb8f8f
+      );
+    }
+  }
+
+  .fr-btns-group > div {
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+  .fr-modal__footer {
+    padding: 2rem 0;
+    background-position: 0 0;
+    background-repeat: no-repeat;
+    background-size: 100% 1px;
+    background-image: linear-gradient(
+      0deg,
+      var(--border-default-grey),
+      var(--border-default-grey)
+    );
+    .error-container {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      // gap: 16px;
+    }
+  }
+  .fr-tabs {
+    box-shadow: none;
+  }
+}

@@ -23,6 +23,23 @@ export function getUid(len: number): string {
   return uid;
 }
 
+/**
+ * Return a unique identifier with the given `len`.
+ *
+ * @param {Number} length
+ * @return {String}
+ */
+export function genCaptchaString(len: number): string {
+  let captcha = "";
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ123456789"; // exclude I, 0 and O
+  const charsLength = chars.length;
+
+  for (let i = 0; i < len; ++i) {
+    captcha += chars[crypto.randomInt(0, charsLength - 1)];
+  }
+  return captcha;
+}
+
 export function getUIBaseURL() {
   const { UI_URL_SCHEME, UI_HOST } = process.env;
   return `${UI_URL_SCHEME || "http"}://${UI_HOST}`;
@@ -41,6 +58,28 @@ export function sameDayMidnight(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
+export function startOfDay(date: Date | string): Date {
+  const result = new Date(date);
+  result.setHours(0, 0, 0, 0);
+  return result;
+}
+
+export function endOfDay(date: Date | string): Date {
+  const result = new Date(date);
+  result.setHours(23, 59, 59, 999);
+  return result;
+}
+
+export function todayAtMidnight(): Date {
+  return sameDayMidnight(new Date());
+}
+
+export const nowPlusXHours = (hours: number) => {
+  const res = new Date();
+  res.setHours(res.getHours() + hours);
+  return res;
+};
+
 /**
  * Number of days between two dates
  */
@@ -51,6 +90,34 @@ export function daysBetween(date1: Date, date2: Date): number {
   const numberOfdays = Math.trunc((millis1 - millis2) / dayMillis);
   return numberOfdays;
 }
+
+/**
+ * Converts a date to a french-formatted string dd/MM/YYYY
+ */
+export function toddMMYYYY(date: Date): string {
+  return date.toLocaleDateString("fr-FR");
+}
+
+/**
+ * Compute a past date relative to baseDate
+ *
+ * @param baseDate Date
+ * @param daysAgo Integer
+ * @return a date at 00:00:00
+ */
+export const xDaysAgo = (baseDate: Date, daysAgo: number): Date => {
+  const clonedDate = new Date(baseDate.getTime()); // avoid mutating baseDate
+  clonedDate.setDate(clonedDate.getDate() - daysAgo);
+
+  return new Date(clonedDate.toDateString());
+};
+
+/**
+ * BaseDate + x days
+ */
+export const inXDays = (baseDate: Date, inDays: number): Date => {
+  return xDaysAgo(baseDate, -inDays);
+};
 
 export function sanitizeEmail(email: string): string {
   return email.toLowerCase().trim();
@@ -95,15 +162,109 @@ export const hashToken = (token: string) =>
     .update(token)
     .digest("hex");
 
+const reRegExpChar = /[\\^$.*+?()[\]{}|]/g;
+const reHasRegExpChar = RegExp(reRegExpChar.source);
+
 /**
- *Try extracting a valid postal code
+ * Escapes the `RegExp` special characters "^", "$", "\", ".", "*", "+",
+ * "?", "(", ")", "[", "]", "{", "}", and "|" in `string`.
+ *
+ * TAKEN FROM https://github.com/lodash/lodash/blob/master/escapeRegExp.js
+ *
+ * @since 3.0.0
+ * @category String
+ * @param {string} [string=''] The string to escape.
+ * @returns {string} Returns the escaped string.
+ * @see escape, escapeRegExp, unescape
+ * @example
+ *
+ * escapeRegExp('[lodash](https://lodash.com/)')
+ * // => '\[lodash\]\(https://lodash\.com/\)'
  */
-export function extractPostalCode(address: string) {
-  if (address) {
-    const matches = address.match(/([0-9]{5})/);
-    if (matches && matches.length > 0) {
-      return matches[0];
-    }
-  }
-  return "";
+export function escapeRegExp(string) {
+  return string && reHasRegExpChar.test(string)
+    ? string.replace(reRegExpChar, "\\$&")
+    : string || "";
 }
+
+const ALGO = "aes-256-gcm";
+// symetric encription
+const ENCRYPTION_KEY = process.env.WEBHOOK_TOKEN_ENCRYPTION_KEY;
+const IV_LENGTH = 12;
+
+export const aesEncrypt = (text: string): string => {
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(ALGO, ENCRYPTION_KEY!, iv);
+
+  const enc1 = cipher.update(text, "utf8");
+  const enc2 = cipher.final();
+  return Buffer.concat([enc1, enc2, iv, cipher.getAuthTag()]).toString(
+    "base64"
+  );
+};
+
+export const aesDecrypt = encrypted => {
+  encrypted = Buffer.from(encrypted, "base64");
+  const length = encrypted.length;
+  const iv = encrypted.slice(length - 28, length - 16);
+  const tag = encrypted.slice(length - 16);
+  const content = encrypted.slice(0, length - 28);
+  const decipher = crypto.createDecipheriv(ALGO, ENCRYPTION_KEY!, iv);
+  decipher.setAuthTag(tag);
+  let decrypted = decipher.update(content, undefined, "utf8");
+  decrypted += decipher.final("utf8");
+  return decrypted;
+};
+
+/**
+ * Generates a random chain of numbers, like "012082"
+ */
+export const randomNbrChain = (length: number) => {
+  return "0"
+    .repeat(length)
+    .split("")
+    .map(_ => Math.floor(Math.random() * 10))
+    .join("");
+};
+
+/**
+ * Naïve method to detect obvious usage of fishy characters within a string
+ */
+export const looksHacky = (str: string): boolean => {
+  const low = str.toLowerCase();
+
+  return (
+    [
+      "javascript",
+      "alert",
+      "iframe",
+      "onerror",
+      "onfocus",
+      "onload",
+      "onanimationstart",
+      "onanimationend",
+      "http",
+      "ws:",
+      "wss:",
+      "//"
+    ].some(s => low.includes(s)) || new RegExp(/[`~#$%^*|?;<>[\]]/).test(str)
+  );
+};
+
+/**
+ * Remove all special chars except "-" for sanitization
+ */
+export const removeSpecialCharsExceptHyphens = (str: string): string => {
+  return str.replace(/[~`!@#$%^&*()+={}[\];:'"<>.,/\\?_]/g, "");
+};
+
+/**
+ * Checks whether a string is base64 or not
+ *
+ * SO thread:https://stackoverflow.com/questions/475074/regex-to-parse-or-validate-base64-data
+ */
+export const isBase64 = (str: string): boolean => {
+  return new RegExp(
+    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+  ).test(str);
+};

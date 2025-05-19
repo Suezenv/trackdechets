@@ -1,9 +1,9 @@
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import prisma from "../../../../prisma";
+import { prisma } from "@td/prisma";
 import { AuthType } from "../../../../auth";
 import { userWithCompanyFactory } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
-import { Mutation } from "../../../../generated/graphql/types";
+import type { Mutation } from "@td/codegen-back";
 
 describe("{ mutation { updateVhuAgrement } }", () => {
   afterEach(() => resetDatabase());
@@ -48,7 +48,7 @@ describe("{ mutation { updateVhuAgrement } }", () => {
     expect(data.updateVhuAgrement).toEqual(update);
 
     // check record was modified in db
-    const { id, ...updated } = await prisma.vhuAgrement.findUnique({
+    const { id, ...updated } = await prisma.vhuAgrement.findUniqueOrThrow({
       where: { id: createdAgrement.id }
     });
     expect(updated.agrementNumber).toEqual(update.agrementNumber);

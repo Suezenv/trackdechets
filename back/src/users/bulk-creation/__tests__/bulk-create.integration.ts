@@ -1,27 +1,53 @@
-import { resetDatabase } from "../../../../integration-tests/helper";
-import prisma from "../../../prisma";
-import * as mailsHelper from "../../../mailer/mailing";
+import {
+  resetCache,
+  resetDatabase
+} from "../../../../integration-tests/helper";
+import { prisma } from "@td/prisma";
+import { sendMail } from "../../../mailer/mailing";
+import { sirenify } from "../sirene";
 import { companyFactory, userFactory } from "../../../__tests__/factories";
-import { bulkCreate } from "../index";
+import { bulkCreate, Opts } from "../index";
+import { searchCompany } from "../../../companies/search";
 
 // No mails
-const sendMailSpy = jest.spyOn(mailsHelper, "sendMail");
-sendMailSpy.mockImplementation(() => Promise.resolve());
+jest.mock("../../../mailer/mailing");
+(sendMail as jest.Mock).mockImplementation(() => Promise.resolve());
 
-jest.mock("../sirene", () => ({
-  getCompanyThrottled: jest.fn(() =>
-    Promise.resolve({
-      naf: "62.01Z",
-      name: "NAME FROM SIRENE"
-    })
-  ),
-  sirenify: jest.fn(company =>
-    Promise.resolve({
+jest.mock("../sirene");
+(sirenify as jest.Mock).mockImplementation(company => {
+  if (company.siret === "85001946400021") {
+    return {
       ...company,
       name: "NAME FROM SIRENE",
-      codeNaf: "62.01Z"
-    })
-  )
+      address: "40 boulevard Voltaire 13001 Marseille",
+      addressCity: "Marseille",
+      addressPostalCode: "13001",
+      addressVoie: "40 boulevard Voltaire",
+      codePaysEtrangerEtablissement: "",
+      codeNaf: "62.01Z",
+      latitude: 1,
+      longitude: 1
+    };
+  }
+
+  if (company.siret === "81343950200028") {
+    return {
+      ...company,
+      name: "NAME FROM SIRENE",
+      address: "4 boulevard Pasteur 44100 Nantes",
+      addressCity: "Nantes",
+      addressPostalCode: "44100",
+      addressVoie: "4 boulevard Pasteur",
+      codePaysEtrangerEtablissement: "",
+      codeNaf: "62.01Z",
+      latitude: 1,
+      longitude: 1
+    };
+  }
+});
+
+jest.mock("../../../companies/search", () => ({
+  searchCompany: jest.fn().mockResolvedValue({ etatAdministratif: "A" })
 }));
 
 export interface CompanyInfo {
@@ -34,12 +60,48 @@ export interface CompanyInfo {
 }
 
 describe("bulk create users and companies from csv files", () => {
+  beforeAll(async () => {
+    await resetDatabase();
+  });
+
+  afterAll(async () => {
+    await resetDatabase();
+    jest.resetAllMocks();
+  });
+
+  (searchCompany as jest.Mock).mockImplementation((cue: string) => {
+    if (cue === "85001946400021") {
+      return {
+        siret: "85001946400021",
+        name: "Code en stock",
+        statutDiffusionEtablissement: "O",
+        etatAdministratif: "A",
+        addressVoie: "40 boulevard Voltaire",
+        addressPostalCode: "13001",
+        addressCity: "Marseille",
+        codePaysEtrangerEtablissement: ""
+      };
+    }
+    if (cue === "81343950200028") {
+      return {
+        siret: "81343950200028",
+        name: "Frontier SAS",
+        statutDiffusionEtablissement: "O",
+        etatAdministratif: "A",
+        addressVoie: "4 boulevard Pasteur",
+        addressPostalCode: "44100",
+        addressCity: "Nantes",
+        codePaysEtrangerEtablissement: ""
+      };
+    }
+  });
+
   // CSV files are read from __tests__/csv folder
   //
   // In the test data we have
   //
   // 2 companies:
-  // - Code en Stock 85001946400013
+  // - Code en Stock 85001946400021
   // - Frontier SAS 81343950200028
   //
   // and 3 users
@@ -50,7 +112,7 @@ describe("bulk create users and companies from csv files", () => {
   // bulkCreate is called twice in all tests to verify
   // the idempotency of the function
 
-  const opts = {
+  const opts: Opts = {
     validateOnly: false,
     csvDir: `${__dirname}/csv`,
     console: {
@@ -79,7 +141,10 @@ describe("bulk create users and companies from csv files", () => {
     expect(associations).toHaveLength(associationCount);
   }
 
-  afterEach(() => resetDatabase());
+  afterEach(async () => {
+    await resetDatabase();
+    await resetCache();
+  });
 
   test("create companies and users from scratch", async () => {
     await bulkCreateIdempotent();
@@ -87,7 +152,7 @@ describe("bulk create users and companies from csv files", () => {
     await expectNumberOfRecords(2, 3, 4);
 
     // check fields are OK for first user
-    const john = await prisma.user.findUnique({
+    const john = await prisma.user.findUniqueOrThrow({
       where: { email: "john.snow@trackdechets.fr" }
     });
     expect(john.name).toEqual("john.snow@trackdechets.fr");
@@ -96,21 +161,38 @@ describe("bulk create users and companies from csv files", () => {
     expect(john.firstAssociationDate).toBeTruthy();
 
     // check fields are OK for first company
-    const codeEnStock = await prisma.company.findUnique({
-      where: { siret: "85001946400013" }
+    const codeEnStock = await prisma.company.findUniqueOrThrow({
+      where: { siret: "85001946400021" }
     });
     expect(codeEnStock.name).toEqual("NAME FROM SIRENE");
     expect(codeEnStock.givenName).toEqual("Code en Stock");
     expect(codeEnStock.companyTypes).toEqual(["PRODUCER"]);
+    expect(codeEnStock.wasteProcessorTypes).toEqual([]);
+    expect(codeEnStock.wasteVehiclesTypes).toEqual([]);
+    expect(codeEnStock.collectorTypes).toEqual([]);
     expect(codeEnStock.codeNaf).toEqual("62.01Z");
     expect(codeEnStock.website).toEqual("https://codeenstock.trackdechets.fr");
     expect(codeEnStock.gerepId).toEqual("1234");
     expect(codeEnStock.contactPhone).toEqual("0600000000");
+    expect(codeEnStock.contact).toEqual("Marcel Machin");
+
+    // check fields are OK for second company
+    const frontier = await prisma.company.findUniqueOrThrow({
+      where: { siret: "81343950200028" }
+    });
+    expect(frontier.companyTypes).toEqual(["PRODUCER", "WASTEPROCESSOR"]);
+    expect(frontier.wasteProcessorTypes).toEqual(["OTHER_DANGEROUS_WASTES"]);
+    expect(frontier.wasteVehiclesTypes).toEqual([]);
+    expect(frontier.collectorTypes).toEqual([]);
+    expect(frontier.name).toEqual("NAME FROM SIRENE");
+    expect(frontier.givenName).toEqual("Frontier SAS");
+    // empty contact cell
+    expect(frontier.contact).toEqual("");
   }, 10000);
 
   test("already existing company", async () => {
     // assume Code en Stock was already created
-    const codeEnStock = await companyFactory({ siret: "85001946400013" });
+    const codeEnStock = await companyFactory({ siret: "85001946400021" });
 
     await bulkCreateIdempotent();
 
@@ -118,7 +200,7 @@ describe("bulk create users and companies from csv files", () => {
 
     // Code en stock should be untouched
     expect(
-      await prisma.company.findUnique({ where: { siret: "85001946400013" } })
+      await prisma.company.findUnique({ where: { siret: "85001946400021" } })
     ).toEqual(codeEnStock);
   }, 10000);
 
@@ -135,13 +217,10 @@ describe("bulk create users and companies from csv files", () => {
     await bulkCreateIdempotent();
 
     await expectNumberOfRecords(2, 3, 4);
-    const {
-      firstAssociationDate,
-      updatedAt,
-      ...dbJohn
-    } = await prisma.user.findUnique({
-      where: { email: "john.snow@trackdechets.fr" }
-    });
+    const { firstAssociationDate, updatedAt, ...dbJohn } =
+      await prisma.user.findUniqueOrThrow({
+        where: { email: "john.snow@trackdechets.fr" }
+      });
 
     // john snow user should be untouched
     expect(dbJohn).toEqual(john);
@@ -149,7 +228,7 @@ describe("bulk create users and companies from csv files", () => {
 
     // associations should exist between John Snow and Code en Stock
     const associations = await prisma.companyAssociation.findMany({
-      where: { user: { id: john.id }, company: { siret: "85001946400013" } }
+      where: { user: { id: john.id }, company: { siret: "85001946400021" } }
     });
     expect(associations).toHaveLength(1);
     expect(associations[0].role).toEqual("ADMIN");
@@ -158,7 +237,7 @@ describe("bulk create users and companies from csv files", () => {
   test("already existing user with existing role in company", async () => {
     // John Snow and Code en Stock already exist
     const john = await userFactory({ email: "john.snow@trackdechets.fr" });
-    const codeEnStock = await companyFactory({ siret: "85001946400013" });
+    const codeEnStock = await companyFactory({ siret: "85001946400021" });
     // and John Snow is member of Code en Stock
     const role = await prisma.companyAssociation.create({
       data: {
@@ -175,10 +254,9 @@ describe("bulk create users and companies from csv files", () => {
     expect(
       await prisma.user.findUnique({ where: { email: john.email } })
     ).toEqual(john);
-
     // Code en Stock should be untouched
     expect(
-      await prisma.company.findUnique({ where: { siret: codeEnStock.siret } })
+      await prisma.company.findUnique({ where: { siret: codeEnStock.siret! } })
     ).toEqual(codeEnStock);
     // Association should be there
     const associations = await prisma.companyAssociation.findMany({
@@ -195,7 +273,7 @@ describe("bulk create users and companies from csv files", () => {
     const invitation = await prisma.userAccountHash.create({
       data: {
         email: "john.snow@trackdechets.fr",
-        companySiret: company.siret,
+        companySiret: company.siret!,
         role: "MEMBER",
         hash: "hash"
       }
@@ -206,7 +284,7 @@ describe("bulk create users and companies from csv files", () => {
     await expectNumberOfRecords(3, 3, 5);
 
     // John Snow user should be created
-    const john = await prisma.user.findUnique({
+    const john = await prisma.user.findUniqueOrThrow({
       where: { email: "john.snow@trackdechets.fr" }
     });
 
@@ -219,7 +297,7 @@ describe("bulk create users and companies from csv files", () => {
     expect(associations[0].role).toEqual("MEMBER");
 
     // invitation should be marked as joined
-    const updatedInvitation = await prisma.userAccountHash.findUnique({
+    const updatedInvitation = await prisma.userAccountHash.findUniqueOrThrow({
       where: {
         id: invitation.id
       }
@@ -229,11 +307,11 @@ describe("bulk create users and companies from csv files", () => {
 
   test("role in csv already in pending invitation", async () => {
     // assume John Snow was already invited to Trackdéchets
-    const company = await companyFactory({ siret: "85001946400013" });
+    const company = await companyFactory({ siret: "85001946400021" });
     const invitation = await prisma.userAccountHash.create({
       data: {
         email: "john.snow@trackdechets.fr",
-        companySiret: company.siret,
+        companySiret: company.siret!,
         role: "MEMBER",
         hash: "hash"
       }
@@ -242,7 +320,7 @@ describe("bulk create users and companies from csv files", () => {
     await bulkCreateIdempotent();
     await expectNumberOfRecords(2, 3, 4);
 
-    const john = await prisma.user.findUnique({
+    const john = await prisma.user.findUniqueOrThrow({
       where: { email: "john.snow@trackdechets.fr" }
     });
 
@@ -254,11 +332,41 @@ describe("bulk create users and companies from csv files", () => {
     expect(associations[0].role).toEqual("MEMBER");
 
     // invitation should be marked as joined
-    const updatedInvitation = await prisma.userAccountHash.findUnique({
+    const updatedInvitation = await prisma.userAccountHash.findUniqueOrThrow({
       where: {
         id: invitation.id
       }
     });
     expect(updatedInvitation.acceptedAt).not.toBeNull();
+  }, 10000);
+
+  test("should fill company's splitted address", async () => {
+    // Given
+
+    // When
+    await bulkCreateIdempotent();
+
+    // Then
+    // Check fields are OK for first company
+    const codeEnStock = await prisma.company.findUniqueOrThrow({
+      where: { siret: "85001946400021" }
+    });
+    expect(codeEnStock.address).toEqual(
+      "40 boulevard Voltaire 13001 Marseille"
+    );
+    expect(codeEnStock.street).toEqual("40 boulevard Voltaire");
+    expect(codeEnStock.postalCode).toEqual("13001");
+    expect(codeEnStock.city).toEqual("Marseille");
+    expect(codeEnStock.country).toEqual("FR");
+
+    // Check fields are OK for second company
+    const frontierSAS = await prisma.company.findUniqueOrThrow({
+      where: { siret: "81343950200028" }
+    });
+    expect(frontierSAS.address).toEqual("4 boulevard Pasteur 44100 Nantes");
+    expect(frontierSAS.street).toEqual("4 boulevard Pasteur");
+    expect(frontierSAS.postalCode).toEqual("44100");
+    expect(frontierSAS.city).toEqual("Nantes");
+    expect(frontierSAS.country).toEqual("FR");
   }, 10000);
 });

@@ -1,0 +1,10 @@
+https://trackdechets.beta.gouv.fr
+https://trackdechets.beta.gouv.fr/resources
+https://app.trackdechets.beta.gouv.fr/login
+https://app.trackdechets.beta.gouv.fr/signup
+https://app.trackdechets.beta.gouv.fr/password-reset-request
+https://trackdechets.beta.gouv.fr/accessibilite
+https://trackdechets.beta.gouv.fr/cgu
+https://trackdechets.beta.gouv.fr/politique-de-confidentialite.pdf
+https://trackdechets.beta.gouv.fr/mentions-legales.pdf
+https://trackdechets.beta.gouv.fr/stats

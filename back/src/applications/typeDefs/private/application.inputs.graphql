@@ -1,0 +1,11 @@
+input CreateApplicationInput {
+  name: String!
+  goal: ApplicationGoal!
+  redirectUris: [String!]!
+}
+
+input UpdateApplicationInput {
+  name: String
+  goal: ApplicationGoal
+  redirectUris: [String!]
+}

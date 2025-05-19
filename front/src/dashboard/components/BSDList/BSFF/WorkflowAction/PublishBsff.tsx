@@ -1,10 +1,11 @@
 import React from "react";
 import { gql, useMutation } from "@apollo/client";
-import { Mutation, MutationPublishBsffArgs } from "generated/graphql/types";
-import { ActionButton, Loader } from "common/components";
-import { TdModalTrigger } from "common/components/Modal";
-import { IconPaperWrite } from "common/components/Icons";
-import { GET_BSDS } from "common/queries";
+import { Mutation, MutationPublishBsffArgs } from "@td/codegen-ui";
+import { ActionButton } from "../../../../../common/components";
+import { Loader } from "../../../../../Apps/common/Components";
+import { TdModalTrigger } from "../../../../../Apps/common/Components/Modal/Modal";
+import { IconPaperWrite } from "../../../../../Apps/common/Components/Icons/Icons";
+import { NotificationError } from "../../../../../Apps/common/Components/Error/Error";
 
 const PUBLISH_BSFF = gql`
   mutation PublishBsff($id: ID!) {
@@ -20,13 +21,11 @@ interface PublishBsffProps {
 }
 
 export function PublishBsff({ bsffId }: PublishBsffProps) {
-  const [publishBsff, { loading }] = useMutation<
+  const [publishBsff, { loading, error }] = useMutation<
     Pick<Mutation, "publishBsff">,
     MutationPublishBsffArgs
   >(PUBLISH_BSFF, {
-    variables: { id: bsffId },
-    refetchQueries: [GET_BSDS],
-    awaitRefetchQueries: true,
+    variables: { id: bsffId }
   });
 
   const actionLabel = "Publier le bordereau";
@@ -58,6 +57,7 @@ export function PublishBsff({ bsffId }: PublishBsffProps) {
             </button>
           </div>
           {loading && <Loader />}
+          {error && <NotificationError apolloError={error} />}
         </>
       )}
     />

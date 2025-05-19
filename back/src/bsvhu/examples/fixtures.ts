@@ -42,9 +42,14 @@ function transporterCompanyInput(siret: string) {
 }
 
 const receiptInput = {
+  isExempted: false,
   number: "recepisse number",
   department: "75",
   validityLimit: "2020-06-30"
+};
+
+const platesInput = {
+  plates: "XY-23-TE"
 };
 
 function transporterInput(siret: string) {
@@ -75,7 +80,8 @@ function broyeurInput(siret: string) {
 
 const receptionInput = {
   weight: 1.4,
-  acceptationStatus: "ACCEPTED"
+  acceptationStatus: "ACCEPTED",
+  date: "2021-04-27"
 };
 
 const operationInput = {
@@ -93,5 +99,6 @@ export default {
   broyeurCompanyInput,
   broyeurInput,
   receptionInput,
-  operationInput
+  operationInput,
+  platesInput
 };

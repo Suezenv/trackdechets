@@ -1,7 +1,7 @@
-import React from "react";
+import React, { createContext, useState } from "react";
 import * as queryString from "query-string";
 import { useLocation, useParams } from "react-router-dom";
-import { StepContainer } from "form/common/stepper/Step";
+import { StepContainer } from "../common/stepper/Step";
 
 import StepList from "./stepper/BsdaStepList";
 import {
@@ -9,64 +9,64 @@ import {
   Destination,
   Transporter,
   Worker,
-  WasteInfo,
+  WasteInfo
 } from "./stepper/steps";
 import { Type } from "./stepper/steps/Type";
+import { getBsdaEditionDisabledSteps } from "./utils/getBsdaEditionDisabledSteps";
+import { Bsda } from "@td/codegen-ui";
+
+export const BsdaContext = createContext<Bsda | undefined>(undefined);
 
 export default function FormContainer() {
-  const { id } = useParams<{ id?: string }>();
-
+  const { id, siret } = useParams<{ id?: string; siret: string }>();
   const location = useLocation();
   const { step } = queryString.parse(location.search);
   const initialStep = parseInt(String(step), 10) || 0;
+  const [bsdaContext, setBsdaContext] = useState<Bsda | undefined>();
 
   return (
     <main className="main">
       <div className="container">
-        <StepList formId={id} initialStep={initialStep}>
-          {bsda => {
-            const emitterSigned =
-              bsda?.emitter?.emission?.signature?.author != null;
-            const workerSigned = bsda?.worker?.work?.signature?.author != null;
-            const transporterSigned =
-              bsda?.transporter?.transport?.signature?.author != null;
+        <BsdaContext.Provider value={bsdaContext}>
+          <StepList formId={id} initialStep={initialStep}>
+            {bsda => {
+              setBsdaContext(bsda);
+              const { disabledAfterEmission, workerSigned, transporterSigned } =
+                getBsdaEditionDisabledSteps(bsda, siret!);
 
-            return (
-              <>
-                <StepContainer
-                  component={Type}
-                  title="Type de bordereau"
-                  disabled={emitterSigned}
-                />
-                <StepContainer
-                  component={Emitter}
-                  title="Émetteur"
-                  disabled={emitterSigned}
-                />
-                <StepContainer
-                  component={WasteInfo}
-                  title="Détail du déchet"
-                  disabled={emitterSigned}
-                />
-                <StepContainer
-                  component={Worker}
-                  title="Entreprise de travaux"
-                  disabled={workerSigned}
-                />
-                <StepContainer
-                  component={Transporter}
-                  title="Transporteur"
-                  disabled={transporterSigned}
-                />
-                <StepContainer
-                  component={Destination}
-                  title="Destination"
-                  disabled={emitterSigned}
-                />
-              </>
-            );
-          }}
-        </StepList>
+              return (
+                <>
+                  <StepContainer
+                    component={Type}
+                    title="Type de bordereau"
+                    disabled={disabledAfterEmission}
+                  />
+                  <StepContainer
+                    component={Emitter}
+                    title="Émetteur"
+                    disabled={disabledAfterEmission}
+                  />
+                  <StepContainer
+                    component={WasteInfo}
+                    title="Détail du déchet"
+                    disabled={workerSigned}
+                  />
+                  <StepContainer
+                    component={Worker}
+                    title="Entreprise de travaux"
+                    disabled={workerSigned}
+                  />
+                  <StepContainer
+                    component={Transporter}
+                    title="Transporteur"
+                    disabled={transporterSigned}
+                  />
+                  <StepContainer component={Destination} title="Destination" />
+                </>
+              );
+            }}
+          </StepList>
+        </BsdaContext.Provider>
       </div>
     </main>
   );

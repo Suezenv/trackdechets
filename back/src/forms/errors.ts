@@ -1,4 +1,4 @@
-import { UserInputError, ForbiddenError } from "apollo-server-express";
+import { ForbiddenError, UserInputError } from "../common/errors";
 
 export class InvalidTransition extends UserInputError {
   constructor() {
@@ -40,25 +40,17 @@ export class FormNotFound extends UserInputError {
   }
 }
 
+export class FormTransporterNotFound extends UserInputError {
+  constructor(id: string) {
+    super(`Le transporteur avec l'identifiant "${id}" n'existe pas.`);
+  }
+}
+
 export class MissingIdOrReadableId extends UserInputError {
   constructor() {
     super(
       "L'id ou le readableId doit être fourni pour identifier le bordereau."
     );
-  }
-}
-
-export class CountryNotFound extends UserInputError {
-  constructor(code: string) {
-    super(
-      `Le code "${code}" n'est pas reconnu comme un code pays ISO 3166-1 alpha-2.`
-    );
-  }
-}
-
-export class InvaliSecurityCode extends ForbiddenError {
-  constructor() {
-    super("Le code de signature est invalide.");
   }
 }
 
@@ -82,14 +74,6 @@ export class DestinationCannotTempStore extends UserInputError {
   }
 }
 
-export class HasSegmentToTakeOverError extends UserInputError {
-  constructor() {
-    super(
-      "Vous ne pouvez pas passer ce bordereau à l'état souhaité, il n'est pas encore pris en charge par le dernier transporteur"
-    );
-  }
-}
-
 export class FormAlreadyInAppendix2 extends UserInputError {
   constructor(id: string) {
     super(
@@ -97,3 +81,43 @@ export class FormAlreadyInAppendix2 extends UserInputError {
     );
   }
 }
+
+// *********************
+// COMMON VALIDATION ERROR MESSAGES
+// *********************
+
+export const MISSING_COMPANY_NAME = "Le nom de l'entreprise est obligatoire";
+export const MISSING_COMPANY_SIRET = "Le siret de l'entreprise est obligatoire";
+export const MISSING_COMPANY_VAT =
+  "Le numéro de TVA de l'entreprise est obligatoire";
+export const MISSING_COMPANY_SIRET_OR_VAT =
+  "Le n°SIRET ou le numéro de TVA intracommunautaire est obligatoire";
+export const MISSING_COMPANY_ADDRESS =
+  "L'adresse de l'entreprise est obligatoire";
+export const MISSING_COMPANY_CONTACT =
+  "Le contact dans l'entreprise est obligatoire";
+export const MISSING_COMPANY_PHONE =
+  "Le téléphone de l'entreprise est obligatoire";
+export const MISSING_COMPANY_EMAIL = "L'email de l'entreprise est obligatoire";
+export const MISSING_COMPANY_OMI_NUMBER =
+  "Le numéro OMI (Organisation maritime international) de l'entreprise est obligatoire";
+export const INVALID_COMPANY_OMI_NUMBER =
+  "Le numéro OMI (Organisation maritime international) de l'entreprise doit se composer des trois lettres OMI suivies de 7 chiffres (ex. OMI1234567)";
+
+export const INVALID_PROCESSING_OPERATION =
+  "Cette opération d’élimination / valorisation n'existe pas.";
+
+export const MISSING_PROCESSING_OPERATION =
+  "L'opération de traitement est obligatoire";
+
+export const INVALID_WASTE_CODE =
+  "Le code déchet n'est pas reconnu comme faisant partie de la liste officielle du code de l'environnement.";
+
+export const EXTRANEOUS_NEXT_DESTINATION = `L'opération de traitement renseignée ne permet pas de destination ultérieure`;
+
+export const INVALID_INDIVIDUAL_OR_FOREIGNSHIP =
+  "Ne peut pas être à la fois un particulier et un navire étranger";
+
+export const INVALID_DESTINATION_SUBPROFILE =
+  "Le sous-profil sélectionné par l'établissement destinataire ne lui permet pas de prendre en charge ce type de déchet." +
+  " Il lui appartient de mettre à jour son profil.";

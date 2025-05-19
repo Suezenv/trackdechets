@@ -1,284 +1,257 @@
-import { Status } from "@prisma/client";
-import prisma from "../prisma";
-import { BsdElastic, indexBsd, indexBsds } from "../common/elastic";
-import { FullForm } from "./types";
+import { Form, OperationMode } from "@prisma/client";
+import { BsdElastic, indexBsd, transportPlateFilter } from "../common/elastic";
+import {
+  FormWithForwardedInWithTransportersInclude,
+  FormWithIntermediaries,
+  FormWithIntermediariesInclude,
+  FormWithRevisionRequests,
+  FormWithTransporters,
+  FormWithTransportersInclude,
+  FormWithRevisionRequestsInclude,
+  FormWithForwarding,
+  FormWithForwardingInclude,
+  FormWithForwardedInWithTransporters,
+  FormWithAppendix1GroupingInfo,
+  FormWithAppendix1GroupingInfoInclude
+} from "./types";
 import { GraphQLContext } from "../types";
+import { getRegistryFields } from "./registry";
+import {
+  getSiretsByTab,
+  getRecipient,
+  getFormRevisionOrgIds,
+  getFormReturnOrgIds
+} from "./elasticHelpers";
 
-function getWhere(
-  form: FullForm
-): Pick<
-  BsdElastic,
-  | "isDraftFor"
-  | "isForActionFor"
-  | "isFollowFor"
-  | "isArchivedFor"
-  | "isToCollectFor"
-  | "isCollectedFor"
-> {
-  // we build a mapping where each key has to be unique.
-  // Same siret can be used by different actors on the same form, so we can't use them as keys.
-  // Instead we rely on field names and segments ids
-  const segments = form.transportSegments
-    .filter(segment => !!segment.transporterCompanySiret)
-    .map(segment => ({
-      [`${segment.id}`]: segment.transporterCompanySiret
-    }))
-    .reduce((el, acc) => ({ ...acc, ...el }), {});
+import { buildAddress } from "../companies/sirene/utils";
+import { getFirstTransporterSync } from "./database";
+import { prisma } from "@td/prisma";
+import { getBsddSubType } from "../common/subTypes";
+import { PackagingInfo } from "@td/codegen-back";
 
-  const formSirets = {
-    emitterCompanySiret: form.emitterCompanySiret,
-    recipientCompanySiret: form.recipientCompanySiret,
-    temporaryStorageDetailDestinationCompanySiret:
-      form.temporaryStorageDetail?.destinationCompanySiret,
-    temporaryStorageDetailTransporterCompanySiret:
-      form.temporaryStorageDetail?.transporterCompanySiret,
-    traderCompanySiret: form.traderCompanySiret,
-    brokerCompanySiret: form.brokerCompanySiret,
-    ecoOrganismeSiret: form.ecoOrganismeSiret,
-    transporterCompanySiret: form.transporterCompanySiret,
-    ...segments
-  };
+export type FormForElastic = Form &
+  FormWithTransporters &
+  FormWithForwardedInWithTransporters &
+  FormWithIntermediaries &
+  FormWithForwarding &
+  FormWithRevisionRequests &
+  FormWithAppendix1GroupingInfo;
 
-  const where = {
-    isDraftFor: [],
-    isForActionFor: [],
-    isFollowFor: [],
-    isArchivedFor: [],
-    isToCollectFor: [],
-    isCollectedFor: []
-  };
+export const FormForElasticInclude = {
+  ...FormWithForwardedInWithTransportersInclude,
+  ...FormWithForwardingInclude,
+  ...FormWithTransportersInclude,
+  ...FormWithIntermediariesInclude,
+  ...FormWithRevisionRequestsInclude,
+  ...FormWithAppendix1GroupingInfoInclude // provided to tell apart orphans appendix1 from others
+};
 
-  type Mapping = Map<string, keyof typeof where>;
-  /**
-   * Set where clause to a given mapping
-   */
-  const appendToSirets = (
-    map: Mapping,
-    key: string,
-    newValue: keyof typeof where
-  ) => {
-    if (!map.has(key)) {
-      return;
-    }
-
-    map.set(key, newValue);
-  };
-
-  // build a mapping to store which actor will see this form appear on a given UI tab
-  // eg: 'transporterCompanySiret' : 'isCollectedFor'
-  const siretsFilters = new Map<string, keyof typeof where>(
-    Object.entries(formSirets)
-      .filter(item => !!item[1])
-      .map(item => [item[0], "isFollowFor"])
-  );
-  switch (form.status) {
-    case Status.DRAFT: {
-      for (const fieldName of siretsFilters.keys()) {
-        appendToSirets(siretsFilters, fieldName, "isDraftFor");
-      }
-      break;
-    }
-    case Status.SEALED: {
-      appendToSirets(
-        siretsFilters,
-        "transporterCompanySiret",
-        "isToCollectFor"
-      );
-
-      break;
-    }
-    case Status.SENT: {
-      appendToSirets(siretsFilters, "recipientCompanySiret", "isForActionFor");
-      appendToSirets(
-        siretsFilters,
-        "transporterCompanySiret",
-        "isCollectedFor"
-      );
-
-      form.transportSegments.forEach(segment => {
-        if (segment.readyToTakeOver) {
-          appendToSirets(
-            siretsFilters,
-            segment.id,
-            segment.takenOverAt ? "isCollectedFor" : "isToCollectFor"
-          );
-        }
-      });
-
-      break;
-    }
-    case Status.TEMP_STORED:
-    case Status.TEMP_STORER_ACCEPTED: {
-      appendToSirets(siretsFilters, "recipientCompanySiret", "isForActionFor");
-      appendToSirets(
-        siretsFilters,
-        "transporterCompanySiret",
-        "isCollectedFor"
-      );
-
-      form.transportSegments.forEach(segment => {
-        appendToSirets(siretsFilters, segment.id, "isCollectedFor");
-      });
-
-      break;
-    }
-    case Status.RESEALED: {
-      appendToSirets(
-        siretsFilters,
-        "temporaryStorageDetailTransporterCompanySiret",
-        "isToCollectFor"
-      );
-
-      appendToSirets(
-        siretsFilters,
-        "transporterCompanySiret",
-        "isCollectedFor"
-      );
-      form.transportSegments.forEach(segment => {
-        appendToSirets(siretsFilters, segment.id, "isCollectedFor");
-      });
-
-      break;
-    }
-    case Status.RESENT:
-    case Status.RECEIVED:
-    case Status.ACCEPTED: {
-      appendToSirets(
-        siretsFilters,
-        form.recipientIsTempStorage
-          ? "temporaryStorageDetailDestinationCompanySiret"
-          : "recipientCompanySiret",
-        "isForActionFor"
-      );
-
-      appendToSirets(
-        siretsFilters,
-        "temporaryStorageDetailTransporterCompanySiret",
-        "isCollectedFor"
-      );
-
-      appendToSirets(
-        siretsFilters,
-        "transporterCompanySiret",
-        "isCollectedFor"
-      );
-
-      form.transportSegments.forEach(segment => {
-        appendToSirets(siretsFilters, segment.id, "isCollectedFor");
-      });
-
-      break;
-    }
-    case Status.AWAITING_GROUP:
-    case Status.GROUPED: {
-      appendToSirets(
-        siretsFilters,
-        "temporaryStorageDetailTransporterCompanySiret",
-        "isCollectedFor"
-      );
-
-      appendToSirets(
-        siretsFilters,
-        "transporterCompanySiret",
-        "isCollectedFor"
-      );
-
-      form.transportSegments.forEach(segment => {
-        appendToSirets(siretsFilters, segment.id, "isCollectedFor");
-      });
-
-      break;
-    }
-    case Status.REFUSED:
-    case Status.PROCESSED:
-    case Status.NO_TRACEABILITY: {
-      for (const siret of siretsFilters.keys()) {
-        appendToSirets(siretsFilters, siret, "isArchivedFor");
-      }
-      break;
-    }
-    default:
-      break;
-  }
-
-  for (const [fieldName, filter] of siretsFilters.entries()) {
-    if (fieldName) {
-      where[filter].push(formSirets[fieldName]);
-    }
-  }
-
-  return where;
+export async function getFormForElastic(
+  form: Pick<Form, "readableId">
+): Promise<FormForElastic> {
+  return prisma.form.findUniqueOrThrow({
+    where: { readableId: form.readableId },
+    include: FormForElasticInclude
+  });
 }
 
-function getRecipient(form: FullForm) {
-  return form.temporaryStorageDetail?.signedByTransporter
-    ? form.temporaryStorageDetail.destinationCompanyName
-    : form.recipientCompanyName;
-}
+/**
+ *
+ * Utility to know if BSDD indexing should be skipped
+ *  sould not be indexed:
+ * deleted forms
+ * forwarding forms
+ * appendix form in draft state or not linked to another top level form through formGroupement
+ */
+export function isBsddNotIndexable(form: FormForElastic): boolean {
+  if (form.isDeleted || !!form.forwarding) {
+    return true;
+  }
 
-function getWaste(form: FullForm) {
-  return [form.wasteDetailsCode, form.wasteDetailsName]
-    .filter(Boolean)
-    .join(" ");
+  if (form.emitterType === "APPENDIX1_PRODUCER") {
+    if (form.status === "DRAFT") {
+      return true;
+    }
+
+    return !form.groupedIn?.length; // no relation
+  }
+  return false;
 }
 
 /**
  * Convert a BSD from the forms table to Elastic Search's BSD model.
+ * NB: some BSDDs should not appear on user dashboard, see `isBsddNotIndexable`
  */
-function toBsdElastic(form: FullForm): BsdElastic {
-  const where = getWhere(form);
+export function toBsdElastic(form: FormForElastic): BsdElastic {
+  const siretsByTab = getSiretsByTab(form);
+
+  const recipient = getRecipient(form);
+
+  const transporter1 = getFirstTransporterSync(form);
+
   return {
+    type: "BSDD",
+    bsdSubType: getBsddSubType(form),
+    createdAt: form.createdAt?.getTime(),
+    updatedAt: form.updatedAt?.getTime(),
     id: form.id,
     readableId: form.readableId,
-    type: "BSDD",
-    emitter: form.emitterCompanyName ?? "",
-    recipient: getRecipient(form) ?? "",
-    transporterNumberPlate: [form.transporterNumberPlate],
-    transporterCustomInfo: form.transporterCustomInfo,
-    waste: getWaste(form),
-    createdAt: form.createdAt.getTime(),
-    ...where,
-    sirets: Object.values(where).flat()
+    customId: form.customId ?? "",
+    status: form.status,
+    wasteCode: form.wasteDetailsCode ?? "",
+    wasteAdr: form.wasteDetailsOnuCode ?? "",
+    wasteDescription: form.wasteDetailsName ?? "",
+    packagingNumbers: (
+      form.wasteDetailsPackagingInfos as PackagingInfo[]
+    )?.flatMap(p => p.identificationNumbers),
+    wasteSealNumbers: [],
+    identificationNumbers: [],
+    ficheInterventionNumbers: [],
+    emitterCompanyName: form.emitterCompanyName ?? "",
+    emitterCompanySiret: form.emitterCompanySiret ?? "",
+    emitterCompanyAddress: form.emitterCompanyAddress ?? "",
+    emitterPickupSiteName: form.emitterWorkSiteName ?? "",
+    emitterPickupSiteAddress: buildAddress([
+      form.emitterWorkSiteAddress,
+      form.emitterWorkSitePostalCode,
+      form.emitterWorkSiteCity
+    ]),
+    emitterCustomInfo: "",
+    workerCompanyName: "",
+    workerCompanySiret: "",
+    workerCompanyAddress: "",
+
+    transporterCompanyName: transporter1?.transporterCompanyName ?? "",
+    transporterCompanySiret: transporter1?.transporterCompanySiret ?? "",
+    transporterCompanyVatNumber:
+      transporter1?.transporterCompanyVatNumber ?? "",
+    transporterCompanyAddress: transporter1?.transporterCompanyAddress ?? "",
+    transporterCustomInfo: transporter1?.transporterCustomInfo ?? "",
+    transporterTransportPlates: transporter1?.transporterNumberPlate
+      ? [transportPlateFilter(transporter1?.transporterNumberPlate)]
+      : [],
+
+    destinationCompanyName: recipient.name ?? "",
+    destinationCompanySiret: recipient.siret ?? "",
+    destinationCompanyAddress: recipient.address ?? "",
+    destinationCustomInfo: "",
+    destinationCap: recipient.cap ?? "",
+
+    brokerCompanyName: form.brokerCompanyName ?? "",
+    brokerCompanySiret: form.brokerCompanySiret ?? "",
+    brokerCompanyAddress: form.brokerCompanyAddress ?? "",
+
+    traderCompanyName: form.traderCompanyName ?? "",
+    traderCompanySiret: form.traderCompanySiret ?? "",
+    traderCompanyAddress: form.traderCompanyAddress ?? "",
+
+    ecoOrganismeName: form.ecoOrganismeName ?? "",
+    ecoOrganismeSiret: form.ecoOrganismeSiret ?? "",
+
+    nextDestinationCompanyName: form.nextDestinationCompanyName ?? "",
+    nextDestinationCompanySiret: form.nextDestinationCompanySiret ?? "",
+    nextDestinationCompanyVatNumber: form.nextDestinationCompanyVatNumber ?? "",
+    nextDestinationCompanyAddress: form.nextDestinationCompanyAddress ?? "",
+
+    destinationOperationCode: form.processingOperationDone ?? "",
+    destinationOperationMode:
+      (form.processingOperationDone as OperationMode) ?? undefined,
+
+    emitterEmissionDate: form.emittedAt?.getTime(),
+    workerWorkDate: undefined,
+    transporterTransportTakenOverAt:
+      form.takenOverAt?.getTime() ?? form.sentAt?.getTime(),
+    destinationReceptionDate: form.receivedAt?.getTime(),
+    destinationAcceptationDate: form.signedAt?.getTime(),
+    destinationAcceptationWeight: form.quantityReceived
+      ? form.quantityReceived.toNumber()
+      : null,
+    destinationOperationDate: form.processedAt?.getTime(),
+    ...getFormReturnOrgIds(form),
+
+    ...(isBsddNotIndexable(form)
+      ? {
+          // do not display in dashboard : BSDDs suite, deleted BSDs, orphans appendix1
+          isDraftFor: [],
+          isForActionFor: [],
+          isFollowFor: [],
+          isArchivedFor: [],
+          isToCollectFor: [],
+          isCollectedFor: [],
+          isInRevisionFor: []
+        }
+      : siretsByTab),
+
+    ...getFormRevisionOrgIds(form),
+    revisionRequests: form.bsddRevisionRequests,
+    sirets: Object.values(siretsByTab).flat(),
+    ...getRegistryFields(form),
+    intermediaries: form.intermediaries,
+    rawBsd: form,
+
+    // ALL actors from the BSDD, for quick search
+    companyNames: [
+      form.emitterCompanyName,
+      form.nextDestinationCompanyName,
+      form.traderCompanyName,
+      form.brokerCompanyName,
+      form.ecoOrganismeName,
+      form.recipientCompanyName,
+      ...form.intermediaries.map(intermediary => intermediary.name),
+      ...form.transporters.map(
+        transporter => transporter.transporterCompanyName
+      ),
+      form.forwardedIn?.recipientCompanyName,
+      form.forwardedIn?.transporters?.map(
+        transporter => transporter.transporterCompanyName
+      )
+    ]
+      .filter(Boolean)
+      .join(" "),
+    companyOrgIds: [
+      form.emitterCompanySiret,
+      form.nextDestinationCompanySiret,
+      form.traderCompanySiret,
+      form.brokerCompanySiret,
+      form.ecoOrganismeSiret,
+      form.recipientCompanySiret,
+      ...form.intermediaries.map(intermediary => intermediary.siret),
+      ...form.transporters.flatMap(transporter => [
+        transporter.transporterCompanySiret,
+        transporter.transporterCompanyVatNumber
+      ]),
+      form.forwardedIn?.recipientCompanySiret,
+      ...(form.forwardedIn?.transporters ?? []).flatMap(transporter => [
+        transporter.transporterCompanySiret,
+        transporter.transporterCompanyVatNumber
+      ])
+    ].filter(Boolean)
   };
 }
 
-/**
- * Index all BSDs from the forms table.
- */
-export async function indexAllForms(
-  idx: string,
-  { skip = 0 }: { skip?: number } = {}
-) {
-  const take = 1000;
-  const forms = await prisma.form.findMany({
-    skip,
-    take,
-    where: {
-      isDeleted: false
-    },
-    include: {
-      temporaryStorageDetail: true,
-      transportSegments: true
-    }
-  });
-
-  if (forms.length === 0) {
-    return;
+export async function indexForm(
+  form: FormForElastic,
+  ctx?: GraphQLContext
+): Promise<BsdElastic> {
+  // prevent unwanted cascaded reindexation
+  if (form.isDeleted) {
+    return toBsdElastic(form);
   }
 
-  await indexBsds(
-    idx,
-    forms.map(form => toBsdElastic(form))
-  );
-
-  if (forms.length < take) {
-    // all forms have been indexed
-    return;
+  if (form.forwardedIn) {
+    // index next BSD asynchronously
+    indexBsd(
+      toBsdElastic({
+        ...form.forwardedIn,
+        intermediaries: [],
+        forwardedIn: null,
+        forwarding: form,
+        bsddRevisionRequests: [],
+        groupedIn: []
+      })
+    );
   }
-
-  return indexAllForms(idx, { skip: skip + take });
-}
-
-export function indexForm(form: FullForm, ctx?: GraphQLContext) {
-  return indexBsd(toBsdElastic(form), ctx);
+  const bsdElastic = toBsdElastic(form);
+  await indexBsd(bsdElastic, ctx);
+  return bsdElastic;
 }

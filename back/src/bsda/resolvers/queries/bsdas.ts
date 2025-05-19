@@ -1,38 +1,53 @@
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { QueryBsdasArgs } from "../../../generated/graphql/types";
-import prisma from "../../../prisma";
+import type { QueryBsdasArgs } from "@td/codegen-back";
 import { GraphQLContext } from "../../../types";
-import { getUserCompanies } from "../../../users/database";
-import { getConnectionsArgs } from "../../../bsvhu/pagination";
 import { expandBsdaFromDb } from "../../converter";
 import { toPrismaWhereInput } from "../../where";
 import { applyMask } from "../../../common/where";
+import { getConnection } from "../../../common/pagination";
+import { getBsdaRepository } from "../../repository";
+import { Permission, can, getUserRoles } from "../../../permissions";
+import { Prisma } from "@prisma/client";
 
 export default async function bsdas(
   _,
-  { where: whereArgs, ...paginationArgs }: QueryBsdasArgs,
+  { where: whereArgs, ...gqlPaginationArgs }: QueryBsdasArgs,
   context: GraphQLContext
 ) {
   const user = checkIsAuthenticated(context);
 
-  const defaultPaginateBy = 50;
-  const itemsPerPage =
-    paginationArgs.first ?? paginationArgs.last ?? defaultPaginateBy;
-  const connectionsArgs = await getConnectionsArgs({
-    ...paginationArgs,
-    defaultPaginateBy,
-    maxPaginateBy: 500
-  });
+  const roles = await getUserRoles(user.id);
+  const orgIdsWithListPermission = Object.keys(roles).filter(orgId =>
+    can(roles[orgId], Permission.BsdCanList)
+  );
 
-  const userCompanies = await getUserCompanies(user.id);
-  const userSirets = userCompanies.map(c => c.siret);
-
-  const mask = {
+  const mask: Prisma.BsdaWhereInput = {
     OR: [
-      { emitterCompanySiret: { in: userSirets } },
-      { workerCompanySiret: { in: userSirets } },
-      { transporterCompanySiret: { in: userSirets } },
-      { destinationCompanySiret: { in: userSirets } }
+      { emitterCompanySiret: { in: orgIdsWithListPermission } },
+      { destinationCompanySiret: { in: orgIdsWithListPermission } },
+      { workerCompanySiret: { in: orgIdsWithListPermission } },
+      { transportersOrgIds: { hasSome: orgIdsWithListPermission } },
+      { brokerCompanySiret: { in: orgIdsWithListPermission } },
+      {
+        destinationOperationNextDestinationCompanySiret: {
+          in: orgIdsWithListPermission
+        }
+      },
+      { intermediariesOrgIds: { hasSome: orgIdsWithListPermission } }
+    ]
+  };
+
+  const draftMask: Prisma.BsdaWhereInput = {
+    OR: [
+      {
+        isDraft: false,
+        ...mask
+      },
+      {
+        isDraft: true,
+        canAccessDraftOrgIds: { hasSome: orgIdsWithListPermission },
+        ...mask
+      }
     ]
   };
 
@@ -41,30 +56,19 @@ export default async function bsdas(
     isDeleted: false
   };
 
-  const where = applyMask(prismaWhere, mask);
+  const where = applyMask<Prisma.BsdaWhereInput>(prismaWhere, draftMask);
+  const bsdaRepository = getBsdaRepository(user);
+  const totalCount = await bsdaRepository.count(where);
 
-  const totalCount = await prisma.bsda.count({ where });
-  const queriedForms = await prisma.bsda.findMany({
-    ...connectionsArgs,
-    orderBy: { createdAt: "desc" },
-    where
-  });
-
-  const edges = queriedForms
-    .slice(0, itemsPerPage)
-    .map(f => ({ cursor: f.id, node: expandBsdaFromDb(f) }));
-  return {
+  return getConnection({
     totalCount,
-    edges,
-    pageInfo: {
-      startCursor: edges[0]?.cursor,
-      endCursor: edges[edges.length - 1]?.cursor,
-      hasNextPage: paginationArgs.after
-        ? queriedForms.length > itemsPerPage
-        : false,
-      hasPreviousPage: paginationArgs.before
-        ? queriedForms.length > itemsPerPage
-        : false
-    }
-  };
+    findMany: prismaPaginationArgs =>
+      bsdaRepository.findMany(where, {
+        ...prismaPaginationArgs,
+        orderBy: { rowNumber: "desc" },
+        include: { transporters: true }
+      }),
+    formatNode: expandBsdaFromDb,
+    ...gqlPaginationArgs
+  });
 }

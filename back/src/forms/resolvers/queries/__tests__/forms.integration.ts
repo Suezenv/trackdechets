@@ -1,16 +1,18 @@
 import { addDays, format, subDays } from "date-fns";
 import { Form, Prisma } from "@prisma/client";
 import { resetDatabase } from "../../../../../integration-tests/helper";
-import prisma from "../../../../prisma";
+import { prisma } from "@td/prisma";
 import {
   companyFactory,
   formFactory,
-  transportSegmentFactory,
+  siretify,
+  bsddTransporterFactory,
   userFactory,
   userWithCompanyFactory
 } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
-import { Query } from "../../../../generated/graphql/types";
+import type { Query, QueryFormsArgs } from "@td/codegen-back";
+import gql from "graphql-tag";
 
 function createForms(
   userId: string,
@@ -49,53 +51,56 @@ async function createNSortedForms(
   return forms;
 }
 
-const FORMS = `
+const FORMS = gql`
   query Forms(
-    $siret: String,
-    $status: [FormStatus!],
-    $roles: [FormRole!],
-    $skip: Int,
-    $first: Int,
-    $last: Int,
-    $cursorBefore: ID,
-    $cursorAfter: ID) {
-      forms(
-        siret: $siret
-        status: $status
-        roles: $roles
-        skip: $skip
-        first: $first
-        last: $last
-        cursorBefore: $cursorBefore
-        cursorAfter: $cursorAfter
-        ) {
-          id
-          recipient {
-            company {
-              siret
-            }
-          }
-          emitter {
-            company {
-              siret
-            }
-          }
-          ecoOrganisme {
-            siret
-          }
-          wasteDetails {
-            packagingInfos {
-              type
-              quantity
-            }
-          }
-          stateSummary {
-            packagingInfos {
-              type
-              quantity
-            }
-          }
+    $siret: String
+    $status: [FormStatus!]
+    $roles: [FormRole!]
+    $hasNextStep: Boolean
+    $skip: Int
+    $first: Int
+    $last: Int
+    $cursorBefore: ID
+    $cursorAfter: ID
+  ) {
+    forms(
+      siret: $siret
+      status: $status
+      roles: $roles
+      hasNextStep: $hasNextStep
+      skip: $skip
+      first: $first
+      last: $last
+      cursorBefore: $cursorBefore
+      cursorAfter: $cursorAfter
+    ) {
+      id
+      recipient {
+        company {
+          siret
+        }
       }
+      emitter {
+        company {
+          siret
+        }
+      }
+      ecoOrganisme {
+        siret
+      }
+      wasteDetails {
+        packagingInfos {
+          type
+          quantity
+        }
+      }
+      stateSummary {
+        packagingInfos {
+          type
+          quantity
+        }
+      }
+    }
   }
 `;
 
@@ -104,7 +109,7 @@ describe("Query.forms", () => {
 
   it("should return forms for which user is emitter or receiver", async () => {
     const { user, company } = await userWithCompanyFactory("ADMIN");
-
+    const recipientCompanySiret = siretify(5);
     // 4 forms
     // - 2 as recipient
     // - 1 as emitter
@@ -112,19 +117,23 @@ describe("Query.forms", () => {
     await createForms(user.id, [
       {
         recipientCompanyName: company.name,
-        recipientCompanySiret: company.siret
+        recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!]
       },
       {
         recipientCompanyName: company.name,
-        recipientCompanySiret: company.siret
+        recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!]
       },
       {
         emitterCompanyName: company.name,
-        emitterCompanySiret: company.siret
+        emitterCompanySiret: company.siret,
+        recipientsSirets: [company.siret!]
       },
       {
         recipientCompanyName: "a name",
-        recipientCompanySiret: "a siret"
+        recipientCompanySiret,
+        recipientsSirets: [recipientCompanySiret]
       }
     ]);
 
@@ -133,10 +142,11 @@ describe("Query.forms", () => {
 
     expect(data.forms.length).toBe(3);
     expect(
-      data.forms.filter(f => f.recipient.company.siret === company.siret).length
+      data.forms.filter(f => f.recipient!.company!.siret === company.siret)
+        .length
     ).toBe(2);
     expect(
-      data.forms.filter(f => f.emitter.company.siret === company.siret).length
+      data.forms.filter(f => f.emitter!.company!.siret === company.siret).length
     ).toBe(1);
   });
 
@@ -180,11 +190,13 @@ describe("Query.forms", () => {
     await createForms(user.id, [
       {
         recipientCompanyName: company.name,
-        recipientCompanySiret: company.siret
+        recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!]
       },
       {
         recipientCompanyName: otherCompany.name,
-        recipientCompanySiret: otherCompany.siret
+        recipientCompanySiret: otherCompany.siret,
+        recipientsSirets: [otherCompany.siret!]
       }
     ]);
 
@@ -196,7 +208,35 @@ describe("Query.forms", () => {
     });
 
     expect(data.forms.length).toBe(1);
-    expect(data.forms[0].recipient.company.siret).toBe(otherCompany.siret);
+    expect(data.forms[0].recipient!.company!.siret).toBe(otherCompany.siret);
+  });
+
+  it("should return forms for which user is intermediary when filtering on siret", async () => {
+    const { user, company } = await userWithCompanyFactory("ADMIN");
+
+    // Create form associated to the EO
+    await formFactory({
+      ownerId: user.id,
+      opt: {
+        intermediaries: {
+          create: {
+            siret: company.siret!,
+            name: company.name,
+            contact: "John Doe"
+          }
+        },
+        intermediariesSirets: [company.siret!]
+      }
+    });
+
+    const { query } = makeClient(user);
+    const { data } = await query<Pick<Query, "forms">>(FORMS, {
+      variables: {
+        siret: company.siret
+      }
+    });
+
+    expect(data.forms.length).toBe(1);
   });
 
   it("should convert packagingInfos to an empty array if null", async () => {
@@ -206,6 +246,7 @@ describe("Query.forms", () => {
       ownerId: user.id,
       opt: {
         recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!],
         wasteDetailsPackagingInfos: [{ type: "CITERNE", quantity: 1 }]
       }
     });
@@ -213,6 +254,7 @@ describe("Query.forms", () => {
       ownerId: user.id,
       opt: {
         recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!],
         wasteDetailsPackagingInfos: []
       }
     });
@@ -220,7 +262,8 @@ describe("Query.forms", () => {
       ownerId: user.id,
       opt: {
         recipientCompanySiret: company.siret,
-        wasteDetailsPackagingInfos: null
+        recipientsSirets: [company.siret!],
+        wasteDetailsPackagingInfos: []
       }
     });
 
@@ -252,6 +295,7 @@ describe("Query.forms", () => {
     await createForms(user.id, [
       {
         recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!],
         wasteDetailsPackagingInfos: [
           { type: "FUT", quantity: 2 },
           { type: "AUTRE", other: "Contenant", quantity: 3 }
@@ -328,11 +372,13 @@ describe("Query.forms", () => {
       {
         recipientCompanyName: company.name,
         recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!],
         status: "SENT"
       },
       {
         recipientCompanyName: company.name,
         recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!],
         status: "DRAFT"
       },
       {
@@ -388,7 +434,8 @@ describe("Query.forms", () => {
     const { user, company } = await userWithCompanyFactory("ADMIN");
     const opts = {
       recipientCompanyName: company.name,
-      recipientCompanySiret: company.siret
+      recipientCompanySiret: company.siret,
+      recipientsSirets: [company.siret!]
     };
     const forms = await createNSortedForms(user.id, opts, 5);
     const f4 = forms[3];
@@ -404,7 +451,8 @@ describe("Query.forms", () => {
     const { user, company } = await userWithCompanyFactory("ADMIN");
     const opts = {
       recipientCompanyName: company.name,
-      recipientCompanySiret: company.siret
+      recipientCompanySiret: company.siret,
+      recipientsSirets: [company.siret!]
     };
     const forms = await createNSortedForms(user.id, opts, 5);
     const f1 = forms[0];
@@ -446,7 +494,8 @@ describe("Query.forms", () => {
     const { user, company } = await userWithCompanyFactory("ADMIN");
     const opts = {
       recipientCompanyName: company.name,
-      recipientCompanySiret: company.siret
+      recipientCompanySiret: company.siret,
+      recipientsSirets: [company.siret!]
     };
     const forms = await createNSortedForms(user.id, opts, 5);
     const f2 = forms[1];
@@ -462,7 +511,8 @@ describe("Query.forms", () => {
     const { user, company } = await userWithCompanyFactory("ADMIN");
     const opts = {
       recipientCompanyName: company.name,
-      recipientCompanySiret: company.siret
+      recipientCompanySiret: company.siret,
+      recipientsSirets: [company.siret!]
     };
     const forms = await createNSortedForms(user.id, opts, 5);
     const f1 = forms[0];
@@ -515,7 +565,7 @@ describe("Query.forms", () => {
     expect(data.forms.length).toBe(50);
   });
 
-  it("should not accepted a first argument lower than 1 or greater than 500", async () => {
+  it("should not accepted a first argument lower than 1 or greater than 100", async () => {
     const { user, company } = await userWithCompanyFactory("ADMIN");
     // The user has many forms, and a different role in each
     await createForms(user.id, [
@@ -559,7 +609,7 @@ describe("Query.forms", () => {
           }
         }
       `,
-      { variables: { first: 501 } }
+      { variables: { first: 101 } }
     );
     expect(tooBigErrors.length).toBe(1);
   });
@@ -580,11 +630,13 @@ describe("Query.forms", () => {
     await createForms(user.id, [
       {
         recipientCompanyName: company.name,
-        recipientCompanySiret: company.siret
+        recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!]
       },
       {
         recipientCompanyName: otherCompany.name,
-        recipientCompanySiret: otherCompany.siret
+        recipientCompanySiret: otherCompany.siret,
+        recipientsSirets: [otherCompany.siret!]
       }
     ]);
 
@@ -602,7 +654,7 @@ describe("Query.forms", () => {
     );
 
     expect(data.forms.length).toBe(1);
-    expect(data.forms[0].recipient.company.siret).toBe(otherCompany.siret);
+    expect(data.forms[0].recipient!.company!.siret).toBe(otherCompany.siret);
   });
 
   it("should filter by updatedAt", async () => {
@@ -610,11 +662,13 @@ describe("Query.forms", () => {
     await createForms(user.id, [
       {
         recipientCompanyName: company.name,
-        recipientCompanySiret: company.siret
+        recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!]
       },
       {
         recipientCompanyName: company.name,
-        recipientCompanySiret: company.siret
+        recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!]
       }
     ]);
 
@@ -657,12 +711,14 @@ describe("Query.forms", () => {
       {
         wasteDetailsCode: "01 03 04*",
         recipientCompanyName: company.name,
-        recipientCompanySiret: company.siret
+        recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!]
       },
       {
         wasteDetailsCode: "01 03 05*",
         recipientCompanyName: company.name,
-        recipientCompanySiret: company.siret
+        recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!]
       }
     ]);
 
@@ -681,7 +737,45 @@ describe("Query.forms", () => {
     );
 
     expect(data.forms.length).toBe(1);
-    expect(data.forms[0].wasteDetails.code).toBe("01 03 04*");
+    expect(data.forms[0].wasteDetails!.code).toBe("01 03 04*");
+  });
+
+  it("should filter by customId", async () => {
+    const { user, company } = await userWithCompanyFactory("ADMIN");
+    await createForms(user.id, [
+      {
+        customId: "custom1",
+        recipientCompanyName: company.name,
+        recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!]
+      },
+      {
+        customId: "custom2",
+        recipientCompanyName: company.name,
+        recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!]
+      },
+      {
+        customId: null,
+        recipientCompanyName: company.name,
+        recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!]
+      }
+    ]);
+
+    const { query } = makeClient(user);
+    const { data } = await query<Pick<Query, "forms">>(
+      `query Forms($customId: String) {
+          forms(customId: $customId) {
+            customId
+          }
+        }
+      `,
+      { variables: { customId: "custom1" } }
+    );
+
+    expect(data.forms.length).toBe(1);
+    expect(data.forms[0].customId).toBe("custom1");
   });
 
   it("should filter by siretPresentOnForm", async () => {
@@ -691,11 +785,13 @@ describe("Query.forms", () => {
     await createForms(user.id, [
       {
         recipientCompanyName: company.name,
-        recipientCompanySiret: company.siret
+        recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!]
       },
       {
         recipientCompanyName: company.name,
         recipientCompanySiret: company.siret,
+        recipientsSirets: [company.siret!],
         emitterCompanyName: otherCompany.name,
         emitterCompanySiret: otherCompany.siret
       }
@@ -715,7 +811,102 @@ describe("Query.forms", () => {
     );
 
     expect(data.forms.length).toBe(1);
-    expect(data.forms[0].emitter.company.siret).toBe(otherCompany.siret);
+    expect(data.forms[0].emitter!.company!.siret).toBe(otherCompany.siret);
+  });
+
+  it("should not return draft forms for which user is present but not the owner", async () => {
+    const { user: owner, company: ownerCompany } = await userWithCompanyFactory(
+      "ADMIN"
+    );
+    const { user, company } = await userWithCompanyFactory("ADMIN", {
+      companyTypes: {
+        set: ["WASTEPROCESSOR"]
+      }
+    });
+
+    // Create form associated to the EO
+    await formFactory({
+      ownerId: owner.id,
+      opt: {
+        status: "DRAFT",
+        emitterCompanySiret: ownerCompany.siret,
+        emitterCompanyName: ownerCompany.name,
+        recipientCompanySiret: company.name,
+        recipientCompanyName: company.siret
+      }
+    });
+
+    const { query } = makeClient(user);
+    const { data } = await query<Pick<Query, "forms">>(FORMS);
+
+    const forms = data.forms.filter(
+      f => f.recipient?.company?.siret === company.siret
+    );
+    expect(forms.length).toBe(0);
+  });
+
+  it("should return draft forms for which user is the owner", async () => {
+    const { user, company } = await userWithCompanyFactory("ADMIN");
+
+    // Create form associated to the EO
+    await formFactory({
+      ownerId: user.id,
+      opt: {
+        status: "DRAFT",
+        emitterCompanySiret: company.siret,
+        emitterCompanyName: company.name
+      }
+    });
+
+    const { query } = makeClient(user);
+    const { data } = await query<Pick<Query, "forms">>(FORMS);
+
+    const forms = data.forms.filter(
+      f => f.emitter?.company?.siret === company.siret
+    );
+    expect(forms.length).toBe(1);
+  });
+
+  it("should return a form SEALED for emitter when hasNextStep=true", async () => {
+    const { user, company } = await userWithCompanyFactory("ADMIN");
+
+    await formFactory({
+      ownerId: user.id,
+      opt: {
+        status: "SEALED",
+        emitterCompanySiret: company.siret,
+        emitterCompanyName: company.name
+      }
+    });
+
+    const { query } = makeClient(user);
+    const { data } = await query<Pick<Query, "forms">, QueryFormsArgs>(FORMS, {
+      variables: { siret: company.siret, hasNextStep: true }
+    });
+
+    expect(data.forms).toHaveLength(1);
+  });
+
+  it("should return a form SIGNED_BY_PRODUCER for transporter when hasNextStep=true", async () => {
+    const { user, company } = await userWithCompanyFactory("ADMIN");
+
+    await formFactory({
+      ownerId: user.id,
+      opt: {
+        status: "SIGNED_BY_PRODUCER",
+        emittedAt: new Date(),
+        transporters: {
+          create: { transporterCompanySiret: company.siret, number: 1 }
+        }
+      }
+    });
+
+    const { query } = makeClient(user);
+    const { data } = await query<Pick<Query, "forms">, QueryFormsArgs>(FORMS, {
+      variables: { siret: company.siret, hasNextStep: true }
+    });
+
+    expect(data.forms).toHaveLength(1);
   });
 });
 
@@ -737,8 +928,14 @@ describe("Integration / Forms query for transporters", () => {
     const form = await formFactory({
       ownerId: owner.id,
       opt: {
-        transporterCompanySiret: transporter.siret,
-        status: "SEALED"
+        transportersSirets: [transporter.siret!],
+        status: "SEALED",
+        transporters: {
+          create: {
+            transporterCompanySiret: transporter.siret,
+            number: 1
+          }
+        }
       }
     });
 
@@ -765,33 +962,77 @@ describe("Integration / Forms query for transporters", () => {
         }
       }
     );
-
+    const transporterCompanySiret = siretify(3);
     // create a form whose first tranporter is another one
     const form = await formFactory({
       ownerId: owner.id,
       opt: {
-        transporterCompanySiret: "6543",
-        status: "SEALED"
+        transportersSirets: [transporterCompanySiret, transporter.siret!], // pre populate with the transport segment siret
+        status: "SEALED",
+        transporters: {
+          create: {
+            transporterCompanySiret,
+            number: 1
+          }
+        }
       }
     });
     // our transporter is on one segment
-    await transportSegmentFactory({
+    await bsddTransporterFactory({
       formId: form.id,
-      segmentPayload: {
+      opts: {
         transporterCompanySiret: transporter.siret
       }
     });
 
     // the transporter makes the query
     const { query } = makeClient(user);
-    const { data } = await query<Pick<Query, "forms">>(FORMS, {
+    const { data, errors } = await query<Pick<Query, "forms">>(FORMS, {
       variables: {
         siret: transporter.siret,
         roles: ["TRANSPORTER"]
       }
     });
 
+    expect(errors).toBeUndefined();
     expect(data.forms.length).toBe(1);
     expect(data.forms[0].id).toBe(form.id);
+  });
+
+  it("should return my forms only if I am a foreign transporter", async () => {
+    const { user, company } = await userWithCompanyFactory("ADMIN", {
+      siret: null,
+      orgId: "ESA15022510",
+      vatNumber: "ESA15022510",
+      companyTypes: {
+        set: ["TRANSPORTER"]
+      }
+    });
+
+    // this form should be returned
+    const form = await formFactory({
+      ownerId: user.id,
+      opt: {
+        transportersSirets: [company.vatNumber!],
+        transporters: {
+          create: {
+            transporterCompanySiret: null,
+            transporterCompanyVatNumber: company.vatNumber,
+            number: 1
+          }
+        }
+      }
+    });
+
+    const anotherUser = await userFactory();
+    // this form should not be returned
+    await formFactory({ ownerId: anotherUser.id });
+
+    const { query } = makeClient(user);
+
+    const { data } = await query<Pick<Query, "forms">>(FORMS);
+
+    expect(data.forms).toHaveLength(1);
+    expect(data.forms[0].id).toEqual(form.id);
   });
 });

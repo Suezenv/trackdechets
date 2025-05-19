@@ -3,12 +3,20 @@ import { ErrorCode } from "../../../../common/errors";
 import {
   userFactory,
   userWithCompanyFactory,
-  companyFactory
+  companyFactory,
+  siretify,
+  getDestinationCompanyInfo,
+  transporterReceiptFactory
 } from "../../../../__tests__/factories";
 import makeClient from "../../../../__tests__/testClient";
-import { Mutation } from "../../../../generated/graphql/types";
+import type { Mutation } from "@td/codegen-back";
 import { fullGroupingBsdasriFragment } from "../../../fragments";
-import { gql } from "apollo-server-express";
+import { gql } from "graphql-tag";
+import { prisma } from "@td/prisma";
+import { sirenify } from "../../../sirenify";
+
+jest.mock("../../../sirenify");
+(sirenify as jest.Mock).mockImplementation(input => Promise.resolve(input));
 
 const CREATE_DASRI = gql`
   ${fullGroupingBsdasriFragment}
@@ -18,9 +26,11 @@ const CREATE_DASRI = gql`
     }
   }
 `;
+
 describe("Mutation.createDasri", () => {
   afterEach(async () => {
     await resetDatabase();
+    (sirenify as jest.Mock).mockClear();
   });
 
   it("should disallow unauthenticated user", async () => {
@@ -53,7 +63,7 @@ describe("Mutation.createDasri", () => {
           input: {
             emitter: {
               company: {
-                siret: "siret"
+                siret: siretify(6)
               }
             }
           }
@@ -96,7 +106,8 @@ describe("Mutation.createDasri", () => {
             }
           ]
         }
-      }
+      },
+      ...(await getDestinationCompanyInfo())
     };
 
     const { mutate } = makeClient(user);
@@ -144,7 +155,8 @@ describe("Mutation.createDasri", () => {
             }
           ]
         }
-      }
+      },
+      ...(await getDestinationCompanyInfo())
     };
 
     const { mutate } = makeClient(user);
@@ -161,7 +173,224 @@ describe("Mutation.createDasri", () => {
     expect(data.createBsdasri.status).toEqual("INITIAL");
     expect(data.createBsdasri.type).toEqual("SIMPLE");
 
-    expect(data.createBsdasri.emitter.company.siret).toEqual(company.siret);
+    expect(data.createBsdasri.emitter!.company!.siret).toEqual(company.siret);
+    const created = await prisma.bsdasri.findUniqueOrThrow({
+      where: { id: data.createBsdasri.id }
+    });
+    expect(created.synthesisEmitterSirets).toEqual([]);
+    expect(created.groupingEmitterSirets).toEqual([]);
+    // check input is sirenified
+    expect(sirenify).toHaveBeenCalledTimes(1);
+  });
+
+  it("create a dasri with a default transport mode", async () => {
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+
+    const input = {
+      waste: { adr: "xyz 33", code: "18 01 03*" },
+      transporter: {
+        company: {
+          address: "5, route du dasri",
+          contact: "-",
+          mail: "_@email.indisponible",
+          name: "Transporteur de dasris",
+          phone: "-",
+          siret: company.siret
+        },
+        customInfo: null,
+        transport: {
+          acceptation: null,
+          handedOverAt: null,
+          mode: null,
+          packagings: [],
+          plates: [],
+          takenOverAt: null,
+          weight: {}
+        }
+      },
+      emitter: {
+        company: {
+          name: "hopital blanc",
+          siret: company.siret,
+          contact: "jean durand",
+          phone: "06 18 76 02 00",
+          // email not required
+          address: "avenue de la mer"
+        },
+        emission: {
+          weight: { value: 23.2, isEstimate: false },
+
+          packagings: [
+            {
+              type: "BOITE_CARTON",
+              volume: 22,
+              quantity: 3
+            }
+          ]
+        }
+      },
+      ...(await getDestinationCompanyInfo())
+    };
+
+    const { mutate } = makeClient(user);
+    const { data } = await mutate<Pick<Mutation, "createBsdasri">>(
+      CREATE_DASRI,
+      {
+        variables: {
+          input
+        }
+      }
+    );
+
+    expect(data.createBsdasri.isDraft).toEqual(false);
+    expect(data.createBsdasri.status).toEqual("INITIAL");
+    expect(data.createBsdasri.type).toEqual("SIMPLE");
+
+    expect(data.createBsdasri.emitter!.company!.siret).toEqual(company.siret);
+  });
+
+  it("should create a dasri and autocomplete transporter recepisse", async () => {
+    const transporter = await companyFactory({
+      companyTypes: ["TRANSPORTER"]
+    });
+    await transporterReceiptFactory({
+      company: transporter
+    });
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+
+    const input = {
+      waste: { adr: "xyz 33", code: "18 01 03*" },
+      transporter: {
+        company: {
+          address: "5, route du dasri",
+          contact: "-",
+          mail: "_@email.indisponible",
+          name: "Transporteur de dasris",
+          phone: "-",
+          siret: transporter.siret
+        },
+        customInfo: null,
+        transport: {
+          acceptation: null,
+          handedOverAt: null,
+          mode: null,
+          packagings: [],
+          plates: [],
+          takenOverAt: null,
+          weight: {}
+        }
+      },
+      emitter: {
+        company: {
+          name: "hopital blanc",
+          siret: company.siret,
+          contact: "jean durand",
+          phone: "06 18 76 02 00",
+          // email not required
+          address: "avenue de la mer"
+        },
+        emission: {
+          weight: { value: 23.2, isEstimate: false },
+
+          packagings: [
+            {
+              type: "BOITE_CARTON",
+              volume: 22,
+              quantity: 3
+            }
+          ]
+        }
+      },
+      ...(await getDestinationCompanyInfo())
+    };
+
+    const { mutate } = makeClient(user);
+    const { data } = await mutate<Pick<Mutation, "createBsdasri">>(
+      CREATE_DASRI,
+      {
+        variables: {
+          input
+        }
+      }
+    );
+    expect(data.createBsdasri.transporter!.recepisse!.number).toEqual(
+      "the number"
+    );
+    expect(data.createBsdasri.transporter!.recepisse!.department).toEqual("83");
+    expect(data.createBsdasri.transporter!.recepisse!.validityLimit).toEqual(
+      "2055-01-01T00:00:00.000Z"
+    );
+  });
+
+  it("create a dasri and ignore recepisse input", async () => {
+    // transporter has no recepisse
+    const transporter = await companyFactory({
+      companyTypes: ["TRANSPORTER"]
+    });
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+
+    const input = {
+      waste: { adr: "xyz 33", code: "18 01 03*" },
+      transporter: {
+        company: {
+          address: "5, route du dasri",
+          contact: "-",
+          mail: "_@email.indisponible",
+          name: "Transporteur de dasris",
+          phone: "-",
+          siret: transporter.siret
+        },
+        customInfo: null,
+        recepisse: {
+          department: "83",
+          number: "N°99999",
+          validityLimit: "2022-06-06T22:00:00"
+        },
+        transport: {
+          acceptation: null,
+          handedOverAt: null,
+          mode: null,
+          packagings: [],
+          plates: [],
+          takenOverAt: null,
+          weight: {}
+        }
+      },
+      emitter: {
+        company: {
+          name: "hopital blanc",
+          siret: company.siret,
+          contact: "jean durand",
+          phone: "06 18 76 02 00",
+          // email not required
+          address: "avenue de la mer"
+        },
+        emission: {
+          weight: { value: 23.2, isEstimate: false },
+
+          packagings: [
+            {
+              type: "BOITE_CARTON",
+              volume: 22,
+              quantity: 3
+            }
+          ]
+        }
+      },
+      ...(await getDestinationCompanyInfo())
+    };
+
+    const { mutate } = makeClient(user);
+    const { data } = await mutate<Pick<Mutation, "createBsdasri">>(
+      CREATE_DASRI,
+      {
+        variables: {
+          input
+        }
+      }
+    );
+    // recepissé input was ignored
+    expect(data.createBsdasri.transporter!.recepisse).toEqual(null);
   });
 });
 
@@ -194,7 +423,8 @@ describe("Mutation.createDasri validation scenarii", () => {
             }
           ]
         }
-      }
+      },
+      ...(await getDestinationCompanyInfo())
     };
 
     const { mutate } = makeClient(user);
@@ -241,7 +471,8 @@ describe("Mutation.createDasri validation scenarii", () => {
             }
           ]
         }
-      }
+      },
+      ...(await getDestinationCompanyInfo())
     };
 
     const { mutate } = makeClient(user);
@@ -286,7 +517,8 @@ describe("Mutation.createDasri validation scenarii", () => {
             }
           ]
         }
-      }
+      },
+      ...(await getDestinationCompanyInfo())
     };
 
     const { mutate } = makeClient(user);
@@ -301,7 +533,7 @@ describe("Mutation.createDasri validation scenarii", () => {
     expect(data.createBsdasri.isDraft).toEqual(false);
     expect(data.createBsdasri.status).toEqual("INITIAL");
 
-    expect(data.createBsdasri.emitter.company.siret).toEqual(company.siret);
+    expect(data.createBsdasri.emitter!.company!.siret).toEqual(company.siret);
   });
 
   it("Transport weight isEstimate is required when value is provided", async () => {
@@ -348,7 +580,8 @@ describe("Mutation.createDasri validation scenarii", () => {
             }
           ]
         }
-      }
+      },
+      ...(await getDestinationCompanyInfo())
     };
 
     const { mutate } = makeClient(user);
@@ -415,7 +648,8 @@ describe("Mutation.createDasri validation scenarii", () => {
             }
           ]
         }
-      }
+      },
+      ...(await getDestinationCompanyInfo())
     };
 
     const { mutate } = makeClient(user);
@@ -431,6 +665,283 @@ describe("Mutation.createDasri validation scenarii", () => {
       expect.objectContaining({
         message:
           "Le poids de déchets transportés en kg est obligatoire si vous renseignez le type de pesée",
+        extensions: expect.objectContaining({
+          code: ErrorCode.BAD_USER_INPUT
+        })
+      })
+    ]);
+  });
+  it("should allow containers numbers", async () => {
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+    const transporterCompany = await companyFactory();
+
+    const input = {
+      waste: { adr: "xyz 33", code: "18 01 03*" },
+      identification: {
+        numbers: ["GRV-XY12345", "GRV-VB45678"]
+      },
+      emitter: {
+        company: {
+          name: "hopital blanc",
+          siret: company.siret,
+          contact: "jean durand",
+          phone: "06 18 76 02 00",
+
+          address: "avenue de la mer"
+        },
+        emission: {
+          weight: { value: 23.2, isEstimate: false },
+
+          packagings: [
+            {
+              type: "BOITE_CARTON",
+              volume: 22,
+              quantity: 3
+            }
+          ]
+        }
+      },
+
+      transporter: {
+        company: {
+          mail: "trans@test.fr",
+          name: "El transporter",
+          siret: transporterCompany.siret,
+          contact: "Jason Statham",
+          phone: "06 18 76 02 00",
+          address: "avenue de la mer"
+        },
+        transport: {
+          weight: { value: 22, isEstimate: false },
+          packagings: [
+            {
+              type: "BOITE_CARTON",
+              volume: 22,
+              quantity: 3
+            }
+          ]
+        }
+      },
+      ...(await getDestinationCompanyInfo())
+    };
+
+    const { mutate } = makeClient(user);
+    const { data } = await mutate<Pick<Mutation, "createBsdasri">>(
+      CREATE_DASRI,
+      {
+        variables: {
+          input
+        }
+      }
+    );
+    expect(data.createBsdasri.identification!.numbers).toEqual([
+      "GRV-XY12345",
+      "GRV-VB45678"
+    ]);
+  });
+
+  it("should allow up to 2 transporter plates", async () => {
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+    const transporterCompany = await companyFactory();
+
+    const input = {
+      waste: { adr: "xyz 33", code: "18 01 03*" },
+      emitter: {
+        company: {
+          name: "hopital blanc",
+          siret: company.siret,
+          contact: "jean durand",
+          phone: "06 18 76 02 00",
+
+          address: "avenue de la mer"
+        },
+        emission: {
+          weight: { value: 23.2, isEstimate: false },
+
+          packagings: [
+            {
+              type: "BOITE_CARTON",
+              volume: 22,
+              quantity: 3
+            }
+          ]
+        }
+      },
+
+      transporter: {
+        company: {
+          mail: "trans@test.fr",
+          name: "El transporter",
+          siret: transporterCompany.siret,
+          contact: "Jason Statham",
+          phone: "06 18 76 02 00",
+          address: "avenue de la mer"
+        },
+        transport: {
+          plates: ["AB-44-YU", "CF-43-TT"],
+          weight: { value: 22, isEstimate: false },
+          packagings: [
+            {
+              type: "BOITE_CARTON",
+              volume: 22,
+              quantity: 3
+            }
+          ]
+        }
+      },
+      ...(await getDestinationCompanyInfo())
+    };
+
+    const { mutate } = makeClient(user);
+    const { data } = await mutate<Pick<Mutation, "createBsdasri">>(
+      CREATE_DASRI,
+      {
+        variables: {
+          input
+        }
+      }
+    );
+    expect(data.createBsdasri.transporter!.transport!.plates!.length).toEqual(
+      2
+    );
+  });
+
+  it("should fail creating the form if more than 2 plates are submitted", async () => {
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+    const transporterCompany = await companyFactory();
+
+    const input = {
+      waste: { adr: "xyz 33", code: "18 01 03*" },
+      emitter: {
+        company: {
+          name: "hopital blanc",
+          siret: company.siret,
+          contact: "jean durand",
+          phone: "06 18 76 02 00",
+
+          address: "avenue de la mer"
+        },
+        emission: {
+          weight: { value: 23.2, isEstimate: false },
+
+          packagings: [
+            {
+              type: "BOITE_CARTON",
+              volume: 22,
+              quantity: 3
+            }
+          ]
+        }
+      },
+
+      transporter: {
+        company: {
+          mail: "trans@test.fr",
+          name: "El transporter",
+          siret: transporterCompany.siret,
+          contact: "Jason Statham",
+          phone: "06 18 76 02 00",
+          address: "avenue de la mer"
+        },
+        transport: {
+          plates: ["AB-44-YU", "CF-43-TT", "BG-32-UU"], // 3 plates, only 2 allowed
+          weight: { value: 22, isEstimate: false },
+          packagings: [
+            {
+              type: "BOITE_CARTON",
+              volume: 22,
+              quantity: 3
+            }
+          ]
+        }
+      },
+      ...(await getDestinationCompanyInfo())
+    };
+
+    const { mutate } = makeClient(user);
+    const { errors } = await mutate<Pick<Mutation, "createBsdasri">>(
+      CREATE_DASRI,
+      {
+        variables: {
+          input
+        }
+      }
+    );
+    expect(errors).toEqual([
+      expect.objectContaining({
+        message: "Un maximum de 2 plaques d'immatriculation est accepté",
+        extensions: expect.objectContaining({
+          code: ErrorCode.BAD_USER_INPUT
+        })
+      })
+    ]);
+  });
+
+  it("should fail creating the form if plate humbers are invalid", async () => {
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+    const transporterCompany = await companyFactory();
+
+    const input = {
+      waste: { adr: "xyz 33", code: "18 01 03*" },
+      emitter: {
+        company: {
+          name: "hopital blanc",
+          siret: company.siret,
+          contact: "jean durand",
+          phone: "06 18 76 02 00",
+
+          address: "avenue de la mer"
+        },
+        emission: {
+          weight: { value: 23.2, isEstimate: false },
+
+          packagings: [
+            {
+              type: "BOITE_CARTON",
+              volume: 22,
+              quantity: 3
+            }
+          ]
+        }
+      },
+
+      transporter: {
+        company: {
+          mail: "trans@test.fr",
+          name: "El transporter",
+          siret: transporterCompany.siret,
+          contact: "Jason Statham",
+          phone: "06 18 76 02 00",
+          address: "avenue de la mer"
+        },
+        transport: {
+          plates: ["AB"],
+          weight: { value: 22, isEstimate: false },
+          packagings: [
+            {
+              type: "BOITE_CARTON",
+              volume: 22,
+              quantity: 3
+            }
+          ]
+        }
+      },
+      ...(await getDestinationCompanyInfo())
+    };
+
+    const { mutate } = makeClient(user);
+    const { errors } = await mutate<Pick<Mutation, "createBsdasri">>(
+      CREATE_DASRI,
+      {
+        variables: {
+          input
+        }
+      }
+    );
+    expect(errors).toEqual([
+      expect.objectContaining({
+        message:
+          "Le numéro d'immatriculation doit faire entre 4 et 12 caractères",
         extensions: expect.objectContaining({
           code: ErrorCode.BAD_USER_INPUT
         })
@@ -481,7 +992,8 @@ describe("Mutation.createDasri validation scenarii", () => {
             }
           ]
         }
-      }
+      },
+      ...(await getDestinationCompanyInfo())
     };
 
     const { mutate } = makeClient(user);
@@ -497,6 +1009,87 @@ describe("Mutation.createDasri validation scenarii", () => {
     expect(data.createBsdasri.isDraft).toEqual(false);
     expect(data.createBsdasri.status).toEqual("INITIAL");
 
-    expect(data.createBsdasri.emitter.company.siret).toEqual(company.siret);
+    expect(data.createBsdasri.emitter!.company!.siret).toEqual(company.siret);
+  });
+
+  it("should convert 18 01 02* to 18 02 02*", async () => {
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+
+    const input = {
+      waste: { adr: "xyz 33", code: "18 01 02*" },
+      emitter: {
+        company: {
+          name: "hopital blanc",
+          siret: company.siret,
+          contact: "jean durand",
+          phone: "06 18 76 02 00",
+          address: "avenue de la mer"
+        },
+        emission: {
+          weight: { value: 23.2, isEstimate: false },
+          packagings: [
+            {
+              type: "BOITE_CARTON",
+              volume: 22,
+              quantity: 3
+            }
+          ]
+        }
+      },
+      ...(await getDestinationCompanyInfo())
+    };
+
+    const { mutate } = makeClient(user);
+    const { data } = await mutate<Pick<Mutation, "createBsdasri">>(
+      CREATE_DASRI,
+      {
+        variables: {
+          input
+        }
+      }
+    );
+
+    expect(data.createBsdasri.waste!.code).toEqual("18 02 02*");
+  });
+
+  it("should allow decimal volume", async () => {
+    const { user, company } = await userWithCompanyFactory("MEMBER");
+
+    const input = {
+      waste: { adr: "xyz 33", code: "18 01 03*" },
+      emitter: {
+        company: {
+          name: "hopital blanc",
+          siret: company.siret,
+          contact: "jean durand",
+          phone: "06 18 76 02 00",
+          // email not required
+          address: "avenue de la mer"
+        },
+        emission: {
+          weight: { value: 23.2, isEstimate: false },
+          packagings: [
+            {
+              type: "BOITE_CARTON",
+              volume: 0.5,
+              quantity: 3
+            }
+          ]
+        }
+      },
+      ...(await getDestinationCompanyInfo())
+    };
+
+    const { mutate } = makeClient(user);
+    const { data } = await mutate<Pick<Mutation, "createBsdasri">>(
+      CREATE_DASRI,
+      {
+        variables: {
+          input
+        }
+      }
+    );
+
+    expect(data.createBsdasri.status).toEqual("INITIAL");
   });
 });

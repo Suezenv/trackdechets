@@ -5,8 +5,9 @@ enum OrderType {
 
 enum BsdType {
   BSDD
-  BSDASRI
-  BSVHU
   BSDA
   BSFF
+  BSDASRI
+  BSVHU
+  BSPAOH
 }

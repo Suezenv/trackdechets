@@ -3,85 +3,50 @@ name: Build & Test
 on: pull_request
 
 jobs:
-  front:
+  main:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: front
     steps:
-      - uses: actions/checkout@v2
-      - name: Setup Node
-        uses: actions/setup-node@v2.1.2
+      - uses: actions/checkout@v4
         with:
-          node-version: "12.x"
-      - uses: actions/cache@v2
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
-      - name: Install dependencies
-        run: npm ci
-      - name: Generate files
-        run: npm run generate
-      - name: Run linter
-        run: npm run lint
-      - name: Run typecheck
-        run: npm run types
-      - name: Run tests
-        run: npm test
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+      - uses: nrwl/nx-set-shas@v3
+        with:
+          main-branch-name: 'dev'
+      - run: git branch --track dev origin/dev
 
-  back:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: back
-    steps:
-      - uses: actions/checkout@v2
-      - name: Setup Node
-        uses: actions/setup-node@v2.1.2
-        with:
-          node-version: "12.x"
-      - uses: actions/cache@v2
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
-      - name: Install dependencies
-        run: npm ci
-      - name: Generate files
-        run: npm run generate
-      - name: Run linter
-        run: npm run lint
-      - name: Run typecheck
-        run: npm run types
-      - name: Check migrations
-        run: npm run check:migrations
-      - name: Run tests
-        run: npm test -- --forceExit
+      - run: npx nx format:check
+      - run: npx nx affected -t lint --parallel=3
+      - run: npx nx affected -t test --parallel=3
         env:
-          JWT_SECRET: "xxx"
           EMAIL_BACKEND: "console"
           SIB_BASE_URL: "http://mailservice"
           MAIN_TEMPLATE_ID: "9"
-          ONBOARDING_TEMPLATE_ID: "8"
-          PRODUCER_SECOND_ONBOARDING_TEMPLATE_ID: "7"
-          PROFESSIONAL_SECOND_ONBOARDING_TEMPLATE_ID: "9"
           SECURITY_CODE_RENEWAL_TEMPLATE_ID: "6"
+          FIRST_ONBOARDING_TEMPLATE_ID: "246"
+          PRODUCER_SECOND_ONBOARDING_TEMPLATE_ID: "248"
+          PROFESIONAL_SECOND_ONBOARDING_TEMPLATE_ID: "250"
+          VERIFIED_FOREIGN_TRANSPORTER_COMPANY_TEMPLATE_ID: "247"
           DATABASE_URL: "postgresql://user:password@postgres:5432/db"
-
-  doc:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: doc
-    steps:
-      - uses: actions/checkout@v1
-      - uses: actions/setup-node@v1
-        with:
-          node-version: "12.x"
-      - name: Test Build
-        run: |
-          yarn install --frozen-lockfile
-          yarn build
+          UI_HOST: "http://ui.td.local"
+          API_HOST: "http://api.td.local"
+          TD_COMPANY_ELASTICSEARCH_INDEX: "stocketablissement-production"
+          TD_COMPANY_ELASTICSEARCH_URL: ${{ secrets.TD_COMPANY_ELASTICSEARCH_URL }}
+          TD_COMPANY_ELASTICSEARCH_CACERT: ${{ secrets.TD_COMPANY_ELASTICSEARCH_CACERT }}
+          OTEL_SDK_DISABLED: true
+          ELASTIC_SEARCH_URL: http://elasticsearch:9200
+          S3_ENDPOINT: http://localhost:9000
+          S3_REGION: fr-par
+          S3_BUCKET: unset
+          S3_ACCESS_KEY_ID: trackdechets
+          S3_SECRET_ACCESS_KEY: password
+          S3_REGISTRY_ERRORS_BUCKET: registry-errors-integration
+          S3_REGISTRY_IMPORTS_BUCKET: registry-imports-integration
+          S3_REGISTRY_EXPORTS_BUCKET: registry-exports-integration
+          S3_REGISTRY_MODELS_BUCKET: registry-models-integration
+      - run: npx nx affected -t build --parallel=3

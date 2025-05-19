@@ -11,6 +11,7 @@ input BsdasriTransporterWhere {
   company: CompanyWhere
   transport: BsdasriTransportWhere
 }
+
 input BsdasriTransportWhere {
   signature: SignatureWhere
 }
@@ -32,7 +33,11 @@ input BsdasriOperationWhere {
   signature: SignatureWhere
 }
 
+"Filtres possibles pour la récupération de bordereaux."
 input BsdasriWhere {
+  "(Optionnel) Filtre sur le type de BSDASRI"
+  type: BsdasriTypeFilter
+
   "(Optionnel) Permet de récupérer uniquement les bordereaux en brouillon"
   isDraft: Boolean
 
@@ -53,12 +58,17 @@ input BsdasriWhere {
   emitter: BsdasriEmitterWhere
   transporter: BsdasriTransporterWhere
   destination: BsdasriDestinationWhere
+  identification: BsdasriContainersNumbersWhere
 
   """
   (Optionnel) Filtre sur l'état de regroupement des bordereaux
   Si aucun filtre n'est passé, les bordereaux seront retournés sans filtrage supplémentaire
-  Si groupable: true, les bordereaux retournés ne sont pas déjà regroupés et ne regroupent pas d'autres bordereaux
-  Si groupable: false, les bordereaux retournés ne sont déjà regroupés ou ne regroupent d'autres bordereaux
+  Si groupable: true, les bordereaux retournés:
+    - ne regroupent pas d'autres bordereaux (groupement ou synthèse)
+    - ne sont pas associés à un bordereau de synthèse ou de groupement
+  Si groupable: false les bordereaux retournés:
+    - sont déjà associés à un bordereau de synthèse ou de groupement
+    - ou regroupent d'autres bordereaux (groupement ou synthèse)
   """
   groupable: Boolean
 
@@ -73,6 +83,20 @@ input BsdasriStatusFilter {
   _in: [BsdasriStatus!]
 }
 
+"Filtre sur le type de BSDASRI"
+input BsdasriTypeFilter {
+  _eq: BsdasriType
+  _in: [BsdasriType!]
+}
+
+"""
+Filtre sur les numéros de containers. Renvoie les Bsdasris dont au moins un des identifiants de containers `identificationNumbers`
+est présent dans la liste passée en paramètre
+"""
+input BsdasriContainersNumbersWhere {
+  numbers: StringNullableListFilter
+}
+
 input BsdasriPackagingsInput {
   "Type de conditionnement"
   type: BsdasriPackagingType!
@@ -81,7 +105,7 @@ input BsdasriPackagingsInput {
   other: String
 
   "Volume de chaque colis associé à ce conditionnement"
-  volume: Int!
+  volume: Float!
 
   "Nombre de colis associés à ce conditionnement"
   quantity: Int!
@@ -99,10 +123,17 @@ input BsdasriWasteInput {
   adr: String
   code: String
 }
+
 input BsdasriEmissionInput {
+  """
+  Poids en kilogrammes
+
+  Doit être inférieur à 40T en cas de transport routier et inférieur à 50 000 T tout type de transport confondu.
+  """
   weight: BsdasriWeightInput
   packagings: [BsdasriPackagingsInput!]
 }
+
 input BsdasriEmitterInput {
   company: CompanyInput
   pickupSite: PickupSiteInput
@@ -120,33 +151,68 @@ input BsdasriEcoOrganismeInput {
 }
 
 input BsdasriWeightInput {
+  """
+  Poids en kilogrammes
+
+  Doit être inférieur à 40T en cas de transport routier et inférieur à 50 000 T tout type de transport confondu.
+  """
   value: Float
+  "Le poids est il une estimation"
   isEstimate: Boolean
 }
+
 input BsdasriRealWeightInput {
+  """
+  Poids en kilogrammes
+
+  Doit être inférieur à 40T en cas de transport routier et inférieur à 50 000 T tout type de transport confondu.
+  """
   value: Float!
 }
-
 input BsdasriAcceptationInput {
-  status: WasteAcceptationStatusInput
+  "Accepté, refusé ou refusé partiellement"
+  status: WasteAcceptationStatus
+  "Raison en cas de refus ou refus partiel"
   refusalReason: String
+  "Poids en kilogrammes de déchets refusé"
   refusedWeight: Float
 }
 
 input BsdasriTransportInput {
+  """
+  Poids en kilogrammes
+
+  Doit être inférieur à 40T en cas de transport routier et inférieur à 50 000 T tout type de transport confondu.
+  """
   weight: BsdasriWeightInput
   packagings: [BsdasriPackagingsInput!]
   takenOverAt: DateTime
   handedOverAt: DateTime
+  "Mode de transport"
   acceptation: BsdasriAcceptationInput
   mode: TransportMode
+  "Plaque(s) d'immatriculation - maximum 2 - 4 à 12 caractères."
   plates: [String!]
 }
 
 input BsdasriRecepisseInput {
+  "Exemption de récépissé"
+  isExempted: Boolean
+  "Numéro de récépissé"
   number: String
+    @deprecated(
+      reason: "Ignoré - Complété par Trackdéchets en fonction des informations renseignées par l'entreprise de transport "
+    )
+  "Département"
   department: String
+    @deprecated(
+      reason: "Ignoré - Complété par Trackdéchets en fonction des informations renseignées par l'entreprise de transport "
+    )
+  "Date limite de validité"
   validityLimit: DateTime
+    @deprecated(
+      reason: "Ignoré - Complété par Trackdéchets en fonction des informations renseignées par l'entreprise de transport "
+    )
 }
 
 input BsdasriTransporterInput {
@@ -174,42 +240,143 @@ input BsdasriDestinationInput {
 }
 
 input BsdasriReceptionInput {
-  volume: Int
   packagings: [BsdasriPackagingsInput!]
   date: DateTime
   acceptation: BsdasriAcceptationInput
 }
 
 input BsdasriOperationInput {
+  """
+  Poids en kilogrammes
+
+  Doit être inférieur à 40T en cas de transport routier et inférieur à 50 000 T tout type de transport confondu.
+  """
   weight: BsdasriRealWeightInput
   """
   Code de traitement
-  Les codes R12 et D12 ne sont autorisé que si le destinataire est une installation TTR (tri transit regroupement).
+  Les codes R12 et D13 ne sont autorisé que si le destinataire est une installation TTR (tri transit regroupement).
   """
   code: String
+  "Qualification du traitement final"
+  mode: OperationMode
   date: DateTime
+}
+
+input BsdasriIdentificationInput {
+  "Numéros d'identification des conteneurs concernés"
+  numbers: [String!]
 }
 
 input BsdasriInput {
   waste: BsdasriWasteInput
 
+  """
+  Non accepté pour le dasri de synthèse
+  """
   emitter: BsdasriEmitterInput
 
+  """
+  Non accepté pour le dasri de synthèse
+  """
   ecoOrganisme: BsdasriEcoOrganismeInput
 
   transporter: BsdasriTransporterInput
 
   destination: BsdasriDestinationInput
 
+  """
+  Optionnel: liste d'identifiants des conteneurs concernés. Modifiable par tous les acteurs du bsd, ce champ mis
+  à disposition des utilisateur permet de retrouver aisément des Bsdasris grâce à un identifiant de conteneur (cf. query bsdasris)
+  """
+  identification: BsdasriIdentificationInput
+
+  "Liste des bordereaux que celui-ci groupe dans un bordereau de groupement. Incompatible avec le champ synthesizing."
   grouping: [ID!]
+
+  "Liste des bordereaux que celui-ci groupe dans un bordereau de synthèse.  Incompatible avec le champ grouping."
+  synthesizing: [ID!]
 }
 
 input BsdasriSignatureInput {
+  "Type de signature apposée"
   type: BsdasriSignatureType!
+  "Nom et prénom du signataire"
   author: String!
+  "Date de la signature"
+  date: DateTime
 }
 
 input BsdasriSignatureWithSecretCodeInput {
+  "Nom et prénom du signataire"
   author: String!
+  "Code de sécurité de l'entreprise pour laquelle on signe. Permet de signer en tant que. Optionnel"
   securityCode: Int!
+  "Dénomination de l'auteur de la signature, par défaut il s'agit de l'émetteur"
+  signatureAuthor: SignatureAuthor
+}
+
+"Payload de révision d'un bordereau."
+input CreateBsdasriRevisionRequestInput {
+  "Identifiant du bordereau à réviser"
+  bsdasriId: ID!
+  "Numéro SIRET du demandeur"
+  authoringCompanySiret: String!
+  "Contenu de la révision"
+  content: BsdasriRevisionRequestContentInput!
+  "Commentaire pour expliquer la demande de révision"
+  comment: String!
+}
+
+"Payload de révision d'un bordereau. Disponible sur une liste restreinte de champs."
+input BsdasriRevisionRequestContentInput {
+  "Maitre d'ouvrage ou détenteur du déchet"
+  emitter: BsdasriRevisionRequestEmitterInput
+
+  "Installation de destination"
+  destination: BsdasriRevisionRequestDestinationInput
+
+  "Description du déchet"
+  waste: BsdasriRevisionRequestWasteInput
+
+  "NON ACTIF  Annuler le bordereau. Exclusif des autres opérations. "
+  isCanceled: Boolean
+}
+
+input BsdasriRevisionRequestEmitterInput {
+  "Informations chantier (si différente de l'adresse de l'entreprise). Disponible uniquement sur le dasri simple"
+  pickupSite: PickupSiteInput
+}
+
+input BsdasriRevisionRequestDestinationInput {
+  "Réception"
+  reception: BsdasriRevisionRequestReceptionInput
+  "Réalisation du traitement"
+  operation: BsdasriRevisionRequestOperationInput
+}
+
+input BsdasriRevisionRequestOperationInput {
+  "Poids présenté"
+  weight: Float
+  "Code D/R"
+  code: String
+
+  "Mode de traitement"
+  mode: OperationMode
+}
+
+input BsdasriRevisionRequestReceptionInput {
+  "Conditionnement. Disponible sur bsdasri simple et de groupement."
+  packagings: [BsdasriPackagingsInput!]
+}
+
+input BsdasriRevisionRequestWasteInput {
+  "Rubrique Déchet. Disponible sur bsdasri simple et de groupement."
+  code: String
+}
+
+input BsdasriRevisionRequestWhere {
+  "Permet de filtrer sur un statut de demande de révision"
+  status: RevisionRequestStatus
+  "Permet de filtrer sur un numéro de bordereau"
+  bsdasriId: StringFilter
 }

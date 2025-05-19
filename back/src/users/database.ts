@@ -2,38 +2,29 @@
  * PRISMA HELPER FUNCTIONS
  */
 
-import prisma from "../prisma";
+import { prisma } from "@td/prisma";
 
-import { User, UserRole, Prisma, Company } from "@prisma/client";
-
-import { FullUser } from "./types";
-import { UserInputError } from "apollo-server-express";
+import {
+  User,
+  UserRole,
+  Prisma,
+  Company,
+  UserAccountHash
+} from "@prisma/client";
 import { hash } from "bcrypt";
 import { getUid, sanitizeEmail, hashToken } from "../utils";
+import { deleteCachedUserRoles } from "../common/redis/users";
+import { hashPassword, passwordVersion } from "./utils";
+import { UserInputError } from "../common/errors";
+import { PrismaTransaction } from "../common/repository/types";
+import { getDefaultNotifications } from "./notifications";
 
 export async function getUserCompanies(userId: string): Promise<Company[]> {
-  const companyAssociations = await prisma.user
-    .findUnique({ where: { id: userId } })
-    .companyAssociations();
-  return Promise.all(
-    companyAssociations.map(association => {
-      return prisma.companyAssociation
-        .findUnique({ where: { id: association.id } })
-        .company();
-    })
-  );
-}
-
-/**
- * Returns a user with linked objects
- * @param user
- */
-export async function getFullUser(user: User): Promise<FullUser> {
-  const companies = await getUserCompanies(user.id);
-  return {
-    ...user,
-    companies
-  };
+  const companyAssociations = await prisma.companyAssociation.findMany({
+    where: { userId },
+    include: { company: true }
+  });
+  return companyAssociations.map(association => association.company);
 }
 
 /**
@@ -75,13 +66,33 @@ export async function createUserAccountHash(
 }
 
 /**
+ * Delete UserAccountHash objects linked to a user's mail
+ * (association between user and siret with a hash used for invitations)
+ * @param user
+ * @param prisma
+ */
+export async function deleteUserAccountHash(
+  user: User,
+  prisma: PrismaTransaction
+) {
+  await prisma.userAccountHash.deleteMany({
+    where: { email: user.email }
+  });
+}
+
+/**
  * Associate an existing user with company
  * Make sure we do not create a double association
  * @param userId
- * @param siret
+ * @param orgId
  * @param role
  */
-export async function associateUserToCompany(userId, siret, role) {
+export async function associateUserToCompany(
+  userId: string,
+  orgId: string,
+  role: UserRole,
+  opt: Partial<Prisma.CompanyAssociationCreateInput> = {}
+) {
   // check for current associations
   const associations = await prisma.companyAssociation.findMany({
     where: {
@@ -89,7 +100,7 @@ export async function associateUserToCompany(userId, siret, role) {
         id: userId
       },
       company: {
-        siret
+        orgId
       }
     }
   });
@@ -100,11 +111,15 @@ export async function associateUserToCompany(userId, siret, role) {
     );
   }
 
+  const notifications = getDefaultNotifications(role);
+
   const association = await prisma.companyAssociation.create({
     data: {
       user: { connect: { id: userId } },
       role,
-      company: { connect: { siret } }
+      company: { connect: { orgId } },
+      ...notifications,
+      ...opt
     }
   });
 
@@ -113,6 +128,10 @@ export async function associateUserToCompany(userId, siret, role) {
     where: { id: userId, firstAssociationDate: null },
     data: { firstAssociationDate: new Date() }
   });
+
+  // clear cache
+  await deleteCachedUserRoles(userId);
+
   return association;
 }
 
@@ -140,18 +159,24 @@ export async function getCompanyAssociationOrNotFound(
   return companyAssociations[0];
 }
 
-export async function createAccessToken(user: User) {
+type CreateAccessTokenArgs = { user: User; description?: string };
+
+export async function createAccessToken({
+  user,
+  description
+}: CreateAccessTokenArgs) {
   const clearToken = getUid(40);
 
-  await prisma.accessToken.create({
+  const accessToken = await prisma.accessToken.create({
     data: {
       user: {
         connect: { id: user.id }
       },
+      ...(description ? { description } : {}),
       token: hashToken(clearToken)
     }
   });
-  return { clearToken };
+  return { ...accessToken, token: clearToken };
 }
 
 export async function userExists(unsafeEmail: string) {
@@ -177,15 +202,17 @@ export async function acceptNewUserCompanyInvitations(user: User) {
   }
 
   await Promise.all(
-    existingHashes.map(existingHash =>
-      prisma.companyAssociation.create({
+    existingHashes.map(existingHash => {
+      const notifications = getDefaultNotifications(existingHash.role);
+      return prisma.companyAssociation.create({
         data: {
-          company: { connect: { siret: existingHash.companySiret } },
+          company: { connect: { orgId: existingHash.companySiret } },
           user: { connect: { id: user.id } },
-          role: existingHash.role
+          role: existingHash.role,
+          ...notifications
         }
-      })
-    )
+      });
+    })
   );
   if (!user.firstAssociationDate) {
     await prisma.user.update({
@@ -193,6 +220,9 @@ export async function acceptNewUserCompanyInvitations(user: User) {
       data: { firstAssociationDate: new Date() }
     });
   }
+
+  // clear cache
+  await deleteCachedUserRoles(user.id);
 
   return prisma.userAccountHash.updateMany({
     where: {
@@ -212,4 +242,235 @@ export async function getMembershipRequestOrNotFoundError(
     throw new UserInputError("Cette demande de rattachement n'existe pas");
   }
   return membershipRequest;
+}
+
+export async function createUser({
+  data
+}: {
+  data: Omit<Prisma.UserCreateInput, "passwordVersion">;
+}): Promise<User> {
+  const user = await prisma.user.create({
+    data: {
+      ...data,
+      passwordVersion
+    }
+  });
+  return user;
+}
+export async function updateUserPassword({
+  userId,
+  trimmedPassword
+}: {
+  userId: string;
+  trimmedPassword: string;
+}): Promise<User> {
+  const hashedPassword = await hashPassword(trimmedPassword);
+
+  return prisma.user.update({
+    where: { id: userId },
+    data: { password: hashedPassword, passwordVersion }
+  });
+}
+
+/**
+ * Update a CompanyAssociation
+ * @param associationId
+ * @param data
+ */
+export async function updateCompanyAssociation({
+  associationId,
+  data
+}: {
+  associationId: string;
+  data: Prisma.CompanyAssociationUpdateInput;
+}): Promise<Prisma.CompanyAssociationGetPayload<{
+  include: {
+    user: true;
+  };
+}> | null> {
+  const updatedAssociation = await prisma.companyAssociation.update({
+    where: {
+      id: associationId
+    },
+    data,
+    include: {
+      user: true
+    }
+  });
+  return updatedAssociation;
+}
+
+/**
+ * Update a UserAccountHash
+ * @param userId
+ * @param data
+ */
+export async function updateUserAccountHash({
+  userId,
+  data
+}: {
+  userId: string;
+  data: Prisma.UserAccountHashUpdateInput;
+}): Promise<UserAccountHash | null> {
+  const updatedUserAccountHash = await prisma.userAccountHash.update({
+    where: { id: userId },
+    data
+  });
+  return updatedUserAccountHash;
+}
+
+/**
+ * Determine if a user is the sole admin for a company
+ * used in deletion pipeline to prevent deleting a user
+ * @param user
+ */
+export async function checkCompanyAssociations(user: User): Promise<string[]> {
+  const errors: string[] = [];
+  const companyAssociations = await prisma.companyAssociation.findMany({
+    where: {
+      user: {
+        id: user.id
+      }
+    },
+    include: {
+      company: { select: { id: true, siret: true, vatNumber: true } }
+    }
+  });
+
+  for (const association of companyAssociations) {
+    if (association.role !== "ADMIN") {
+      continue;
+    }
+
+    const otherAdmins = await prisma.companyAssociation.findMany({
+      where: {
+        role: "ADMIN",
+        user: {
+          id: { not: user.id }
+        },
+        company: {
+          id: association.company.id
+        }
+      }
+    });
+    if (otherAdmins.length <= 0) {
+      errors.push(
+        `Impossible de supprimer cet utilisateur car il est le seul administrateur de l'entreprise ${
+          association.company.id
+        } (SIRET OU TVA: ${
+          association.company.siret ?? association.company.vatNumber
+        }).`
+      );
+    }
+  }
+
+  return errors;
+}
+
+/**
+ * Determine if a user is the sole admin for an application
+ * used in deletion pipeline to prevent deleting a user
+ * @param user
+ */
+export async function checkApplications(user: User): Promise<string[]> {
+  const errors: string[] = [];
+  const applications = await prisma.application.findMany({
+    where: {
+      adminId: user.id
+    }
+  });
+  for (const application of applications) {
+    errors.push(
+      `Impossible de supprimer cet utilisateur car il est le seul administrateur de l'application ${application.id} (${application.name}).`
+    );
+  }
+
+  return errors;
+}
+
+/**
+ * Delete all associations between a user and companies
+ * @param user
+ * @param prisma
+ */
+export async function deleteUserCompanyAssociations(
+  user: User,
+  prisma: PrismaTransaction
+) {
+  await prisma.companyAssociation.deleteMany({
+    where: {
+      user: {
+        id: user.id
+      }
+    }
+  });
+}
+
+/**
+ * Delete all membership requests from a user
+ * @param user
+ * @param prisma
+ */
+export async function deleteMembershipRequest(
+  user: User,
+  prisma: PrismaTransaction
+) {
+  await prisma.membershipRequest.deleteMany({
+    where: {
+      user: {
+        id: user.id
+      }
+    }
+  });
+}
+
+/**
+ * Delete all UserActivationHashes of a user
+ * @param user
+ * @param prisma
+ */
+export async function deleteUserActivationHashes(
+  user: User,
+  prisma: PrismaTransaction
+) {
+  await prisma.userActivationHash.deleteMany({
+    where: {
+      user: {
+        id: user.id
+      }
+    }
+  });
+}
+
+/**
+ * Delete all access tokens of a user
+ * @param user
+ * @param prisma
+ */
+export async function deleteUserAccessTokens(
+  user: User,
+  prisma: PrismaTransaction
+) {
+  await prisma.accessToken.deleteMany({
+    where: {
+      user: {
+        id: user.id
+      }
+    }
+  });
+}
+
+/**
+ * Delete all grants of a user
+ * @param user
+ * @param prisma
+ */
+export async function deleteUserGrants(user: User, prisma: PrismaTransaction) {
+  await prisma.grant.deleteMany({
+    where: {
+      user: {
+        id: user.id
+      }
+    }
+  });
 }

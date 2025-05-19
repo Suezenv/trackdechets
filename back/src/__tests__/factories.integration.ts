@@ -1,10 +1,12 @@
-import prisma from "../prisma";
+import { prisma } from "@td/prisma";
 import { resetDatabase } from "../../integration-tests/helper";
 import {
   companyFactory,
   formFactory,
+  siretify,
   statusLogFactory,
-  transportSegmentFactory,
+  transporterReceiptFactory,
+  bsddTransporterFactory,
   userFactory,
   userWithCompanyFactory
 } from "./factories";
@@ -24,7 +26,7 @@ describe("Test Factories", () => {
     const company = await companyFactory();
 
     expect(company.id).toBeTruthy();
-    expect(company.siret.length).toBe(14);
+    expect(company.siret!.length).toBe(14);
   });
 
   test("should create a user with a company", async () => {
@@ -48,10 +50,16 @@ describe("Test Factories", () => {
       }
     });
 
-    const companyAssociations = usr.companyAssociations;
+    const companyAssociations = usr!.companyAssociations;
     expect(companyAssociations.length).toBe(1);
     expect([...companyAssociations[0].company.companyTypes]).toMatchObject([
-      "PRODUCER"
+      "PRODUCER",
+      "TRANSPORTER",
+      "WASTEPROCESSOR",
+      "WORKER",
+      "WASTE_VEHICLES",
+      "TRADER",
+      "BROKER"
     ]);
     expect(companyAssociations[0].company.siret).toBe(company.siret);
   });
@@ -79,7 +87,7 @@ describe("Test Factories", () => {
       }
     });
 
-    const companyAssociations = usr.companyAssociations;
+    const companyAssociations = usr!.companyAssociations;
     expect(companyAssociations.length).toBe(1);
     expect(companyAssociations[0].company.siret).toBe(company.siret);
 
@@ -142,17 +150,31 @@ test("should create a transport segment", async () => {
   const frm = await formFactory({
     ownerId: usr.id
   });
-
-  const newTransportSegment = await transportSegmentFactory({
+  const transporterCompanySiret = siretify(4);
+  const newTransportSegment = await bsddTransporterFactory({
     formId: frm.id,
-    segmentPayload: { transporterCompanySiret: "1234" }
+    opts: { transporterCompanySiret }
   });
 
   expect(newTransportSegment.id).toBeTruthy();
-  expect(newTransportSegment.transporterCompanySiret).toEqual("1234");
+  expect(newTransportSegment.transporterCompanySiret).toEqual(
+    transporterCompanySiret
+  );
   //check reverse access
-  const segments = await prisma.form
+  const transporters = await prisma.form
     .findUnique({ where: { id: frm.id } })
-    .transportSegments();
-  expect(segments.length).toEqual(1);
+    .transporters({ where: { number: { gte: 2 } } });
+  expect(transporters!.length).toEqual(1);
+});
+
+test("should create a transporter receipt and associate it to a company", async () => {
+  const company = await companyFactory();
+
+  const receipt = await transporterReceiptFactory({ company });
+
+  const retrievedCompany = await prisma.company.findUnique({
+    where: { id: company.id }
+  });
+
+  expect(retrievedCompany?.transporterReceiptId).toEqual(receipt.id);
 });

@@ -1,20 +1,26 @@
 import * as React from "react";
-
-import { Bsdasri, BsdasriStatus } from "generated/graphql/types";
-import { ActionButtonContext } from "common/components/ActionButton";
-import { useParams } from "react-router";
-
-import { IconBSDasri } from "common/components/Icons";
+import { Bsdasri, BsdasriStatus } from "@td/codegen-ui";
+import { IconBSDasri } from "../../../../Apps/common/Components/Icons/Icons";
 import { CellProps, CellValue } from "react-table";
-import { BSDAsriActions } from "dashboard/components/BSDList/BSDasri/BSDasriActions/BSDasriActions";
-import { WorkflowAction } from "./WorkflowAction";
+
 const dasriVerboseStatuses: Record<BsdasriStatus, string> = {
   INITIAL: "Initial",
-  SIGNED_BY_PRODUCER: "Signé par le producteur",
+  SIGNED_BY_PRODUCER: "Signé par l'émetteur",
   SENT: "Envoyé",
   RECEIVED: "Reçu",
   PROCESSED: "Traité",
   REFUSED: "Refusé",
+  AWAITING_GROUP: "En attente de regroupement",
+  CANCELED: "Annulé"
+};
+
+const getDasriVerboseStatus = (bsdasri: Bsdasri): string => {
+  if (bsdasri.isDraft) {
+    return "Brouillon";
+  }
+  const status = bsdasri["bsdasriStatus"];
+
+  return dasriVerboseStatuses[status];
 };
 // Basic implementation
 export const COLUMNS: Record<
@@ -30,57 +36,44 @@ export const COLUMNS: Record<
       <>
         <IconBSDasri style={{ fontSize: "24px" }} />
         {value === "GROUPING" && <span>Grp</span>}
+        {value === "SYNTHESIS" && <span>Synth</span>}
       </>
-    ),
+    )
   },
   readableId: {
-    accessor: dasri => dasri.id,
+    accessor: dasri => dasri.id
   },
   emitter: {
-    accessor: dasri => dasri.emitter?.company?.name ?? "",
+    accessor: dasri => (
+      <>
+        <div>{dasri.emitter?.company?.name ?? ""}</div>
+        {dasri.emitter?.pickupSite?.name && (
+          <div>{dasri.emitter?.pickupSite?.name}</div>
+        )}
+        <div>{dasri.emitter?.company?.siret ?? ""}</div>
+      </>
+    )
   },
   recipient: {
-    accessor: dasri => dasri?.destination?.company?.name ?? "",
+    accessor: dasri => (
+      <>
+        <div>{dasri?.destination?.company?.name ?? ""}</div>
+        <div>{dasri?.destination?.company?.siret ?? ""}</div>
+      </>
+    )
   },
   waste: {
-    accessor: dasri => dasri?.waste?.code,
+    accessor: dasri => dasri["bsdasriWaste"]?.code ?? ""
   },
   transporterCustomInfo: {
     accessor: dasri => dasri.transporter?.customInfo ?? "",
-    Cell: ({ value }) => (
-      <>
-        <span style={{ marginRight: "0.5rem" }}>{value}</span>
-      </>
-    ),
+    Cell: ({ value }) => <span style={{ marginRight: "0.5rem" }}>{value}</span>
   },
   transporterNumberPlate: {
     accessor: dasri => dasri.transporter?.transport?.plates ?? [],
-    Cell: ({ value }) => (
-      <>
-        <span> {value.join(", ")}</span>
-      </>
-    ),
+    Cell: ({ value }) => <span> {value.join(", ")}</span>
   },
   status: {
-    accessor: dasri =>
-      dasri.isDraft
-        ? "Brouillon"
-        : dasriVerboseStatuses[dasri["bsdasriStatus"]], // unable to use dot notation because of conflicting status fields
-  },
-
-  workflow: {
-    accessor: () => null,
-    Cell: ({ row }) => {
-      const { siret } = useParams<{ siret: string }>();
-      return (
-        <ActionButtonContext.Provider value={{ size: "small" }}>
-          <WorkflowAction siret={siret} form={row.original} />
-        </ActionButtonContext.Provider>
-      );
-    },
-  },
-  actions: {
-    accessor: () => null,
-    Cell: ({ row }) => <BSDAsriActions form={row.original} />,
-  },
+    accessor: dasri => getDasriVerboseStatus(dasri)
+  }
 };

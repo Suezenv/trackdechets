@@ -1,14 +1,16 @@
 import { getCompanyOrCompanyNotFound } from "../../../companies/database";
 import { MissingSiret } from "../../../common/errors";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { QueryResolvers } from "../../../generated/graphql/types";
+import type { QueryResolvers } from "@td/codegen-back";
 import { Company, Status, Prisma } from "@prisma/client";
-import prisma from "../../../prisma";
+import { prisma } from "@td/prisma";
 import { getUserCompanies } from "../../../users/database";
-import { checkIsCompanyMember } from "../../../users/permissions";
 import { getFormsRightFilter } from "../../database";
-import { expandFormFromDb } from "../../form-converter";
-import { getConnectionsArgs } from "../../pagination";
+import { expandFormFromDb, expandableFormIncludes } from "../../converter";
+import { getPrismaPaginationArgs } from "../../../common/pagination";
+import { checkCanList } from "../../permissions";
+
+const MAX_FORMS_LIMIT = 100;
 
 const formsResolver: QueryResolvers["forms"] = async (_, args, context) => {
   const user = checkIsAuthenticated(context);
@@ -19,8 +21,8 @@ const formsResolver: QueryResolvers["forms"] = async (_, args, context) => {
 
   if (siret) {
     // a siret is specified, check user has permission on this company
-    company = await getCompanyOrCompanyNotFound({ siret });
-    await checkIsCompanyMember({ id: user.id }, { siret });
+    company = await getCompanyOrCompanyNotFound({ orgId: siret });
+    await checkCanList(user, siret);
   } else {
     const userCompanies = await getUserCompanies(user.id);
 
@@ -38,33 +40,39 @@ const formsResolver: QueryResolvers["forms"] = async (_, args, context) => {
     company = userCompanies[0];
   }
 
-  // validate pagination arguments (skip, first, last, cursorAfter, cursorBefore)
-  // and convert them to prisma connections args: (skip, first, last, after, before)
-  const connectionsArgs = getConnectionsArgs({
-    ...rest,
-    defaultPaginateBy: 50,
-    maxPaginateBy: 500
-  });
+  const gqlPaginationArgs = {
+    first: rest.first,
+    after: rest.cursorAfter,
+    last: rest.last,
+    before: rest.cursorBefore,
+    skip: rest.skip,
+    maxPaginateBy: MAX_FORMS_LIMIT
+  };
+
+  const paginationArgs = getPrismaPaginationArgs(gqlPaginationArgs);
 
   const queriedForms = await prisma.form.findMany({
-    ...connectionsArgs,
-    orderBy: { createdAt: "desc" },
+    ...paginationArgs,
+    orderBy: { rowNumber: "desc" },
     where: {
       ...(rest.updatedAfter && {
         updatedAt: { gte: new Date(rest.updatedAfter) }
       }),
       ...(rest.sentAfter && { sentAt: { gte: new Date(rest.sentAfter) } }),
-      wasteDetailsCode: rest.wasteCode,
+      ...(rest.wasteCode && { wasteDetailsCode: rest.wasteCode }),
+      ...(rest.customId && { customId: rest.customId }),
       ...(status?.length && { status: { in: status } }),
       AND: [
-        getFormsRightFilter(company.siret, roles),
-        getHasNextStepFilter(company.siret, hasNextStep),
+        getFormsRightFilter(company.orgId, roles),
+        getHasNextStepFilter(company.orgId, hasNextStep),
         ...(rest.siretPresentOnForm
           ? [getFormsRightFilter(rest.siretPresentOnForm, [])]
           : [])
       ],
-      isDeleted: false
-    }
+      isDeleted: false,
+      readableId: { not: { endsWith: "-suite" } }
+    },
+    include: expandableFormIncludes
   });
 
   return queriedForms.map(f => expandFormFromDb(f));
@@ -79,6 +87,13 @@ function getHasNextStepFilter(siret: string, hasNextStep?: boolean | null) {
     OR: [
       // nextStep = markAsSealed
       { status: Status.DRAFT },
+      // Le bordereau est scellé, en attente de la signature émetteur
+      { status: Status.SEALED, emitterCompanySiret: siret },
+      // Le bordereau est signé par l'émetteur, en attente de la signature du 1er transporteur
+      {
+        status: Status.SIGNED_BY_PRODUCER,
+        transporters: { some: { transporterCompanySiret: siret, number: 1 } }
+      },
       {
         AND: [
           // BSD avec acheminement direct du producteur à l'installation de destination
@@ -116,9 +131,10 @@ function getHasNextStepFilter(siret: string, hasNextStep?: boolean | null) {
               },
               {
                 AND: [
-                  {
-                    temporaryStorageDetail: { destinationCompanySiret: siret } // installation de destination finale
-                  },
+                  // Installation de destination finale
+                  // No join equivalent to {forwardedIn: { recipientCompanySiret: siret }}
+                  { recipientsSirets: { has: siret } },
+                  { recipientCompanySiret: { not: siret } },
                   {
                     status: {
                       in: [

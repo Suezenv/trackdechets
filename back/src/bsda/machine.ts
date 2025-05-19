@@ -1,6 +1,7 @@
 import { Bsda, BsdaType, BsdaStatus } from "@prisma/client";
-import { Machine } from "xstate";
-import { BsdaSignatureType } from "../generated/graphql/types";
+import { createMachine } from "xstate";
+import type { BsdaSignatureType } from "@td/codegen-back";
+import { PARTIAL_OPERATIONS } from "./validation/constants";
 
 export enum EventType {
   ProducerSignature,
@@ -13,11 +14,15 @@ type Event = {
   bsda: Bsda;
 };
 
-export const machine = Machine<never, Event>(
+export const machine = createMachine<Record<string, never>, Event>(
   {
     id: "bsda-workflow",
     initial: BsdaStatus.INITIAL,
+    // This flag is an opt into some fixed behaviors that will be the default in v5
+    // cf. https://xstate.js.org/docs/guides/actions.html
+    predictableActionArguments: true,
     states: {
+      [BsdaStatus.CANCELED]: { type: "final" },
       [BsdaStatus.INITIAL]: {
         on: {
           EMISSION: {
@@ -25,18 +30,32 @@ export const machine = Machine<never, Event>(
           },
           WORK: {
             target: BsdaStatus.SIGNED_BY_WORKER,
-            cond: "workerHasEmitterPaperSignature"
+            cond: "canSkipEmissionSignature"
           },
-          OPERATION: {
-            target: BsdaStatus.PROCESSED,
-            cond: "isCollectedBy2010"
-          }
+          TRANSPORT: {
+            target: BsdaStatus.SENT,
+            cond: "isPrivateIndividualWithNoWorkerBsda"
+          },
+          OPERATION: [
+            {
+              target: BsdaStatus.AWAITING_CHILD,
+              cond: "isCollectedBy2710AndGroupingOrReshipmentOperation"
+            },
+            {
+              target: BsdaStatus.PROCESSED,
+              cond: "isCollectedBy2710"
+            }
+          ]
         }
       },
       [BsdaStatus.SIGNED_BY_PRODUCER]: {
         on: {
           WORK: {
             target: BsdaStatus.SIGNED_BY_WORKER
+          },
+          TRANSPORT: {
+            target: BsdaStatus.SENT,
+            cond: "isGroupingOrForwardingOrWithNoWorkerBsda"
           }
         }
       },
@@ -49,6 +68,7 @@ export const machine = Machine<never, Event>(
       },
       [BsdaStatus.SENT]: {
         on: {
+          TRANSPORT: { target: BsdaStatus.SENT }, // multi-modal
           OPERATION: [
             {
               target: BsdaStatus.REFUSED,
@@ -56,7 +76,7 @@ export const machine = Machine<never, Event>(
             },
             {
               target: BsdaStatus.AWAITING_CHILD,
-              cond: "hasChildBsda"
+              cond: "isGroupingOrReshipmentOperation"
             },
             {
               target: BsdaStatus.PROCESSED
@@ -74,13 +94,27 @@ export const machine = Machine<never, Event>(
       isBsdaRefused: (_, event) =>
         event.bsda?.destinationReceptionAcceptationStatus ===
         BsdaStatus.REFUSED,
-      workerHasEmitterPaperSignature: (_, event) =>
-        event.bsda?.workerWorkHasEmitterPaperSignature,
-      isCollectedBy2010: (_, event) =>
+      canSkipEmissionSignature: (_, event) =>
+        Boolean(
+          event.bsda?.workerWorkHasEmitterPaperSignature ||
+            event.bsda?.emitterIsPrivateIndividual
+        ),
+      isCollectedBy2710: (_, event) =>
         event.bsda?.type === BsdaType.COLLECTION_2710,
-      hasChildBsda: (_, event) =>
-        [BsdaType.GATHERING, BsdaType.RESHIPMENT].includes(
-          event.bsda?.type as any
+      isCollectedBy2710AndGroupingOrReshipmentOperation: (_, event) =>
+        event.bsda?.type === BsdaType.COLLECTION_2710 &&
+        !!event.bsda?.destinationOperationCode &&
+        PARTIAL_OPERATIONS.includes(event.bsda.destinationOperationCode),
+      isGroupingOrReshipmentOperation: (_, event) =>
+        !!event.bsda?.destinationOperationCode &&
+        PARTIAL_OPERATIONS.includes(event.bsda?.destinationOperationCode),
+      isGroupingOrForwardingOrWithNoWorkerBsda: (_, event) =>
+        event.bsda?.type === BsdaType.GATHERING ||
+        event.bsda?.type === BsdaType.RESHIPMENT ||
+        Boolean(event.bsda?.workerIsDisabled),
+      isPrivateIndividualWithNoWorkerBsda: (_, event) =>
+        Boolean(
+          event.bsda?.emitterIsPrivateIndividual && event.bsda?.workerIsDisabled
         )
     }
   }

@@ -1,43 +1,126 @@
 type Mutation {
   """
-  EXPERIMENTAL - Ne pas utiliser dans un contexte de production
   Crée un BSVHU
   """
-  createBsvhu(input: BsvhuInput!): Bsvhu
+  createBsvhu(input: BsvhuInput!): Bsvhu!
 
   """
-  EXPERIMENTAL - Ne pas utiliser dans un contexte de production
   Crée un BSVHU en brouillon
   """
-  createDraftBsvhu(input: BsvhuInput!): Bsvhu
+  createDraftBsvhu(input: BsvhuInput!): Bsvhu!
 
   """
-  EXPERIMENTAL - Ne pas utiliser dans un contexte de production
   Met à jour un BSVHU
   """
-  updateBsvhu(id: ID!, input: BsvhuInput!): Bsvhu
+  updateBsvhu(id: ID!, input: BsvhuInput!): Bsvhu!
 
   """
-  EXPERIMENTAL - Ne pas utiliser dans un contexte de production
   Permet de publier un brouillon pour le marquer comme prêt à être envoyé
   """
-  publishBsvhu(id: ID!): Bsvhu
+  publishBsvhu(id: ID!): Bsvhu!
 
   """
-  EXPERIMENTAL - Ne pas utiliser dans un contexte de production
-  Signe un BSVHU
+  Signe un BSVHU.
+
+  **Champs requis pour `EMISSION` :**
+
+  ```
+  emitter {
+    company {
+      siret
+      name
+      address
+      contact
+      mail
+      phone
+    }
+    agrementNumber
+  }
+  quantity
+  weight {
+    value
+  }
+  identification {
+    type
+  }
+  packaging
+  destination {
+    type
+    plannedOperationCode
+    company {
+      siret
+      name
+      address
+      contact
+      mail
+      phone
+    }
+    agrementNumber
+  }
+  ```
+
+  **Champs requis pour `TRANSPORT` :**
+
+  ```
+  transporter {
+    company {
+      siret
+      name
+      address
+      contact
+      mail
+      phone
+    }
+    recepisse {
+      isExempted
+      number
+      department
+      validityLimit
+    }
+  }
+  ```
+
+  **Champs requis pour `RECEPTION` :**
+  Cette étape est optionnelle, mais si elle est renseignée, les champs
+  associés seront scellés
+
+  ```
+  destination {
+    reception {
+      weight # doit être 0 si acceptationStatus est REFUSED
+      acceptationStatus
+      refusalReason
+      date
+    }
+  }
+  ```
+
+  **Champs requis pour `OPERATION` :**
+
+  ```
+  destination {
+    # Si le bordereau n'est pas passé par l'étape de réception,
+    # renseigner ici les données de réception
+    reception {
+      weight # doit être 0 si acceptationStatus est REFUSED
+      acceptationStatus
+    }
+    operation {
+      code # requis sauf si acceptationStatus est REFUSED
+      mode # requis sauf si acceptationStatus est REFUSED
+    }
+  }
+  ```
   """
-  signBsvhu(id: ID!, input: BsvhuSignatureInput!): Bsvhu
+  signBsvhu(id: ID!, input: BsvhuSignatureInput!): Bsvhu!
 
   """
-  EXPERIMENTAL - Ne pas utiliser dans un contexte de production
   Duplique un BSVHU
   """
-  duplicateBsvhu("ID d'un BSD VHU" id: ID!): Bsvhu
+  duplicateBsvhu("ID d'un BSD VHU" id: ID!): Bsvhu!
 
   """
-  EXPERIMENTAL - Ne pas utiliser dans un contexte de production
   Supprime un BSVHU
   """
-  deleteBsvhu("ID d'un BSD VHU" id: ID!): Bsvhu
+  deleteBsvhu("ID d'un BSD VHU" id: ID!): Bsvhu!
 }

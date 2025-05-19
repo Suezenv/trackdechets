@@ -1,11 +1,12 @@
-import { MutationResolvers } from "../../../generated/graphql/types";
+import type { MutationResolvers } from "@td/codegen-back";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { getBsffOrNotFound, getPreviousBsffs } from "../../database";
-import { isBsffContributor } from "../../permissions";
-import prisma from "../../../prisma";
-import { unflattenBsff } from "../../converter";
-import { indexBsff } from "../../elastic";
-import { validateBsff } from "../../validation";
+import { getBsffOrNotFound } from "../../database";
+import { checkCanUpdate } from "../../permissions";
+import { expandBsffFromDB } from "../../converter";
+import { getBsffRepository } from "../../repository";
+import { BsffWithTransportersInclude } from "../../types";
+import { parseBsffAsync } from "../../validation/bsff";
+import { prismaToZodBsff } from "../../validation/bsff/helpers";
 
 const publishBsffResolver: MutationResolvers["publishBsff"] = async (
   _,
@@ -15,28 +16,27 @@ const publishBsffResolver: MutationResolvers["publishBsff"] = async (
   const user = checkIsAuthenticated(context);
   const existingBsff = await getBsffOrNotFound({ id });
 
-  await isBsffContributor(user, existingBsff);
+  const { updateBsff } = getBsffRepository(user);
 
-  const previousBsffs = await getPreviousBsffs(existingBsff);
+  await checkCanUpdate(user, existingBsff);
 
-  const ficheInterventions = await prisma.bsffFicheIntervention.findMany({
-    where: { bsffId: existingBsff.id }
-  });
+  const zodBsff = prismaToZodBsff(existingBsff);
+  await parseBsffAsync(
+    { ...zodBsff, isDraft: false },
+    { currentSignatureType: "EMISSION" }
+  );
 
-  await validateBsff(existingBsff, previousBsffs, ficheInterventions);
-
-  const updatedBsff = await prisma.bsff.update({
-    data: {
-      isDraft: false
-    },
+  const updatedBsff = await updateBsff({
     where: {
       id: existingBsff.id
+    },
+    include: BsffWithTransportersInclude,
+    data: {
+      isDraft: false
     }
   });
 
-  await indexBsff(updatedBsff, context);
-
-  return unflattenBsff(updatedBsff);
+  return expandBsffFromDB(updatedBsff);
 };
 
 export default publishBsffResolver;

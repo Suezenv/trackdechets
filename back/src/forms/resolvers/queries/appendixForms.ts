@@ -1,8 +1,9 @@
-import { checkIsCompanyMember } from "../../../users/permissions";
-import prisma from "../../../prisma";
+import { prisma } from "@td/prisma";
 import { checkIsAuthenticated } from "../../../common/permissions";
-import { QueryResolvers } from "../../../generated/graphql/types";
-import { expandFormFromDb } from "../../form-converter";
+import type { QueryResolvers } from "@td/codegen-back";
+import { expandableFormIncludes, expandFormFromDb } from "../../converter";
+import { checkCanList } from "../../permissions";
+import { bsddWasteQuantities } from "../../helpers/bsddWasteQuantities";
 
 const appendixFormsResolver: QueryResolvers["appendixForms"] = async (
   _,
@@ -10,19 +11,43 @@ const appendixFormsResolver: QueryResolvers["appendixForms"] = async (
   context
 ) => {
   const user = checkIsAuthenticated(context);
-  await checkIsCompanyMember(user, { siret });
+
+  await checkCanList(user, siret);
 
   const queriedForms = await prisma.form.findMany({
     where: {
       ...(wasteCode && { wasteDetailsCode: wasteCode }),
       status: "AWAITING_GROUP",
-      recipientCompanySiret: siret,
+      OR: [
+        { recipientCompanySiret: siret, forwardedIn: null },
+        {
+          recipientIsTempStorage: true,
+          forwardedIn: { recipientCompanySiret: siret }
+        }
+      ],
       isDeleted: false,
-      appendix2RootFormId: null
-    }
+      readableId: { not: { endsWith: "-suite" } }
+    },
+    orderBy: { processedAt: "desc" },
+    include: expandableFormIncludes
   });
 
-  return queriedForms.map(f => expandFormFromDb(f));
+  const getQuantity = form => {
+    const wasteQuantities = bsddWasteQuantities(form);
+    return wasteQuantities?.quantityAccepted ?? form.quantityReceived;
+  };
+
+  return queriedForms
+    .filter(f => {
+      const quantityReceived = f.forwardedIn
+        ? getQuantity(f.forwardedIn)
+        : getQuantity(f);
+
+      return (
+        quantityReceived && quantityReceived.greaterThan(f.quantityGrouped)
+      );
+    })
+    .map(f => expandFormFromDb(f));
 };
 
 export default appendixFormsResolver;

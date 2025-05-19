@@ -1,0 +1,97 @@
+@import "../../../../scss/Breakpoints.scss";
+
+.fr-badge {
+  &--success {
+    &:before {
+      display: inline-block !important;
+      -webkit-mask-image: url("/icons/system/fr--success-fill.svg") !important;
+    }
+  }
+
+  &--error,
+  &--canceled {
+    &:before {
+      display: inline-block !important;
+      -webkit-mask-image: url("/icons/system/fr--error-fill.svg") !important;
+    }
+  }
+
+  &--DRAFT,
+  &--INITIAL,
+  &--SEALED {
+    background-color: #fbf6ed;
+    color: #716043;
+  }
+
+  &--SIGNED_BY_WORKER,
+  &--SENT,
+  &--RESENT,
+  &--SIGNED_BY_TEMP_STORER,
+  &--SIGNED_BY_EMITTER,
+  &--SIGNED_BY_PRODUCER {
+    background-color: #e6eefe;
+    color: #3558a2;
+  }
+  &--SIGNED_BY_WORKER,
+  &--SIGNED_BY_TEMP_STORER {
+    @include desktop {
+      width: 200px;
+    }
+  }
+  &--AWAITING_GROUP {
+    background-color: #e5fbfd;
+    color: #006a6f;
+  }
+  &--ACCEPTED,
+  &--TEMP_STORER_ACCEPTED {
+    background-color: #e3fdeb;
+    color: #37635f;
+    @include desktop {
+      width: 205px;
+    }
+  }
+
+  &--review_accepted {
+    color: #3558a2;
+    background-color: #e6eefe;
+  }
+  &--review_pending {
+    color: #006a6f;
+    background-color: #e5fbfd;
+  }
+  &--review_refused {
+    color: #716043;
+    background-color: #feecc2;
+  }
+  &--review_cancelled {
+    color: #716043;
+    background-color: #feecc2;
+  }
+  &--PROCESSED,
+  &--FOLLOWED_WITH_PNTTD,
+  &--NO_TRACEABILITY {
+    background-color: #b8fec9;
+    color: #18753c;
+  }
+  &--REFUSED,
+  &--PARTIALLY_REFUSED,
+  &--CANCELED {
+    background-color: #ffe9e9;
+    color: #ce0500;
+  }
+  &--TEMP_STORED,
+  &--RESEALED,
+  &--AWAITING_CHILD,
+  &--GROUPED,
+  &--INTERMEDIATELY_PROCESSED,
+  &--RECEIVED {
+    background-color: #e5fbfd;
+    color: #006a6f;
+  }
+
+  &--TEMP_STORED {
+    @include desktop {
+      width: 255px;
+    }
+  }
+}

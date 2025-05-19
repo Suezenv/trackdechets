@@ -1,7 +1,11 @@
-import { WasteAcceptationStatus } from "@prisma/client";
+import { Prisma, Status, WasteAcceptationStatus } from "@prisma/client";
 import { Machine } from "xstate";
-import { PROCESSING_OPERATIONS_GROUPEMENT_CODES } from "../../common/constants";
-import { Event, EventType, FormState } from "./types";
+import {
+  isForeignVat,
+  isSiret,
+  PROCESSING_OPERATIONS_GROUPEMENT_CODES
+} from "@td/constants";
+import { Event, EventType } from "./types";
 
 /**
  * Workflow state machine
@@ -9,150 +13,217 @@ import { Event, EventType, FormState } from "./types";
 const machine = Machine<any, Event>(
   {
     id: "form-workflow-machine",
-    initial: FormState.Draft,
+    initial: Status.DRAFT,
     states: {
-      [FormState.Draft]: {
+      [Status.CANCELED]: { type: "final" },
+      [Status.DRAFT]: {
         on: {
-          [EventType.MarkAsSealed]: [{ target: FormState.Sealed }],
-          [EventType.MarkAsSent]: [{ target: FormState.Sent }]
+          [EventType.MarkAsSealed]: [{ target: Status.SEALED }]
         }
       },
-      [FormState.Sealed]: {
+      [Status.SEALED]: {
         on: {
-          [EventType.MarkAsSent]: [{ target: FormState.Sent }],
           [EventType.SignedByTransporter]: [
             {
-              target: FormState.Sent
+              target: Status.SENT
             }
           ],
-          [EventType.ImportPaperForm]: [{ target: FormState.Processed }]
+          [EventType.ImportPaperForm]: [
+            {
+              target: Status.NO_TRACEABILITY,
+              cond: "isExemptOfTraceability"
+            },
+            { target: Status.AWAITING_GROUP, cond: "awaitsGroup" },
+            { target: Status.PROCESSED }
+          ],
+          [EventType.SignedByProducer]: [
+            {
+              target: Status.SENT,
+              cond: "isDirectSupply"
+            },
+            {
+              target: Status.SIGNED_BY_PRODUCER
+            }
+          ]
         }
       },
-      [FormState.Sent]: {
+      [Status.SIGNED_BY_PRODUCER]: {
+        on: {
+          [EventType.SignedByTransporter]: [
+            {
+              target: Status.SENT
+            }
+          ]
+        }
+      },
+      [Status.SENT]: {
         on: {
           [EventType.MarkAsTempStored]: [
             {
-              target: FormState.Refused,
-              cond: "isFormRefusedByTempStorage"
+              target: Status.REFUSED,
+              cond: "isFormRefused"
             },
             {
-              target: FormState.TempStorerAccepted,
-              cond: "isFormAcceptedByTempStorage"
+              target: Status.TEMP_STORER_ACCEPTED,
+              cond: "isFormAccepted"
             },
             {
-              target: FormState.TempStored
+              target: Status.TEMP_STORED
             }
           ],
           [EventType.MarkAsReceived]: [
             {
-              target: FormState.Refused,
+              target: Status.REFUSED,
               cond: "isFormRefused"
             },
             {
-              target: FormState.Accepted,
+              target: Status.ACCEPTED,
               cond: "isFormAccepted"
             },
             {
-              target: FormState.Received
+              target: Status.RECEIVED
             }
-          ]
+          ],
+          // When a transporter N > 1 signs, the BSDD stays in the same status
+          [EventType.SignedByTransporter]: [{ target: Status.SENT }]
         }
       },
-      [FormState.Refused]: { type: "final" },
-      [FormState.Received]: {
+      [Status.REFUSED]: { type: "final" },
+      [Status.RECEIVED]: {
         on: {
           [EventType.MarkAsAccepted]: [
             {
-              target: FormState.Refused,
+              target: Status.REFUSED,
               cond: "isFormRefused"
             },
             {
-              target: FormState.Accepted
+              target: Status.ACCEPTED
             }
           ]
         }
       },
-      [FormState.Accepted]: {
+      [Status.ACCEPTED]: {
         on: {
           [EventType.MarkAsProcessed]: [
             {
-              target: FormState.NoTraceability,
+              target: Status.NO_TRACEABILITY,
               cond: "isExemptOfTraceability"
             },
             {
-              target: FormState.AwaitingGroup,
+              target: Status.FOLLOWED_WITH_PNTTD,
+              cond: "isFollowedWithPnttd"
+            },
+            {
+              target: Status.AWAITING_GROUP,
               cond: "awaitsGroup"
             },
             {
-              target: FormState.Processed
+              target: Status.PROCESSED
+            }
+          ],
+          [EventType.MarkAsResealed]: [
+            {
+              target: Status.RESEALED
             }
           ]
         }
       },
-      [FormState.Processed]: { type: "final" },
-      [FormState.NoTraceability]: { type: "final" },
-      [FormState.AwaitingGroup]: {
+      [Status.PROCESSED]: { type: "final" },
+      [Status.FOLLOWED_WITH_PNTTD]: { type: "final" },
+      [Status.NO_TRACEABILITY]: { type: "final" },
+      [Status.AWAITING_GROUP]: {
         on: {
-          [EventType.MarkAsGrouped]: { target: FormState.Grouped }
+          [EventType.MarkAsGrouped]: { target: Status.GROUPED }
         }
       },
-      [FormState.Grouped]: {
-        on: { [EventType.MarkAsProcessed]: { target: FormState.Processed } }
+      [Status.GROUPED]: {
+        on: { [EventType.MarkAsProcessed]: { target: Status.PROCESSED } }
       },
-      [FormState.TempStored]: {
+      [Status.TEMP_STORED]: {
         on: {
           [EventType.MarkAsTempStorerAccepted]: [
             {
-              target: FormState.Refused,
-              cond: "isFormRefusedByTempStorage"
+              target: Status.REFUSED,
+              cond: "isFormRefused"
             },
             {
-              target: FormState.TempStorerAccepted
+              target: Status.TEMP_STORER_ACCEPTED
             }
           ]
         }
       },
-      [FormState.TempStorerAccepted]: {
+      [Status.TEMP_STORER_ACCEPTED]: {
         on: {
           [EventType.MarkAsResealed]: [
             {
-              target: FormState.Resealed
+              target: Status.RESEALED
             }
           ],
           [EventType.MarkAsResent]: [
             {
-              target: FormState.Resent
+              target: Status.RESENT
+            }
+          ],
+          [EventType.MarkAsProcessed]: [
+            {
+              target: Status.NO_TRACEABILITY,
+              cond: "isExemptOfTraceability"
+            },
+            {
+              target: Status.FOLLOWED_WITH_PNTTD,
+              cond: "isFollowedWithPnttd"
+            },
+            {
+              target: Status.AWAITING_GROUP,
+              cond: "awaitsGroup"
+            },
+            {
+              target: Status.PROCESSED
             }
           ]
         }
       },
-      [FormState.Resealed]: {
+      [Status.RESEALED]: {
         on: {
           [EventType.MarkAsResent]: [
             {
-              target: FormState.Resent
+              target: Status.RESENT
             }
           ],
           [EventType.SignedByTransporter]: [
             {
-              target: FormState.Resent
+              target: Status.RESENT
+            }
+          ],
+          [EventType.SignedByTempStorer]: [
+            {
+              target: Status.SIGNED_BY_TEMP_STORER
             }
           ]
         }
       },
-      [FormState.Resent]: {
+      [Status.SIGNED_BY_TEMP_STORER]: {
+        on: {
+          [EventType.MarkAsResent]: [
+            {
+              target: Status.RESENT
+            }
+          ]
+        }
+      },
+      [Status.RESENT]: {
         on: {
           [EventType.MarkAsReceived]: [
             {
-              target: FormState.Refused,
+              target: Status.REFUSED,
               cond: "isFormRefused"
             },
             {
-              target: FormState.Accepted,
+              target: Status.ACCEPTED,
               cond: "isFormAccepted"
             },
             {
-              target: FormState.Received
+              target: Status.RECEIVED
             }
           ]
         }
@@ -164,32 +235,106 @@ const machine = Machine<any, Event>(
   },
   {
     guards: {
-      isExemptOfTraceability: (_, event) =>
-        !!event?.formUpdateInput?.noTraceability,
-      awaitsGroup: (_, event) =>
-        PROCESSING_OPERATIONS_GROUPEMENT_CODES.includes(
-          event.formUpdateInput?.processingOperationDone as string
-        ),
-      isFormRefused: (_, event) =>
-        event.formUpdateInput?.wasteAcceptationStatus === "REFUSED",
-      isFormAccepted: (_, event) =>
-        [
-          WasteAcceptationStatus.ACCEPTED,
-          WasteAcceptationStatus.PARTIALLY_REFUSED
-        ].includes(event.formUpdateInput?.wasteAcceptationStatus as any),
-      isFormRefusedByTempStorage: (_, event) =>
-        event.formUpdateInput?.temporaryStorageDetail?.update
-          ?.tempStorerWasteAcceptationStatus === "REFUSED",
-      isFormAcceptedByTempStorage: (_, event) =>
-        [
-          WasteAcceptationStatus.ACCEPTED,
-          WasteAcceptationStatus.PARTIALLY_REFUSED
-        ].includes(
-          event.formUpdateInput?.temporaryStorageDetail?.update
-            ?.tempStorerWasteAcceptationStatus as any
-        )
+      isExemptOfTraceability: (_, event) => {
+        function guard(update: Prisma.FormUpdateInput | undefined) {
+          if (!update) return false;
+          return update.noTraceability === true;
+        }
+        return (
+          guard(event.formUpdateInput) ||
+          guard(event.formUpdateInput?.forwardedIn?.update)
+        );
+      },
+      awaitsGroup: (_, event) => {
+        function guard(update: Prisma.FormUpdateInput | undefined) {
+          if (!update) return false;
+          return (
+            PROCESSING_OPERATIONS_GROUPEMENT_CODES.includes(
+              update.processingOperationDone as string
+            ) &&
+            !isForeignNextDestination(update) &&
+            !(update.noTraceability === true) &&
+            update.emitterType !== "APPENDIX1_PRODUCER"
+          );
+        }
+        return (
+          guard(event.formUpdateInput) ||
+          guard(event.formUpdateInput?.forwardedIn?.update)
+        );
+      },
+      isFollowedWithPnttd: (_, event) => {
+        function guard(update: Prisma.FormUpdateInput | undefined) {
+          if (!update) return false;
+          return (
+            PROCESSING_OPERATIONS_GROUPEMENT_CODES.includes(
+              update.processingOperationDone as string
+            ) &&
+            isForeignNextDestination(update) &&
+            update.noTraceability !== true
+          );
+        }
+        return (
+          guard(event.formUpdateInput) ||
+          guard(event.formUpdateInput?.forwardedIn?.update)
+        );
+      },
+      isFormRefused: (_, event) => {
+        function guard(update: Prisma.FormUpdateInput | undefined) {
+          if (!update) return false;
+          return update.wasteAcceptationStatus === "REFUSED";
+        }
+
+        return (
+          guard(event.formUpdateInput) ||
+          guard(event.formUpdateInput?.forwardedIn?.update)
+        );
+      },
+      isFormAccepted: (_, event) => {
+        function guard(update: Prisma.FormUpdateInput | undefined) {
+          if (!update) return false;
+          return [
+            WasteAcceptationStatus.ACCEPTED,
+            WasteAcceptationStatus.PARTIALLY_REFUSED
+          ].includes(update.wasteAcceptationStatus as any);
+        }
+        return (
+          guard(event.formUpdateInput) ||
+          guard(event.formUpdateInput?.forwardedIn?.update)
+        );
+      },
+      isDirectSupply: (_, event) => {
+        return !!event.formUpdateInput?.isDirectSupply;
+      }
     }
   }
 );
+
+/**
+ * Determine whether nextDestionation is foreign based on a priority guessing system
+ */
+function isForeignNextDestination(update: Prisma.FormUpdateInput) {
+  if (update.nextDestinationCompanyExtraEuropeanId) {
+    return true;
+  }
+  if (
+    update.nextDestinationCompanyVatNumber &&
+    isForeignVat(update.nextDestinationCompanyVatNumber as string)
+  ) {
+    return true;
+  }
+  if (
+    update.nextDestinationCompanySiret &&
+    isSiret(update.nextDestinationCompanySiret as string)
+  ) {
+    return false;
+  }
+  if (
+    !!update.nextDestinationCompanyCountry &&
+    update.nextDestinationCompanyCountry !== "FR"
+  ) {
+    return true;
+  }
+  return false;
+}
 
 export default machine;

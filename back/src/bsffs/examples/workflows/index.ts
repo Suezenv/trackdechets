@@ -1,5 +1,11 @@
-import collectePetitesQuantites from "./collectePetitesQuantites";
+import collecteFluidesParOperateurTransporteurEtranger from "./collecteFluidesParOperateurTransporteurEtranger";
+import collecteFluidesParOperateur from "./collecteFluidesParOperateur";
+import groupement from "./groupement";
+import multiModal from "./multiModal";
 
 export default {
-  collectePetitesQuantites
+  collecteFluidesParOperateurTransporteurEtranger,
+  collecteFluidesParOperateur,
+  groupement,
+  multiModal
 };
